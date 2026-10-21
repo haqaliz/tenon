@@ -24,7 +24,7 @@ Milestone order is my proposal; reorder freely.
 |---|---|---|
 | M1.1 | Patch proposer seam (T3) | Pluggable proposer (rule-based first, BYOK model optional); output is a diff, never applied unverified |
 | M1.2 | Proof runner (T4) | Runs tests in an isolated working copy; records `TESTS_PASSED` or `UNVERIFIED` with a cause |
-| M1.3 | PR writer (T5) | Opens a branch and PR stating the proof level; never touches `main` |
+| M1.3 | PR writer (T5) | Opens a branch and PR stating the proof level; never touches `master` |
 | M1.4 | `tenon check` / `tenon fix` CLI | Exit codes reflect proof; JSON output byte-stable |
 
 ## Phase 2: Breadth and proof depth (weeks 8-12)

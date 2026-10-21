@@ -51,7 +51,7 @@ request "Self-Maintaining APIs". Standalone: no code dependency on Belay or Plum
 4. **No code egress by default.** Repository code is analyzed locally. Any model assist is BYOK or
    local, opt-in, and disclosed. Never send a customer's code to a service the user did not
    authorize.
-5. **Never touch the default branch.** Tenon opens a branch and a PR. It never pushes to `main`
+5. **Never touch the default branch.** Tenon opens a branch and a PR. It never pushes to `master`
    and never merges.
 6. **Build the part that improves as models improve.** A better model proposes better patches; the
    proof step stays the arbiter.

@@ -23,14 +23,15 @@ always test-first via `superpowers:test-driven-development`.
 
 ## Task source: GitHub issue, tolerate absence
 
-Tenon's remote does not exist yet. Expect the fallback inline-brief path.
+The repo exists on GitHub but likely has no issues filed yet. Expect the fallback inline-brief path.
 
 ## Pipeline
 
 ### Phase 0 — Isolate in a worktree
 
 **REQUIRED SUB-SKILL:** `tenon-worktrees`. Branch `<type>/<id>/aliz`, worktree dir
-`.claude/worktrees/<type>-<id>`, created from `main` (no remote yet).
+`.claude/worktrees/<type>-<id>`, created from `origin/master` (fall back to local
+`master` if the remote ref isn't fetched).
 
 ### Phase 1 — Gather context
 
@@ -43,7 +44,7 @@ Save a raw dump to `docs/planning/_card/issue.md`. If no issue, write the brief.
   `docs/ROADMAP.md`. Once the engine exists it lives under `src/tenon/`.
 - Honor `CLAUDE.md`: a model may *propose* a patch; only running the user's checks
   decides the proof level. No "verified" PR without the level it actually reached.
-  Tenon never touches `main`, never merges.
+  Tenon never touches `master`, never merges.
 - Place the work in the pipeline (T1 detect, T2 locate, T3 propose, T4 prove, T5
   PR, T6 TS/JS locator, T7 proof ladder, T8 MCP/probe, T9 benchmark, T10 provider
   layer, T11 more languages).
@@ -85,8 +86,8 @@ docs/planning/
 | Mistake | Fix |
 |---|---|
 | Working in the primary checkout | Create the Phase 0 worktree first |
-| Branching from anything but `main` | No remote exists yet; use local `main` |
+| Branching from anything but `master` | Tenon's base branch is `master`; prefer `origin/master` |
 | Treating a missing `pyproject.toml` as fatal | Greenfield — scaffold it, test-first |
 | Skipping the review gate | PRD must be approved before tech-plan |
 | Letting a model's patch stand in as proof | Stop and flag — only the proof runner decides |
-| Opening a PR against `main` directly, or merging it | Never — Tenon proposes, humans merge |
+| Opening a PR against `master` directly, or merging it | Never — Tenon proposes, humans merge |
