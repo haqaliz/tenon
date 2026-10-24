@@ -1,6 +1,18 @@
+import json
+import os
+import subprocess
+import sys
+
 import pytest
 
-from tenon.detect import Change, ChangeKind, Location, RefusalCode, SpecRefusal
+from tenon.detect import (
+    Change,
+    ChangeKind,
+    DiffResult,
+    Location,
+    RefusalCode,
+    SpecRefusal,
+)
 
 KINDS = [
     "endpoint_removed",
@@ -111,3 +123,113 @@ def test_change_owns_its_nested_values():
     assert change.before["properties"]["id"]["type"] == "integer"
     change.to_dict()["before"]["properties"]["id"]["type"] = "boolean"
     assert change.before["properties"]["id"]["type"] == "integer"
+
+
+def a_change_at(pointer, kind=ChangeKind.PARAMETER_REMOVED, before=None, after=None):
+    return Change(
+        kind=kind, location=Location(pointer=pointer), before=before, after=after
+    )
+
+
+def test_diff_result_orders_by_pointer_then_kind_then_values():
+    result = DiffResult(
+        [
+            a_change_at("#/paths/~1users/get/parameters", before="b"),
+            a_change_at("#/paths/~1users/get", ChangeKind.ENDPOINT_ADDED),
+            a_change_at("#/components/schemas/User", ChangeKind.RENAMED, "userId", "id"),
+            a_change_at("#/components/schemas/User", ChangeKind.RENAMED, "a", "b"),
+        ]
+    )
+    assert isinstance(result.changes, tuple)
+    assert [(c.location.pointer, c.before) for c in result.changes] == [
+        ("#/components/schemas/User", "a"),
+        ("#/components/schemas/User", "userId"),
+        ("#/paths/~1users/get", None),
+        ("#/paths/~1users/get/parameters", "b"),
+    ]
+
+
+def some_changes():
+    return [
+        a_change_at("#/paths/~1users/get/parameters", before="b"),
+        a_change_at("#/paths/~1users/get", ChangeKind.ENDPOINT_ADDED),
+        a_change_at("#/components/schemas/User", ChangeKind.RENAMED, "userId", "id"),
+        a_change_at("#/components/schemas/User", ChangeKind.RENAMED, "a", "b"),
+    ]
+
+
+def test_to_json_is_identical_for_any_insertion_order():
+    changes = some_changes()
+    expected = DiffResult(changes).to_json()
+    assert DiffResult(list(reversed(changes))).to_json() == expected
+    assert DiffResult(changes[2:] + changes[:2]).to_json() == expected
+
+
+def test_to_json_holds_only_json_primitives():
+    text = DiffResult(some_changes()).to_json()
+    parsed = json.loads(text)
+    assert parsed == DiffResult(some_changes()).to_dict()
+    assert parsed["changes"][0]["kind"] == "renamed"
+    for leak in ("ChangeKind.", "Location(", "Change(", "DiffResult("):
+        assert leak not in text
+
+
+def test_empty_result_serialises():
+    assert DiffResult([]).to_json() == '{"changes":[]}'
+
+
+def test_to_json_ignores_dict_insertion_order_inside_values():
+    first = DiffResult(
+        [
+            a_change_at(
+                "#/components/schemas/User",
+                ChangeKind.PROPERTY_REMOVED,
+                {"type": "string", "format": "uuid"},
+            )
+        ]
+    )
+    second = DiffResult(
+        [
+            a_change_at(
+                "#/components/schemas/User",
+                ChangeKind.PROPERTY_REMOVED,
+                {"format": "uuid", "type": "string"},
+            )
+        ]
+    )
+    assert first.to_json() == second.to_json()
+
+
+SUBPROCESS_SCRIPT = """
+from tenon.detect import Change, ChangeKind, DiffResult, Location
+
+before = {key: key for key in {"type", "format", "title", "description", "default"}}
+changes = [
+    Change(
+        kind=ChangeKind.PROPERTY_REMOVED,
+        location=Location(pointer="#/components/schemas/User/properties/id"),
+        before=before,
+    ),
+    Change(
+        kind=ChangeKind.SCHEMA_ADDED,
+        location=Location(pointer="#/components/schemas"),
+        after=before,
+    ),
+]
+print(DiffResult(changes).to_json(), end="")
+"""
+
+
+def to_json_with_hash_seed(seed):
+    result = subprocess.run(
+        [sys.executable, "-c", SUBPROCESS_SCRIPT],
+        env={**os.environ, "PYTHONHASHSEED": seed},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def test_to_json_is_byte_stable_across_hash_seeds():
+    assert to_json_with_hash_seed("0") == to_json_with_hash_seed("1")

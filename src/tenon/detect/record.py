@@ -1,10 +1,11 @@
 """The typed change record: the unit every downstream stage consumes."""
 
 import copy
+import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 # JSON Pointer in URI-fragment form, as every PRD example writes it: "#/paths/~1users".
 _POINTER = re.compile(r"#(?:/(?:[^~]|~[01])*)*")
@@ -122,3 +123,35 @@ class SpecRefusal(Exception):
     def _render(self) -> str:
         where = f" at {self.pointer}" if self.pointer is not None else ""
         return f"{self.code.value}{where}: {self.message}"
+
+
+def _canonical(value: Any) -> str:
+    """JSON-normalised sort key: dict insertion order cannot leak into ordering."""
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+@dataclass(frozen=True, slots=True)
+class DiffResult:
+    """Canonically ordered changes, serialisable byte-stably."""
+
+    changes: Sequence[Change]
+
+    def __post_init__(self) -> None:
+        ordered = sorted(
+            self.changes,
+            key=lambda change: (
+                change.location.pointer,
+                change.kind.value,
+                _canonical(change.before),
+                _canonical(change.after),
+            ),
+        )
+        object.__setattr__(self, "changes", tuple(ordered))
+
+    def to_dict(self) -> dict[str, object]:
+        return {"changes": [change.to_dict() for change in self.changes]}
+
+    def to_json(self) -> str:
+        return json.dumps(
+            self.to_dict(), sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
