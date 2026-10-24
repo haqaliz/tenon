@@ -161,16 +161,10 @@ def test_every_non_rename_kind_except_components_is_produced():
 
 
 def test_component_schema_added_and_removed():
-    old = {
-        "openapi": "3.0.3",
-        "components": {"schemas": {"Keep": {"type": "object"}, "Gone": {"type": "string"}}},
-    }
-    new = {
-        "openapi": "3.0.3",
-        "components": {"schemas": {"Keep": {"type": "object"}, "Fresh": {"type": "string"}}},
-    }
-
-    result = diff(old, new).changes
+    result = diff(
+        load(FIXTURES / "components-old.yaml"),
+        load(FIXTURES / "components-new.yaml"),
+    ).changes
 
     assert [(change.kind, change.before, change.after) for change in result] == [
         (ChangeKind.SCHEMA_ADDED, None, "Fresh"),

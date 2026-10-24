@@ -1,0 +1,14 @@
+openapi: 3.0.3
+info:
+  title: Components new
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    Keep:
+      type: object
+      properties:
+        id:
+          type: string
+    Fresh:
+      type: string
