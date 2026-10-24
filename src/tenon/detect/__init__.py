@@ -1,3 +1,4 @@
+from .diff import diff
 from .record import (
     Change,
     ChangeKind,
@@ -14,4 +15,5 @@ __all__ = [
     "Location",
     "RefusalCode",
     "SpecRefusal",
+    "diff",
 ]

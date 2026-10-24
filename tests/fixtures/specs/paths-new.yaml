@@ -1,0 +1,29 @@
+openapi: 3.0.3
+info:
+  title: Paths new
+  version: 1.0.0
+paths:
+  /users:
+    get:
+      responses:
+        "200":
+          description: OK
+    put:
+      responses:
+        "200":
+          description: OK
+  /odd~path:
+    get:
+      responses:
+        "200":
+          description: OK
+  /same:
+    get:
+      responses:
+        "200":
+          description: OK
+  /orders:
+    get:
+      responses:
+        "200":
+          description: OK
