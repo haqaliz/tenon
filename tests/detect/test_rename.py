@@ -1,4 +1,4 @@
-from tenon.detect import Change, ChangeKind, Location
+from tenon.detect import Change, ChangeKind, Location, diff
 from tenon.detect.rename import infer_renames
 
 PROPS = "#/paths/~1users/post/requestBody/content/application~1json/schema/properties"
@@ -160,3 +160,164 @@ def test_inference_is_idempotent():
     once = infer_renames([prop_removed("nickname"), prop_added("handle")])
 
     assert infer_renames(once) == once
+
+
+PARAMS = "#/paths/~1users/get/parameters"
+
+
+def param_removed(name, where="query", type_="string", fmt=None):
+    return Change(
+        kind=ChangeKind.PARAMETER_REMOVED,
+        location=Location(pointer=PARAMS, method="get", path="/users"),
+        before={"name": name, "in": where, "type": type_, "format": fmt},
+        breaking=True,
+    )
+
+
+def param_required(name, where="query", type_="string", fmt=None, before=None):
+    return Change(
+        kind=ChangeKind.PARAMETER_REQUIRED_ADDED,
+        location=Location(pointer=PARAMS, method="get", path="/users"),
+        before=before,
+        after={"name": name, "in": where, "type": type_, "format": fmt},
+        breaking=True,
+    )
+
+
+def test_a_parameter_rename_is_inferred():
+    result = infer_renames(
+        [param_removed("limit", type_="integer"), param_required("offset", type_="integer")]
+    )
+
+    assert len(result) == 1
+    assert result[0].kind is ChangeKind.RENAMED
+    assert (result[0].before, result[0].after) == ("limit", "offset")
+
+
+def test_a_parameter_moving_to_another_location_is_not_a_rename():
+    records = [param_removed("limit"), param_required("offset", where="header")]
+
+    assert infer_renames(records) == records
+
+
+def test_an_existing_parameter_becoming_required_is_not_a_candidate():
+    records = [param_removed("limit"), param_required("mode", before={"name": "mode"})]
+
+    assert infer_renames(records) == records
+
+
+def document(paths):
+    return {"openapi": "3.0.3", "paths": paths}
+
+
+def operation(method):
+    return {method: {"responses": {}}}
+
+
+def test_an_endpoint_rename_with_the_same_method_is_inferred():
+    old = document({"/v1/users": operation("get")})
+    new = document({"/v2/users": operation("get")})
+
+    result = diff(old, new).changes
+
+    assert len(result) == 1
+    change = result[0]
+    assert change.kind is ChangeKind.RENAMED
+    assert change.before == "/v1/users"
+    assert change.after == "/v2/users"
+    assert change.location.pointer == "#/paths"
+    assert change.location.method == "get"
+    assert change.location.path == "/v2/users"
+    assert change.breaking is True
+    assert change.confidence == "inferred"
+
+
+def test_an_endpoint_with_a_different_method_is_not_a_rename():
+    old = document({"/legacy": operation("get")})
+    new = document({"/orders": operation("post")})
+
+    result = diff(old, new).changes
+
+    assert [change.kind for change in result] == [
+        ChangeKind.ENDPOINT_ADDED,
+        ChangeKind.ENDPOINT_REMOVED,
+    ]
+    assert all(change.confidence == "certain" for change in result)
+
+
+def test_a_path_parameter_rename_is_inferred():
+    old = document({"/users/{id}": operation("get")})
+    new = document({"/users/{user_id}": operation("get")})
+
+    result = diff(old, new).changes
+
+    assert len(result) == 1
+    assert result[0].kind is ChangeKind.RENAMED
+    assert (result[0].before, result[0].after) == ("/users/{id}", "/users/{user_id}")
+
+
+def test_different_parameter_counts_do_not_pair():
+    old = document({"/users/{id}": operation("get")})
+    new = document({"/users/{user_id}/posts": operation("get")})
+
+    result = diff(old, new).changes
+
+    assert [change.kind for change in result] == [
+        ChangeKind.ENDPOINT_ADDED,
+        ChangeKind.ENDPOINT_REMOVED,
+    ]
+
+
+def test_a_two_way_swap_produces_zero_renames():
+    old = document({"/a": operation("get"), "/b": operation("get")})
+    new = document({"/c": operation("get"), "/d": operation("get")})
+
+    result = diff(old, new).changes
+
+    assert len(result) == 4
+    assert ChangeKind.RENAMED not in {change.kind for change in result}
+
+
+def test_a_property_rename_is_inferred_through_diff():
+    def body_schema(name):
+        return document(
+            {
+                "/users": {
+                    "post": {
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {name: {"type": "string"}},
+                                    }
+                                }
+                            }
+                        },
+                        "responses": {},
+                    }
+                }
+            }
+        )
+
+    result = diff(body_schema("nickname"), body_schema("handle")).changes
+
+    assert len(result) == 1
+    assert result[0].kind is ChangeKind.RENAMED
+    assert (result[0].before, result[0].after) == ("nickname", "handle")
+    assert result[0].confidence == "inferred"
+
+
+def test_json_is_byte_stable_after_inference():
+    old = document({"/users/{id}": operation("get"), "/same": operation("get")})
+    new = document({"/users/{user_id}": operation("get"), "/same": operation("get")})
+
+    def reversed_keys(value):
+        if isinstance(value, dict):
+            return {key: reversed_keys(value[key]) for key in reversed(list(value))}
+        if isinstance(value, list):
+            return [reversed_keys(item) for item in value]
+        return value
+
+    assert diff(reversed_keys(old), reversed_keys(new)).to_json() == diff(old, new).to_json()
+

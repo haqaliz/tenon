@@ -10,6 +10,7 @@ from .record import (
     RefusalCode,
     SpecRefusal,
 )
+from .rename import infer_renames
 
 # Fixed order so records never depend on dict insertion order in the input.
 HTTP_METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
@@ -30,7 +31,7 @@ def diff(old: dict, new: dict) -> DiffResult:
     context = _SchemaContext(old, new)
     _diff_paths(old.get("paths") or {}, new.get("paths") or {}, context, changes)
     _diff_components(old, new, context, changes)
-    return DiffResult(changes)
+    return DiffResult(infer_renames(changes))
 
 
 def _methods(path_item: object) -> tuple[str, ...]:

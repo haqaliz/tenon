@@ -18,19 +18,27 @@ def of_kind(kind):
 
 
 def test_removed_path_reports_one_endpoint_removed_per_method():
+    old = {
+        "openapi": "3.0.3",
+        "paths": {
+            "/legacy": {
+                "get": {"responses": {}},
+                "post": {"responses": {}},
+            }
+        },
+    }
+
     removed = [
         change
-        for change in of_kind(ChangeKind.ENDPOINT_REMOVED)
-        if change.location.path == "/legacy"
+        for change in diff(old, {"openapi": "3.0.3", "paths": {}}).changes
+        if change.kind is ChangeKind.ENDPOINT_REMOVED
     ]
 
-    assert len(removed) == 1
-    change = removed[0]
-    assert change.location.method == "get"
-    assert change.location.pointer == "#/paths"
-    assert change.before == "/legacy"
-    assert change.after is None
-    assert change.breaking is True
+    assert sorted(change.location.method for change in removed) == ["get", "post"]
+    assert {change.location.pointer for change in removed} == {"#/paths"}
+    assert all(change.before == "/legacy" for change in removed)
+    assert all(change.after is None for change in removed)
+    assert all(change.breaking is True for change in removed)
 
 
 def test_removed_method_on_a_surviving_path_points_at_the_path_item():
@@ -58,19 +66,27 @@ def test_path_item_pointer_escapes_tilde_and_slash():
 
 
 def test_added_path_reports_one_endpoint_added_per_method():
+    new = {
+        "openapi": "3.0.3",
+        "paths": {
+            "/orders": {
+                "get": {"responses": {}},
+                "post": {"responses": {}},
+            }
+        },
+    }
+
     added = [
         change
-        for change in of_kind(ChangeKind.ENDPOINT_ADDED)
-        if change.location.path == "/orders"
+        for change in diff({"openapi": "3.0.3", "paths": {}}, new).changes
+        if change.kind is ChangeKind.ENDPOINT_ADDED
     ]
 
-    assert len(added) == 1
-    change = added[0]
-    assert change.location.method == "get"
-    assert change.location.pointer == "#/paths"
-    assert change.before is None
-    assert change.after == "/orders"
-    assert change.breaking is False
+    assert sorted(change.location.method for change in added) == ["get", "post"]
+    assert {change.location.pointer for change in added} == {"#/paths"}
+    assert all(change.before is None for change in added)
+    assert all(change.after == "/orders" for change in added)
+    assert all(change.breaking is False for change in added)
 
 
 def test_added_method_on_a_surviving_path_points_at_the_path_item():
@@ -94,12 +110,15 @@ def test_unchanged_paths_produce_no_records():
 
 def test_the_whole_diff_has_exactly_the_expected_records():
     assert [(change.kind.value, change.location.method, change.location.path) for change in changes()] == [
-        ("endpoint_added", "get", "/orders"),
-        ("endpoint_removed", "get", "/legacy"),
+        ("renamed", "get", "/orders"),
         ("endpoint_removed", "post", "/odd~path"),
         ("endpoint_added", "put", "/users"),
         ("endpoint_removed", "post", "/users"),
     ]
+
+    renamed = changes()[0]
+    assert (renamed.before, renamed.after) == ("/legacy", "/orders")
+    assert renamed.confidence == "inferred"
 
 
 def test_absent_paths_is_not_a_crash():
