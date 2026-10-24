@@ -1,6 +1,15 @@
 """Compare two resolved OpenAPI documents and emit typed changes."""
 
-from .record import Change, ChangeKind, DiffResult, Location
+import json
+
+from .record import (
+    Change,
+    ChangeKind,
+    DiffResult,
+    Location,
+    RefusalCode,
+    SpecRefusal,
+)
 
 # Fixed order so records never depend on dict insertion order in the input.
 HTTP_METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
@@ -11,10 +20,16 @@ def _escape(token: object) -> str:
     return str(token).replace("~", "~0").replace("/", "~1")
 
 
+def _canonical(value: object) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
 def diff(old: dict, new: dict) -> DiffResult:
     """Every change between two resolved documents, canonically ordered."""
     changes: list[Change] = []
-    _diff_paths(old.get("paths") or {}, new.get("paths") or {}, changes)
+    context = _SchemaContext(old, new)
+    _diff_paths(old.get("paths") or {}, new.get("paths") or {}, context, changes)
+    _diff_components(old, new, context, changes)
     return DiffResult(changes)
 
 
@@ -35,7 +50,9 @@ def _endpoint(kind: ChangeKind, path: str, method: str, pointer: str) -> Change:
     )
 
 
-def _diff_paths(old_paths: dict, new_paths: dict, changes: list[Change]) -> None:
+def _diff_paths(
+    old_paths: dict, new_paths: dict, context: "_SchemaContext", changes: list[Change]
+) -> None:
     old_paths = old_paths if isinstance(old_paths, dict) else {}
     new_paths = new_paths if isinstance(new_paths, dict) else {}
 
@@ -67,6 +84,7 @@ def _diff_paths(old_paths: dict, new_paths: dict, changes: list[Change]) -> None
                     new_item[method],
                     path,
                     method,
+                    context,
                     changes,
                 )
 
@@ -84,9 +102,13 @@ def _diff_operation(
     new_operation: dict,
     path: str,
     method: str,
+    context: "_SchemaContext",
     changes: list[Change],
 ) -> None:
-    _diff_parameters(old_item, old_operation, new_item, new_operation, path, method, changes)
+    _diff_parameters(
+        old_item, old_operation, new_item, new_operation, path, method, changes
+    )
+    _diff_bodies(old_operation, new_operation, path, method, context, changes)
 
 
 def _effective_parameters(
@@ -131,14 +153,32 @@ def _type_basis(schema: object) -> tuple[frozenset[str], str | None]:
     return frozenset(types), fmt if isinstance(fmt, str) else None
 
 
-def _render_type(name: str, where: str | None, basis: tuple[frozenset[str], str | None]):
+def _render_type(
+    name: str | None, where: str | None, basis: tuple[frozenset[str], str | None]
+) -> dict:
     types, fmt = basis
     ordered = sorted(types)
     rendered: object = ordered[0] if len(ordered) == 1 else (ordered or None)
-    payload = {"name": name, "type": rendered, "format": fmt}
+    payload: dict = {"type": rendered, "format": fmt}
+    if name is not None:
+        payload["name"] = name
     if where is not None:
         payload["in"] = where
     return payload
+
+
+def _enum_payload(name: str | None, values: list) -> dict:
+    payload: dict = {"enum": sorted(values, key=_canonical)}
+    if name is not None:
+        payload["name"] = name
+    return payload
+
+
+def _required(schema: dict) -> set[str]:
+    required = schema.get("required")
+    if not isinstance(required, list):
+        return set()
+    return {value for value in required if isinstance(value, str)}
 
 
 def _diff_parameters(
@@ -203,4 +243,324 @@ def _diff_parameters(
                     after=_render_type(name, where, new_basis),
                     breaking=True,
                 )
+            )
+
+
+def _record_location(location: Location, pointer: str) -> Location:
+    return Location(pointer=pointer, method=location.method, path=location.path)
+
+
+def _diff_bodies(
+    old_operation: dict,
+    new_operation: dict,
+    path: str,
+    method: str,
+    context: "_SchemaContext",
+    changes: list[Change],
+) -> None:
+    base = f"#/paths/{_escape(path)}/{method}"
+    location = Location(pointer=base, method=method, path=path)
+    _diff_content(
+        old_operation.get("requestBody"),
+        new_operation.get("requestBody"),
+        f"{base}/requestBody/content",
+        location,
+        context,
+        changes,
+    )
+
+    old_responses = old_operation.get("responses")
+    new_responses = new_operation.get("responses")
+    if not isinstance(old_responses, dict) or not isinstance(new_responses, dict):
+        return
+    for status in sorted(set(old_responses) & set(new_responses), key=str):
+        if not isinstance(old_responses[status], dict) or not isinstance(
+            new_responses[status], dict
+        ):
+            continue
+        _diff_content(
+            old_responses[status],
+            new_responses[status],
+            f"{base}/responses/{_escape(status)}/content",
+            location,
+            context,
+            changes,
+        )
+
+
+def _diff_content(
+    old_holder: object,
+    new_holder: object,
+    pointer: str,
+    location: Location,
+    context: "_SchemaContext",
+    changes: list[Change],
+) -> None:
+    if not isinstance(old_holder, dict) or not isinstance(new_holder, dict):
+        return
+    old_content = old_holder.get("content")
+    new_content = new_holder.get("content")
+    if not isinstance(old_content, dict) or not isinstance(new_content, dict):
+        return
+    for media in sorted(set(old_content) & set(new_content)):
+        old_media = old_content[media]
+        new_media = new_content[media]
+        if not isinstance(old_media, dict) or not isinstance(new_media, dict):
+            continue
+        old_schema = old_media.get("schema")
+        new_schema = new_media.get("schema")
+        if isinstance(old_schema, dict) and isinstance(new_schema, dict):
+            _diff_schema(
+                old_schema,
+                new_schema,
+                f"{pointer}/{_escape(media)}/schema",
+                location,
+                context,
+                changes,
+            )
+
+
+def _diff_schema(
+    old: object,
+    new: object,
+    pointer: str,
+    location: Location,
+    context: "_SchemaContext",
+    changes: list[Change],
+    *,
+    name: str | None = None,
+    enclosing: str | None = None,
+    root: bool = False,
+) -> None:
+    pair = (id(old), id(new))
+    if pair in context.active:
+        raise SpecRefusal(
+            RefusalCode.UNRESOLVED_REF, pointer, message="cyclic schema structure"
+        )
+    context.active.add(pair)
+    try:
+        _diff_schema_node(
+            old,
+            new,
+            pointer,
+            location,
+            context,
+            changes,
+            name=name,
+            enclosing=enclosing,
+            root=root,
+        )
+    finally:
+        context.active.discard(pair)
+
+
+def _diff_schema_node(
+    old: object,
+    new: object,
+    pointer: str,
+    location: Location,
+    context: "_SchemaContext",
+    changes: list[Change],
+    *,
+    name: str | None,
+    enclosing: str | None,
+    root: bool,
+) -> None:
+    old_schema = old if isinstance(old, dict) else {}
+    new_schema = new if isinstance(new, dict) else {}
+
+    for schema in (old_schema, new_schema):
+        if "$ref" in schema:
+            raise SpecRefusal(
+                RefusalCode.UNRESOLVED_REF,
+                f"{pointer}/$ref",
+                message="unresolved $ref in a resolved document",
+            )
+
+    if not root and (context.old_canons or context.new_canons):
+        try:
+            old_canon, new_canon = _canonical(old_schema), _canonical(new_schema)
+        except ValueError:
+            raise SpecRefusal(
+                RefusalCode.UNRESOLVED_REF,
+                pointer,
+                message="cyclic schema structure",
+            ) from None
+        if old_canon in context.old_canons and new_canon in context.new_canons:
+            return
+
+    record_pointer = enclosing or pointer
+    old_basis = _type_basis(old_schema)
+    new_basis = _type_basis(new_schema)
+    if old_basis != new_basis:
+        changes.append(
+            Change(
+                kind=ChangeKind.PROPERTY_TYPE_CHANGED,
+                location=_record_location(location, record_pointer),
+                before=_render_type(name, None, old_basis),
+                after=_render_type(name, None, new_basis),
+                breaking=True,
+            )
+        )
+
+    old_enum = old_schema.get("enum")
+    new_enum = new_schema.get("enum")
+    if isinstance(old_enum, list) and isinstance(new_enum, list):
+        old_values = {_canonical(value) for value in old_enum}
+        new_values = {_canonical(value) for value in new_enum}
+        if new_values < old_values:
+            changes.append(
+                Change(
+                    kind=ChangeKind.ENUM_NARROWED,
+                    location=_record_location(location, record_pointer),
+                    before=_enum_payload(name, old_enum),
+                    after=_enum_payload(name, new_enum),
+                    breaking=True,
+                )
+            )
+
+    old_properties = old_schema.get("properties")
+    new_properties = new_schema.get("properties")
+    old_properties = old_properties if isinstance(old_properties, dict) else {}
+    new_properties = new_properties if isinstance(new_properties, dict) else {}
+    properties_pointer = f"{pointer}/properties"
+    old_required = _required(old_schema)
+    new_required = _required(new_schema)
+
+    for prop in sorted(old_properties):
+        if prop not in new_properties:
+            changes.append(
+                Change(
+                    kind=ChangeKind.PROPERTY_REMOVED,
+                    location=_record_location(location, properties_pointer),
+                    before=prop,
+                    breaking=True,
+                )
+            )
+
+    for prop in sorted(new_properties):
+        if prop not in old_properties:
+            if prop in new_required:
+                changes.append(
+                    Change(
+                        kind=ChangeKind.PROPERTY_REQUIRED_ADDED,
+                        location=_record_location(location, properties_pointer),
+                        after=prop,
+                        breaking=True,
+                    )
+                )
+            else:
+                changes.append(
+                    Change(
+                        kind=ChangeKind.PROPERTY_ADDED,
+                        location=_record_location(location, properties_pointer),
+                        after=prop,
+                    )
+                )
+            continue
+
+        if prop in new_required and prop not in old_required:
+            changes.append(
+                Change(
+                    kind=ChangeKind.PROPERTY_REQUIRED_ADDED,
+                    location=_record_location(location, properties_pointer),
+                    before=prop,
+                    after=prop,
+                    breaking=True,
+                )
+            )
+        _diff_schema(
+            old_properties[prop],
+            new_properties[prop],
+            f"{properties_pointer}/{_escape(prop)}",
+            location,
+            context,
+            changes,
+            name=prop,
+            enclosing=properties_pointer,
+        )
+
+    old_items = old_schema.get("items")
+    new_items = new_schema.get("items")
+    if isinstance(old_items, dict) and isinstance(new_items, dict):
+        _diff_schema(
+            old_items,
+            new_items,
+            f"{pointer}/items",
+            location,
+            context,
+            changes,
+            enclosing=pointer,
+        )
+
+
+def _schemas_of(document: dict) -> dict:
+    components = document.get("components")
+    if not isinstance(components, dict):
+        return {}
+    schemas = components.get("schemas")
+    return schemas if isinstance(schemas, dict) else {}
+
+
+def _component_canons(document: dict) -> frozenset[str]:
+    schemas = _schemas_of(document)
+    canons: set[str] = set()
+    for name in sorted(schemas):
+        try:
+            canons.add(_canonical(schemas[name]))
+        except ValueError:
+            raise SpecRefusal(
+                RefusalCode.UNRESOLVED_REF,
+                f"#/components/schemas/{_escape(name)}",
+                message="cyclic schema structure",
+            ) from None
+    return frozenset(canons)
+
+
+class _SchemaContext:
+    """Per-diff state: resolved component signatures and the recursion guard."""
+
+    def __init__(self, old_document: dict, new_document: dict) -> None:
+        self.old_canons = _component_canons(old_document)
+        self.new_canons = _component_canons(new_document)
+        self.active: set[tuple[int, int]] = set()
+
+
+def _diff_components(
+    old_document: dict,
+    new_document: dict,
+    context: "_SchemaContext",
+    changes: list[Change],
+) -> None:
+    old_schemas = _schemas_of(old_document)
+    new_schemas = _schemas_of(new_document)
+    pointer = "#/components/schemas"
+    for name in sorted(old_schemas):
+        if name not in new_schemas:
+            changes.append(
+                Change(
+                    kind=ChangeKind.SCHEMA_REMOVED,
+                    location=Location(pointer=pointer),
+                    before=name,
+                    breaking=True,
+                )
+            )
+    for name in sorted(new_schemas):
+        if name not in old_schemas:
+            changes.append(
+                Change(
+                    kind=ChangeKind.SCHEMA_ADDED,
+                    location=Location(pointer=pointer),
+                    after=name,
+                )
+            )
+        else:
+            _diff_schema(
+                old_schemas[name],
+                new_schemas[name],
+                f"{pointer}/{_escape(name)}",
+                Location(pointer=pointer),
+                context,
+                changes,
+                root=True,
             )

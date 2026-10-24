@@ -1,0 +1,63 @@
+openapi: 3.0.3
+info:
+  title: Schemas old
+  version: 1.0.0
+paths:
+  /users:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                age:
+                  type: integer
+                nickname:
+                  type: string
+                role:
+                  type: string
+                  enum: [admin, user, guest]
+                scope:
+                  type: string
+                  enum: [read]
+                kind:
+                  type: string
+                  enum: [a, b]
+                address:
+                  type: object
+                  properties:
+                    street:
+                      type: string
+                    zip:
+                      type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        "201":
+          description: Created
+  /users/{id}:
+    get:
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  email:
+                    type: string
