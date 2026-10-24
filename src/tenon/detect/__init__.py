@@ -1,4 +1,5 @@
 from .diff import diff
+from .ingest import load, parse
 from .record import (
     Change,
     ChangeKind,
@@ -16,4 +17,6 @@ __all__ = [
     "RefusalCode",
     "SpecRefusal",
     "diff",
+    "load",
+    "parse",
 ]
