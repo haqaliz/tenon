@@ -1,10 +1,14 @@
 """Turn a file on disk into an OpenAPI 3.x document, or refuse it by name."""
 
+import re
 from pathlib import Path
 
 import yaml
 
 from .record import RefusalCode, SpecRefusal
+
+# A JSON pointer in URI-fragment form, before unescaping.
+_LOCAL_REF = re.compile(r"#(?:/(?:[^~]|~[01])*)*")
 
 
 def parse(text: str, source: str) -> dict:
@@ -26,7 +30,12 @@ def parse(text: str, source: str) -> dict:
     if "openapi" in document:
         version = document["openapi"]
         if isinstance(version, str) and version.startswith(("3.0.", "3.1.")):
-            return document
+            try:
+                return resolve_refs(document)
+            except SpecRefusal as refusal:
+                raise SpecRefusal(
+                    refusal.code, refusal.pointer, message=f"{source}: {refusal.message}"
+                ) from None
         raise SpecRefusal(
             RefusalCode.UNSUPPORTED_VERSION,
             "#/openapi",
@@ -41,6 +50,73 @@ def parse(text: str, source: str) -> dict:
     raise SpecRefusal(
         RefusalCode.NOT_A_SPEC, "#", message=f"{source}: no 'openapi' version"
     )
+
+
+def _escape(token: str) -> str:
+    return token.replace("~", "~0").replace("/", "~1")
+
+
+def resolve_refs(document: dict) -> dict:
+    """Return a fresh document with every local ``$ref`` replaced by its target.
+
+    Cycles are refused rather than resolved by identity: a partial document would
+    violate "no partial results" (spec open question).
+    """
+
+    def lookup(ref: str):
+        node = document
+        for raw in ref[2:].split("/") if ref != "#" else ():
+            token = raw.replace("~1", "/").replace("~0", "~")
+            try:
+                node = node[int(token)] if isinstance(node, list) else node[token]
+            except (KeyError, IndexError, TypeError, ValueError):
+                raise SpecRefusal(
+                    RefusalCode.UNRESOLVED_REF, ref, message=f"no node at {ref}"
+                ) from None
+        return node
+
+    def walk(node, pointer: str, chain: tuple[str, ...]):
+        if isinstance(node, dict):
+            if "$ref" in node:
+                return deref(node["$ref"], f"{pointer}/$ref", chain)
+            return {
+                key: walk(value, f"{pointer}/{_escape(str(key))}", chain)
+                for key, value in node.items()
+            }
+        if isinstance(node, list):
+            return [
+                walk(item, f"{pointer}/{index}", chain)
+                for index, item in enumerate(node)
+            ]
+        return node
+
+    def deref(ref, where: str, chain: tuple[str, ...]):
+        if not isinstance(ref, str):
+            raise SpecRefusal(
+                RefusalCode.UNRESOLVED_REF,
+                where,
+                message=f"not a JSON pointer: {ref!r}",
+            )
+        if not ref.startswith("#"):
+            raise SpecRefusal(
+                RefusalCode.EXTERNAL_REF,
+                where,
+                message=f"cannot fetch external $ref {ref!r}",
+            )
+        if not _LOCAL_REF.fullmatch(ref):
+            raise SpecRefusal(
+                RefusalCode.UNRESOLVED_REF,
+                where,
+                message=f"not a JSON pointer: {ref!r}",
+            )
+        if ref in chain:
+            trail = " -> ".join((*chain, ref))
+            raise SpecRefusal(
+                RefusalCode.UNRESOLVED_REF, ref, message=f"cyclic $ref: {trail}"
+            )
+        return walk(lookup(ref), ref, (*chain, ref))
+
+    return walk(document, "#", ())
 
 
 def load(path: str | Path) -> dict:

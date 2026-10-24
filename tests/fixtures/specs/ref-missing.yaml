@@ -1,0 +1,9 @@
+openapi: 3.0.3
+info:
+  title: Missing ref
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    User:
+      $ref: '#/components/schemas/Missing'
