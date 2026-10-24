@@ -110,15 +110,17 @@ def test_unchanged_paths_produce_no_records():
 
 def test_the_whole_diff_has_exactly_the_expected_records():
     assert [(change.kind.value, change.location.method, change.location.path) for change in changes()] == [
-        ("renamed", "get", "/orders"),
+        ("endpoint_added", "get", "/orders"),
+        ("endpoint_removed", "get", "/legacy"),
         ("endpoint_removed", "post", "/odd~path"),
         ("endpoint_added", "put", "/users"),
         ("endpoint_removed", "post", "/users"),
     ]
 
-    renamed = changes()[0]
-    assert (renamed.before, renamed.after) == ("/legacy", "/orders")
-    assert renamed.confidence == "inferred"
+
+def test_unrelated_paths_are_not_called_a_rename():
+    # One GET removed and one unrelated GET added is not evidence of a rename.
+    assert not [change for change in changes() if change.kind is ChangeKind.RENAMED]
 
 
 def test_absent_paths_is_not_a_crash():

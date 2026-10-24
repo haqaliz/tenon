@@ -15,6 +15,9 @@ breaking changes are refactorings — `CLAUDE.md`). This aspect is the only prod
 - A pair is accepted only when the match is **unambiguous in both directions**: exactly one removed
   candidate for that added record *and* exactly one added candidate for that removed record, and the
   comparison basis agrees — same `type` and `format` (and same HTTP method for endpoints).
+- Endpoints have almost no shape to compare, so the basis also requires the same **leaf segment**
+  (literal, or both templated). Implemented after the first pass paired unrelated paths
+  (`/legacy` → `/orders`) purely because one `GET` was removed and one added.
 - On acceptance, replace the two records with one `renamed` (`before`=old name, `after`=new name,
   `breaking=True`, `confidence="inferred"`).
 - Everything unmatched stays as `removed` + `added`, `confidence="certain"`.

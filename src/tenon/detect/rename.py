@@ -48,7 +48,19 @@ def _added_candidate(change: Change) -> tuple[str, object, str] | None:
 
 
 def _endpoint_shape(change: Change, path: str) -> str:
-    return _shape(change.location.method, _normalise_template(path))
+    """Method, segment kinds and the leaf name: ``/v1/users`` -> ``/v2/users``.
+
+    The leaf is the only real name an endpoint has, so without it any single
+    removed ``GET`` would pair with any single added ``GET`` (``/legacy`` ->
+    ``/orders``), which is a guess rather than evidence.
+    """
+    segments = _normalise_template(path)
+    leaf = path.rstrip("/").split("/")[-1]
+    return _shape(
+        change.location.method,
+        segments,
+        None if _PATH_PARAM.search(leaf) else leaf,
+    )
 
 
 def infer_renames(changes: list[Change]) -> list[Change]:
