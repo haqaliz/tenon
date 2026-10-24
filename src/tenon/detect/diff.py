@@ -339,12 +339,14 @@ def _diff_parameters(
     for key in sorted(set(old_params) | set(new_params)):
         name, where = key
         if key not in new_params:
-            _, pointer, _ = old_params[key]
+            old_param, pointer, _ = old_params[key]
             changes.append(
                 Change(
                     kind=ChangeKind.PARAMETER_REMOVED,
                     location=Location(pointer=pointer, method=method, path=path),
-                    before=name,
+                    before=_render_type(
+                        name, where, _type_basis(old_param.get("schema"))
+                    ),
                     breaking=True,
                 )
             )
@@ -358,7 +360,9 @@ def _diff_parameters(
                     Change(
                         kind=ChangeKind.PARAMETER_REQUIRED_ADDED,
                         location=location,
-                        after=name,
+                        after=_render_type(
+                            name, where, _type_basis(param.get("schema"))
+                        ),
                         breaking=True,
                     )
                 )
@@ -370,8 +374,12 @@ def _diff_parameters(
                 Change(
                     kind=ChangeKind.PARAMETER_REQUIRED_ADDED,
                     location=location,
-                    before=name,
-                    after=name,
+                    before=_render_type(
+                        name, where, _type_basis(old_param.get("schema"))
+                    ),
+                    after=_render_type(
+                        name, where, _type_basis(param.get("schema"))
+                    ),
                     breaking=True,
                 )
             )
@@ -583,7 +591,9 @@ def _diff_schema_node(
                 Change(
                     kind=ChangeKind.PROPERTY_REMOVED,
                     location=_record_location(location, properties_pointer),
-                    before=prop,
+                    before=_render_type(
+                        prop, None, _type_basis(old_properties[prop])
+                    ),
                     breaking=True,
                 )
             )
@@ -595,7 +605,9 @@ def _diff_schema_node(
                     Change(
                         kind=ChangeKind.PROPERTY_REQUIRED_ADDED,
                         location=_record_location(location, properties_pointer),
-                        after=prop,
+                        after=_render_type(
+                            prop, None, _type_basis(new_properties[prop])
+                        ),
                         breaking=True,
                     )
                 )
@@ -604,7 +616,9 @@ def _diff_schema_node(
                     Change(
                         kind=ChangeKind.PROPERTY_ADDED,
                         location=_record_location(location, properties_pointer),
-                        after=prop,
+                        after=_render_type(
+                            prop, None, _type_basis(new_properties[prop])
+                        ),
                     )
                 )
             continue
@@ -614,8 +628,12 @@ def _diff_schema_node(
                 Change(
                     kind=ChangeKind.PROPERTY_REQUIRED_ADDED,
                     location=_record_location(location, properties_pointer),
-                    before=prop,
-                    after=prop,
+                    before=_render_type(
+                        prop, None, _type_basis(old_properties[prop])
+                    ),
+                    after=_render_type(
+                        prop, None, _type_basis(new_properties[prop])
+                    ),
                     breaking=True,
                 )
             )

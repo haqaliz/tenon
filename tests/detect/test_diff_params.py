@@ -6,6 +6,10 @@ from tenon.detect.ingest import load
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "specs"
 
 
+def name_of(payload):
+    return payload.get("name") if isinstance(payload, dict) else payload
+
+
 def changes():
     return diff(
         load(FIXTURES / "params-old.yaml"),
@@ -23,7 +27,7 @@ def type_basis(name, where, kind, fmt=None):
 
 def test_removed_parameter_is_breaking_and_points_at_the_operation_list():
     removed = of_kind(ChangeKind.PARAMETER_REMOVED)
-    limit = [change for change in removed if change.before == "limit"]
+    limit = [change for change in removed if name_of(change.before) == "limit"]
 
     assert len(limit) == 1
     assert limit[0].location.method == "get"
@@ -35,7 +39,7 @@ def test_removed_parameter_is_breaking_and_points_at_the_operation_list():
 
 def test_inherited_path_level_parameter_is_reported_once_per_operation():
     removed = [
-        change for change in of_kind(ChangeKind.PARAMETER_REMOVED) if change.before == "tenant"
+        change for change in of_kind(ChangeKind.PARAMETER_REMOVED) if name_of(change.before) == "tenant"
     ]
 
     assert sorted(change.location.method for change in removed) == ["get", "post"]
@@ -47,11 +51,11 @@ def test_optional_parameter_becoming_required():
     added = [
         change
         for change in of_kind(ChangeKind.PARAMETER_REQUIRED_ADDED)
-        if change.after == "mode"
+        if name_of(change.after) == "mode"
     ]
 
     assert len(added) == 1
-    assert added[0].before == "mode"
+    assert name_of(added[0].before) == "mode"
     assert added[0].location.method == "get"
     assert added[0].location.pointer == "#/paths/~1items/get/parameters"
     assert added[0].breaking is True
@@ -61,7 +65,7 @@ def test_new_required_parameter():
     added = [
         change
         for change in of_kind(ChangeKind.PARAMETER_REQUIRED_ADDED)
-        if change.after == "sort"
+        if name_of(change.after) == "sort"
     ]
 
     assert len(added) == 1
@@ -73,7 +77,7 @@ def test_new_optional_parameter_is_not_reported():
     assert not [
         change
         for change in changes()
-        if change.before == "debug" or change.after == "debug"
+        if name_of(change.before) == "debug" or name_of(change.after) == "debug"
     ]
 
 
@@ -102,12 +106,22 @@ def test_the_whole_diff_has_exactly_the_expected_records():
         (change.kind.value, change.location.method, change.before, change.after)
         for change in changes()
     ] == [
-        ("parameter_removed", "get", "limit", None),
-        ("parameter_required_added", "get", "mode", "mode"),
-        ("parameter_required_added", "get", None, "sort"),
+        ("parameter_removed", "get", type_basis("limit", "query", "integer"), None),
+        (
+            "parameter_required_added",
+            "get",
+            None,
+            type_basis("sort", "query", "string"),
+        ),
+        (
+            "parameter_required_added",
+            "get",
+            type_basis("mode", "query", "string"),
+            type_basis("mode", "query", "string"),
+        ),
         ("parameter_type_changed", "get", type_basis("page", "query", "integer"), type_basis("page", "query", "string")),
-        ("parameter_removed", "get", "tenant", None),
-        ("parameter_removed", "post", "tenant", None),
+        ("parameter_removed", "get", type_basis("tenant", "header", "string"), None),
+        ("parameter_removed", "post", type_basis("tenant", "header", "string"), None),
     ]
 
 

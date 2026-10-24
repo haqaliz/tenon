@@ -28,6 +28,10 @@ def type_basis(name, kind, fmt=None):
     return {"name": name, "type": kind, "format": fmt}
 
 
+def name_of(payload):
+    return payload.get("name") if isinstance(payload, dict) else payload
+
+
 def enum_basis(name, values):
     return {"name": name, "enum": values}
 
@@ -36,7 +40,7 @@ def test_property_removed_is_breaking():
     removed = of_kind(ChangeKind.PROPERTY_REMOVED)
 
     assert len(removed) == 1
-    assert removed[0].before == "nickname"
+    assert name_of(removed[0].before) == "nickname"
     assert removed[0].after is None
     assert removed[0].location.pointer == f"{BODY}/properties"
     assert removed[0].breaking is True
@@ -47,7 +51,7 @@ def test_new_optional_property_added_is_not_breaking():
 
     assert len(added) == 1
     assert added[0].before is None
-    assert added[0].after == "email"
+    assert name_of(added[0].after) == "email"
     assert added[0].location.pointer == f"{BODY}/properties"
     assert added[0].breaking is False
 
@@ -56,11 +60,11 @@ def test_existing_property_becoming_required_is_breaking():
     added = [
         change
         for change in of_kind(ChangeKind.PROPERTY_REQUIRED_ADDED)
-        if change.before == "age"
+        if name_of(change.before) == "age"
     ]
 
     assert len(added) == 1
-    assert added[0].after == "age"
+    assert name_of(added[0].after) == "age"
     assert added[0].location.pointer == f"{BODY}/properties"
     assert added[0].breaking is True
 
@@ -69,7 +73,7 @@ def test_new_required_property_is_breaking():
     added = [
         change
         for change in of_kind(ChangeKind.PROPERTY_REQUIRED_ADDED)
-        if change.after == "team"
+        if name_of(change.after) == "team"
     ]
 
     assert len(added) == 1

@@ -7,6 +7,10 @@ from tenon.detect.ingest import load
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "specs"
 
+
+def name_of(payload):
+    return payload.get("name") if isinstance(payload, dict) else payload
+
 BODY = "#/paths/~1pets/post/requestBody/content/application~1json/schema"
 
 
@@ -107,7 +111,7 @@ def test_a_plain_all_of_merge_is_traversed():
     assert len(result.changes) == 1
     change = result.changes[0]
     assert change.kind is ChangeKind.PROPERTY_REMOVED
-    assert change.before == "age"
+    assert change.before["name"] == "age"
     assert change.location.pointer == f"{BODY}/properties"
 
 
@@ -135,7 +139,7 @@ def test_plain_all_of_merges_required_and_properties():
 
     changes = diff(old, new).changes
 
-    assert [(change.kind, change.after) for change in changes] == [
+    assert [(change.kind, name_of(change.after)) for change in changes] == [
         (ChangeKind.PROPERTY_REQUIRED_ADDED, "age")
     ]
 
