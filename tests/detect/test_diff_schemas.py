@@ -196,6 +196,28 @@ def test_a_shared_component_reports_one_change_not_one_per_operation():
     assert change.after == type_basis("id", "integer")
 
 
+def test_a_component_used_as_a_parameter_schema_reports_one_change():
+    def document(kind):
+        operation = {
+            "parameters": [
+                {"name": "q", "in": "query", "schema": {"type": kind}}
+            ],
+            "responses": {},
+        }
+        return {
+            "openapi": "3.0.3",
+            "paths": {"/a": {"get": operation}, "/b": {"get": operation}},
+            "components": {"schemas": {"Q": {"type": kind}}},
+        }
+
+    result = diff(document("string"), document("integer"))
+
+    assert len(result.changes) == 1
+    change = result.changes[0]
+    assert change.kind is ChangeKind.PROPERTY_TYPE_CHANGED
+    assert change.location.pointer == "#/components/schemas/Q"
+
+
 def test_reordering_keys_changes_nothing():
     old = load(FIXTURES / "schemas-old.yaml")
     new = load(FIXTURES / "schemas-new.yaml")

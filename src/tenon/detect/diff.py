@@ -106,7 +106,7 @@ def _diff_operation(
     changes: list[Change],
 ) -> None:
     _diff_parameters(
-        old_item, old_operation, new_item, new_operation, path, method, changes
+        old_item, old_operation, new_item, new_operation, path, method, context, changes
     )
     _diff_bodies(old_operation, new_operation, path, method, context, changes)
 
@@ -144,6 +144,9 @@ def _type_basis(schema: object) -> tuple[frozenset[str], str | None]:
         types = {item for item in raw if isinstance(item, str)}
     else:
         types = set()
+    # 3.1 writes nullability into the type array; 3.0 uses `nullable`. Neither is
+    # part of the comparison basis, so a nullability-only change is not a change.
+    types.discard("null")
     if not types:
         if isinstance(schema.get("properties"), dict):
             types.add("object")
@@ -181,6 +184,146 @@ def _required(schema: dict) -> set[str]:
     return {value for value in required if isinstance(value, str)}
 
 
+# Keywords a plain allOf merge can carry; anything else is a composition we cannot
+# merge faithfully, so it is refused rather than guessed at.
+_PLAIN_SCHEMA_KEYS = frozenset(
+    {
+        "type",
+        "properties",
+        "required",
+        "nullable",
+        "description",
+        "title",
+        "example",
+        "default",
+        "deprecated",
+        "readOnly",
+        "writeOnly",
+        "xml",
+        "externalDocs",
+    }
+)
+
+
+def _flatten(schema: object, pointer: str, active: set[int] | None = None) -> dict:
+    """Return the schema with any plain ``allOf`` merged into one object schema.
+
+    ``oneOf``, ``anyOf``, ``discriminator`` and any non-plain ``allOf`` refuse at the
+    pointer that carries them; a subtree we cannot analyze is never skipped.
+    """
+    if not isinstance(schema, dict):
+        return {}
+    if "$ref" in schema:
+        raise SpecRefusal(
+            RefusalCode.UNRESOLVED_REF,
+            f"{pointer}/$ref",
+            message="unresolved $ref in a resolved document",
+        )
+    for keyword in ("oneOf", "anyOf", "discriminator"):
+        if keyword in schema:
+            raise SpecRefusal(
+                RefusalCode.UNSUPPORTED_COMPOSITION,
+                pointer,
+                message=f"{keyword} is not supported",
+            )
+    if "allOf" not in schema:
+        return schema
+
+    if active is None:
+        active = set()
+    if id(schema) in active:
+        raise SpecRefusal(
+            RefusalCode.UNRESOLVED_REF, pointer, message="cyclic schema structure"
+        )
+    active.add(id(schema))
+    try:
+        members = schema["allOf"]
+        if (
+            not isinstance(members, list)
+            or not members
+            or not all(isinstance(member, dict) for member in members)
+        ):
+            raise SpecRefusal(
+                RefusalCode.UNSUPPORTED_COMPOSITION,
+                pointer,
+                message="allOf is not a plain list of object schemas",
+            )
+
+        container = {key: value for key, value in schema.items() if key != "allOf"}
+        extra = set(container) - _PLAIN_SCHEMA_KEYS
+        if extra:
+            raise SpecRefusal(
+                RefusalCode.UNSUPPORTED_COMPOSITION,
+                pointer,
+                message=f"allOf is not a plain object merge: {sorted(extra)}",
+            )
+        if container.get("type") not in (None, "object"):
+            raise SpecRefusal(
+                RefusalCode.UNSUPPORTED_COMPOSITION,
+                pointer,
+                message="allOf is not a plain object merge: container type",
+            )
+        properties = container.get("properties") or {}
+        if not isinstance(properties, dict):
+            raise SpecRefusal(
+                RefusalCode.UNSUPPORTED_COMPOSITION,
+                pointer,
+                message="allOf is not a plain object merge: container properties",
+            )
+        properties = dict(properties)
+        required = _required(container)
+        nullable = container.get("nullable") is True
+
+        for index, member in enumerate(members):
+            member_pointer = f"{pointer}/allOf/{index}"
+            flattened = _flatten(member, member_pointer, active)
+            extra = set(flattened) - _PLAIN_SCHEMA_KEYS
+            if extra:
+                raise SpecRefusal(
+                    RefusalCode.UNSUPPORTED_COMPOSITION,
+                    member_pointer,
+                    message=f"allOf member is not a plain object merge: {sorted(extra)}",
+                )
+            if flattened.get("type") not in (None, "object"):
+                raise SpecRefusal(
+                    RefusalCode.UNSUPPORTED_COMPOSITION,
+                    member_pointer,
+                    message="allOf member is not a plain object merge: type",
+                )
+            member_properties = flattened.get("properties") or {}
+            if not isinstance(member_properties, dict):
+                raise SpecRefusal(
+                    RefusalCode.UNSUPPORTED_COMPOSITION,
+                    member_pointer,
+                    message="allOf member is not a plain object merge: properties",
+                )
+            for prop, prop_schema in member_properties.items():
+                if prop in properties and properties[prop] != prop_schema:
+                    raise SpecRefusal(
+                        RefusalCode.UNSUPPORTED_COMPOSITION,
+                        member_pointer,
+                        message=f"allOf members declare {prop!r} differently",
+                    )
+                properties[prop] = prop_schema
+            required |= _required(flattened)
+            nullable = nullable or flattened.get("nullable") is True
+
+        merged = {
+            key: value
+            for key, value in container.items()
+            if key not in ("properties", "required", "nullable", "type")
+        }
+        merged["type"] = "object"
+        merged["properties"] = properties
+        if required:
+            merged["required"] = sorted(required)
+        if nullable:
+            merged["nullable"] = True
+        return merged
+    finally:
+        active.discard(id(schema))
+
+
 def _diff_parameters(
     old_item: dict,
     old_operation: dict,
@@ -188,6 +331,7 @@ def _diff_parameters(
     new_operation: dict,
     path: str,
     method: str,
+    context: "_SchemaContext",
     changes: list[Change],
 ) -> None:
     old_params = _effective_parameters(old_item, old_operation, path, method)
@@ -206,7 +350,7 @@ def _diff_parameters(
             )
             continue
 
-        param, pointer, _ = new_params[key]
+        param, pointer, new_index = new_params[key]
         location = Location(pointer=pointer, method=method, path=path)
         if key not in old_params:
             if param.get("required") is True:
@@ -220,7 +364,7 @@ def _diff_parameters(
                 )
             continue
 
-        old_param = old_params[key][0]
+        old_param, old_pointer, old_index = old_params[key]
         if param.get("required") is True and old_param.get("required") is not True:
             changes.append(
                 Change(
@@ -232,8 +376,17 @@ def _diff_parameters(
                 )
             )
 
-        old_basis = _type_basis(old_param.get("schema"))
-        new_basis = _type_basis(param.get("schema"))
+        if context.is_component_copy(old_param.get("schema"), param.get("schema")):
+            continue
+
+        old_schema = _flatten(
+            old_param.get("schema"), f"{old_pointer}/{old_index}/schema"
+        )
+        new_schema = _flatten(
+            param.get("schema"), f"{pointer}/{new_index}/schema"
+        )
+        old_basis = _type_basis(old_schema)
+        new_basis = _type_basis(new_schema)
         if old_basis != new_basis:
             changes.append(
                 Change(
@@ -273,7 +426,10 @@ def _diff_bodies(
     new_responses = new_operation.get("responses")
     if not isinstance(old_responses, dict) or not isinstance(new_responses, dict):
         return
-    for status in sorted(set(old_responses) & set(new_responses), key=str):
+    for status in sorted(
+        set(old_responses) & set(new_responses),
+        key=lambda key: (str(key), type(key).__name__),
+    ):
         if not isinstance(old_responses[status], dict) or not isinstance(
             new_responses[status], dict
         ):
@@ -377,17 +533,11 @@ def _diff_schema_node(
                 message="unresolved $ref in a resolved document",
             )
 
-    if not root and (context.old_canons or context.new_canons):
-        try:
-            old_canon, new_canon = _canonical(old_schema), _canonical(new_schema)
-        except ValueError:
-            raise SpecRefusal(
-                RefusalCode.UNRESOLVED_REF,
-                pointer,
-                message="cyclic schema structure",
-            ) from None
-        if old_canon in context.old_canons and new_canon in context.new_canons:
-            return
+    if not root and context.is_component_copy(old_schema, new_schema):
+        return
+
+    old_schema = _flatten(old_schema, pointer)
+    new_schema = _flatten(new_schema, pointer)
 
     record_pointer = enclosing or pointer
     old_basis = _type_basis(old_schema)
@@ -524,6 +674,18 @@ class _SchemaContext:
         self.old_canons = _component_canons(old_document)
         self.new_canons = _component_canons(new_document)
         self.active: set[tuple[int, int]] = set()
+
+    def is_component_copy(self, old: object, new: object) -> bool:
+        """True when both sides are resolved copies of a component schema.
+
+        Such a subtree is reported once, at ``components``, not once per use.
+        """
+        if not (self.old_canons or self.new_canons):
+            return False
+        try:
+            return _canonical(old) in self.old_canons and _canonical(new) in self.new_canons
+        except ValueError:
+            return False
 
 
 def _diff_components(

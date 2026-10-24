@@ -1,0 +1,17 @@
+openapi: 3.0.3
+info:
+  title: Composition oneOf old
+  version: 1.0.0
+paths:
+  /search:
+    get:
+      parameters:
+        - name: q
+          in: query
+          schema:
+            oneOf:
+              - type: string
+              - type: integer
+      responses:
+        "200":
+          description: OK

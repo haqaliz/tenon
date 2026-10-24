@@ -1,0 +1,25 @@
+openapi: 3.0.3
+info:
+  title: Composition allOf new
+  version: 1.0.0
+paths:
+  /pets:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              allOf:
+                - type: object
+                  properties:
+                    id:
+                      type: string
+                - type: object
+                  required: [name]
+                  properties:
+                    name:
+                      type: string
+      responses:
+        "201":
+          description: Created
