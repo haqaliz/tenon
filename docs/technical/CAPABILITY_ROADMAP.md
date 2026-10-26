@@ -1,20 +1,31 @@
 # Tenon: Capability Roadmap
 
-Engine capabilities in build order. Each lands test-first. Nothing is built yet.
+Engine capabilities in build order. Each lands test-first.
 
-| ID | Capability | Depends on | Guardrail tie-in |
-|---|---|---|---|
-| **T1** | **Change detection.** Diff two OpenAPI versions into typed change records. | none | Machine-readable sources first |
-| **T2** | **Call-site location (Python).** Find usages of a changed symbol or endpoint with file and line. | T1 | Ambiguity reported, never guessed |
-| **T3** | **Patch proposer seam.** Rule-based proposer for mechanical changes; optional BYOK model proposer. | T1, T2 | A model proposes only |
-| **T4** | **Proof runner.** Apply the patch in an isolated working copy, run the user's tests, record the proof level. | T3 | Execution decides the label |
-| **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging |
-| **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | |
-| **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak |
-| **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | |
-| **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes |
-| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK |
-| **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time |
+| ID | Capability | Depends on | Guardrail tie-in | State |
+|---|---|---|---|---|
+| **T1** | **Change detection.** Diff two OpenAPI versions into typed change records. | none | Machine-readable sources first | **Shipped 2026-10-26** |
+| **T2** | **Call-site location (Python).** Find usages of a changed symbol or endpoint with file and line. | T1 | Ambiguity reported, never guessed | Not started |
+| **T3** | **Patch proposer seam.** Rule-based proposer for mechanical changes; optional BYOK model proposer. | T1, T2 | A model proposes only | Not started |
+| **T4** | **Proof runner.** Apply the patch in an isolated working copy, run the user's tests, record the proof level. | T3 | Execution decides the label | Not started |
+| **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging | Not started |
+| **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | | Not started |
+| **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | Not started |
+| **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | Not started |
+| **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | Not started |
+| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | Not started |
+| **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | Not started |
+
+### T1 as shipped (2026-10-26)
+
+`src/tenon/detect/`: `load`/`parse` (OpenAPI 3.0.x/3.1.x, YAML or JSON, local `$ref` resolution),
+`diff` producing 13 typed record kinds with `breaking` and `confidence`, and rename inference that
+pairs only unambiguous removed/added records. Bad input is a named refusal with a JSON pointer.
+136 tests, offline and deterministic.
+
+Known limits at this level: recursive schemas are refused (fail-closed); added optional *parameters*
+produce no record (no `parameter_added` kind); request-body/media-type/response add-remove and
+`additionalProperties` are not walked; no real vendor spec pair is committed yet.
 
 ## Sequencing
 

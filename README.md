@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-day%20zero%20·%20design%20only-lightgrey)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20shipped%20·%20detect%20only-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -12,8 +12,19 @@ affected calls, and proves the fix against your own checks before it opens a pul
 
 ## Status
 
-**Nothing is built yet.** This repository holds design docs only. Read `CLAUDE.md` before writing
-any code here.
+**T1 (change detection) is built.** `src/tenon/detect/` diffs two OpenAPI 3.x documents into typed
+`Change` records, fully offline. Everything else in the pipeline — locate, propose, prove, PR — does
+not exist yet. Read `CLAUDE.md` before writing any code here.
+
+```python
+from tenon.detect import diff, load
+
+result = diff(load("v1.yaml"), load("v2.yaml"))
+result.changes   # typed records, canonically ordered
+result.to_json() # byte-stable
+```
+
+`uv run pytest` — no network, no model calls.
 
 ## What Tenon is
 
