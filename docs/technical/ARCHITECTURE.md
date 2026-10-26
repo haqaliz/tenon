@@ -1,6 +1,6 @@
 # Tenon: Architecture
 
-Design intent, not built behavior. Nothing is implemented yet.
+Design intent. **T1 (detect) is implemented** under `src/tenon/detect/`; T2–T5 are not.
 
 ## Pipeline
 
@@ -23,12 +23,12 @@ API change source (OpenAPI v1 -> v2 | MCP schema | SDK metadata)
   T5 PR       ---->  branch + PR that states the proof level
 ```
 
-## Layout (planned)
+## Layout
 
-```
+```text
 src/tenon/
-  detect/     T1: spec parsers, differ, Change records
-  locate/     T2/T6: per-language call-site finders
+  detect/     T1: spec parsers, differ, Change records      <- built
+  locate/     T2/T6: per-language call-site finders         <- planned
   propose/    T3: proposer seam, rule-based mechanical fixes
   prove/      T4/T7: working-copy runner, proof levels
   pr/         T5: branch and PR writer

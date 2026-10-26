@@ -16,8 +16,9 @@ usable by AI agents, by running an agent against it.
 The name: a *tenon* is the tongue cut on a timber to fit its mortise exactly. The joint holds
 only if the two sides still match. Tenon asks of an integration: *does your side still fit theirs?*
 
-Status: **day zero.** Nothing is built. This file, `VISION.md`, and `docs/` are all that exist.
-Do not describe capability that isn't there yet.
+Status: **T1 shipped.** `src/tenon/detect/` turns two OpenAPI 3.x documents into typed `Change`
+records; tests live in `tests/`. T2 (locate) is next. Nothing else in the pipeline exists — do not
+describe capability that isn't there yet.
 
 Lineage: one of three siblings scaffolded together on 2026-10-22 (with Assay and Pry) from a
 market-demand pass (`~/dev/at/ideas/market-demand-2026-10.md`). It answers the YC Fall 2026
@@ -102,7 +103,7 @@ CLAUDE.md                          # This file
 LICENSE                            # Apache-2.0
 docs/
   ROADMAP.md                       # Phases + risk register
-  technical/CAPABILITY_ROADMAP.md  # T1..T10 capabilities in build order
+  technical/CAPABILITY_ROADMAP.md  # T1..T11 capabilities in build order
   technical/ARCHITECTURE.md        # detect -> locate -> patch -> prove -> PR
   planning/{slug}/                 # In-flight PRDs, specs, plans
 ```
