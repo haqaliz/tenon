@@ -1,0 +1,25 @@
+openapi: 3.0.3
+info:
+  title: Composition discriminator
+  version: 1.0.0
+paths:
+  /pets:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              allOf:
+                - type: object
+                  properties:
+                    kind:
+                      type: string
+                - type: object
+                  properties:
+                    name:
+                      type: string
+                  discriminator:
+                    propertyName: kind
+      responses:
+        "201":
+          description: Created

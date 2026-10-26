@@ -1,0 +1,52 @@
+openapi: 3.0.3
+info:
+  title: Params new
+  version: 1.0.0
+paths:
+  /items:
+    parameters:
+      - name: api-version
+        in: query
+        required: false
+        schema:
+          type: string
+    get:
+      parameters:
+        - name: mode
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: sort
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: accept
+          in: header
+          required: false
+          schema:
+            type: string
+        - name: debug
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: OK
+    post:
+      parameters:
+        - name: payload
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Created

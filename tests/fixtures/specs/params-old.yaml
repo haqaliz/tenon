@@ -1,0 +1,52 @@
+openapi: 3.0.3
+info:
+  title: Params old
+  version: 1.0.0
+paths:
+  /items:
+    parameters:
+      - name: tenant
+        in: header
+        required: true
+        schema:
+          type: string
+      - name: api-version
+        in: query
+        required: false
+        schema:
+          type: string
+    get:
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: accept
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+    post:
+      parameters:
+        - name: payload
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "201":
+          description: Created
