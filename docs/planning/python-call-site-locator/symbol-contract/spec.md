@@ -26,8 +26,9 @@ meaningless, so it is pure, table-tested, and refuses what it cannot name.
   - `enum_narrowed`, `schema_added`, `schema_removed`: `UNSUPPORTED_CHANGE_KIND`.
 - Explicit mapping wins: `"DELETE /v1/charges/{id}"` → operation candidate; `"Charge.amount"` →
   field name, with the schema name parsed out of the JSON pointer
-  (`#/components/schemas/Charge/properties` → `Charge`). A mapped field on a component change
-  applies; a mapped field on an operation change applies to that operation.
+  (`#/components/schemas/Charge/properties` → `Charge`). A field mapping therefore applies only to
+  **component-scoped** changes: an operation-scoped record's pointer is under `#/paths/...` and
+  carries no schema name, so the operation mapping is the only handle there.
 - Inference, only when unmapped:
   - Operation candidates from path segments: drop a leading `v<N>` segment and `{param}` segments,
     join the remaining segments with `.`, append a verb-derived leaf. Verbs:

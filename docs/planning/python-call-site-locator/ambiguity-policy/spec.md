@@ -21,7 +21,8 @@ here, in one readable file.
      - If `query.origin == "none"` → `OPERATION_NOT_MAPPED`.
      - Resolve operation candidates against `chain` of rooted `call` hits. Two or more distinct
        candidates resolving → one `MULTIPLE_CANDIDATES` group holding all those call sites.
-       Zero → `NO_SITES`.
+       Zero → `DYNAMIC_GETATTR` when a `getattr` dynamic names one of the candidate leaves (the
+       dynamic's own site is the candidate), else `NO_SITES`.
      - With a field:
        - `field_presence="must_exist"` (removed, renamed, type-changed): certain = rooted
          `keyword`/`dict_key` hits with `symbol == field_name` and `chain == resolved chain`.
@@ -29,7 +30,7 @@ here, in one readable file.
        - `field_presence="must_be_added"` (added, required-added): certain = the resolved call
          sites themselves (the fix is an added argument), and rooted keyword hits for the field are
          also certain when already present.
-       - A `getattr` dynamic naming the field or the operation's leaf → `DYNAMIC_GETATTR` group.
+       - A `getattr` dynamic naming the field → `DYNAMIC_GETATTR` group.
   4. `scope="component"`: match `symbol == field_name` across shapes.
      - Rooted `keyword`/`dict_key`/`attribute` hits → certain.
      - Non-rooted hits → `UNROOTED_RECEIVER` group with candidates.
