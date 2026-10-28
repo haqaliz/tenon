@@ -24,7 +24,7 @@ here, in one readable file.
        Zero → `NO_SITES`.
      - With a field:
        - `field_presence="must_exist"` (removed, renamed, type-changed): certain = rooted
-         `keyword`/`dict_key` hits with `symbol == field_name` and `in_chain == resolved chain`.
+         `keyword`/`dict_key` hits with `symbol == field_name` and `chain == resolved chain`.
          A resolved call with `star_kwargs` → `DYNAMIC_KWARGS` group with the call site.
        - `field_presence="must_be_added"` (added, required-added): certain = the resolved call
          sites themselves (the fix is an added argument), and rooted keyword hits for the field are
@@ -62,7 +62,8 @@ here, in one readable file.
    candidate, and produces no certain site.
 4. `getattr(client.charges, "delete")("ch")` for `endpoint_removed DELETE /v1/charges/{id}` with a
    mapping is `DYNAMIC_GETATTR`, never certain.
-5. Two mapped candidates both resolving in the fixture repo → `MULTIPLE_CANDIDATES`, all sites kept.
+5. A `GET /v1/customers/{id}` change in a repo where both `customers.get(...)` and
+   `customers.retrieve(...)` are called → `MULTIPLE_CANDIDATES`, all sites kept.
 6. A `parameter_required_added` on an operation returns its resolved call sites as certain, with no
    field-name requirement.
 7. An unsupported kind returns `UNSUPPORTED_CHANGE_KIND` with both lists empty; a change with no

@@ -13,11 +13,12 @@ elsewhere.
 
 - `scan(root, sdk_package) -> ScanResult` with:
   - `modules: tuple[str, ...]` — repo-relative paths of scanned modules.
-  - `hits: tuple[Hit, ...]` — `Hit(path, line, column, shape, symbol, chain, in_chain, rooted)`
-    where `shape` is `call|keyword|dict_key|attribute`, `symbol` is the matched Python name (method
-    name, keyword name, dict key string or attribute name), `chain` is the dotted attribute path
-    after the SDK root (`("charges", "delete")` for `client.charges.delete`), and `in_chain` is the
-    chain of the enclosing rooted call for keyword/dict-key hits, else `None`.
+  - `hits: tuple[Hit, ...]` — `Hit(path, line, column, shape, symbol, chain, rooted)` where `shape`
+    is `call|keyword|dict_key|attribute`, `symbol` is the matched Python name (method name, keyword
+    name, dict key string or attribute name), and `chain` is the dotted attribute path after the SDK
+    root: the chain of the call itself for `call`/`attribute` hits (`("charges", "delete")` for
+    `client.charges.delete`), and the chain of the enclosing rooted call for `keyword`/`dict_key`
+    hits, else `()`.
   - `dynamics: tuple[Dynamic, ...]` — `Dynamic(path, line, column, kind, symbol | None)` with
     `kind` in `star_kwargs|star_args|getattr|alias_chain`.
 - Reachability: parse every `.py` under `root` (skipping `.venv`, `node_modules`, `build`, `dist`,
