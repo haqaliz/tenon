@@ -4,24 +4,26 @@ Literal inputs on purpose: every rule is exercised without a filesystem, while
 ``test_locate.py`` proves the same rules through the public API.
 """
 
+import pytest
+
 from tenon.detect import Change, ChangeKind, Location
 from tenon.locate import (
+    AmbiguityReason,
+    AmbiguousGroup,
     Dynamic,
     Hit,
     LocateConfig,
     LocateReason,
     Query,
     ScanResult,
+    Site,
     SiteShape,
 )
-from tenon.locate.resolve import resolve
+from tenon.locate.resolve import _build, resolve
 from tenon.locate.scan import DynamicKind
 
 CONFIG = LocateConfig(sdk_package="stripe")
 CHARGE_PROPERTIES = "#/components/schemas/Charge/properties"
-CHARGES_BODY = (
-    "#/paths/~1v1~1charges/post/requestBody/content/application~1json/schema/properties"
-)
 
 
 def a_change(
@@ -140,3 +142,177 @@ def test_no_sites_and_unsupported_kind_are_distinguishable():
 
     assert no_sites.reason is not unsupported.reason
     assert no_sites.reason is LocateReason.NO_SITES
+
+
+# Phase 2: operation scope.
+def test_a_single_resolved_operation_call_is_certain():
+    call = a_hit(line=6, column=16, symbol="delete")
+
+    result = resolve(a_change(), a_query(), a_scan(call), CONFIG)
+
+    assert result.certain == (Site("m.py", 6, 16, SiteShape.CALL, "delete"),)
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+def test_two_resolved_operation_candidates_become_one_ambiguous_group():
+    query = a_query(
+        method="get",
+        path="/v1/customers/{id}",
+        operation_candidates=("customers.get", "customers.list", "customers.retrieve"),
+    )
+    get = a_hit(line=5, column=18, symbol="get", chain=("customers", "get"))
+    retrieve = a_hit(line=6, column=18, symbol="retrieve", chain=("customers", "retrieve"))
+
+    result = resolve(a_change(), query, a_scan(get, retrieve), CONFIG)
+
+    assert result.certain == ()
+    assert len(result.ambiguous) == 1
+    group = result.ambiguous[0]
+    assert group.reason is AmbiguityReason.MULTIPLE_CANDIDATES
+    assert group.symbol == "customers.get"
+    assert group.candidates == (
+        Site("m.py", 5, 18, SiteShape.CALL, "get"),
+        Site("m.py", 6, 18, SiteShape.CALL, "retrieve"),
+    )
+
+
+def test_must_exist_certainty_is_the_matching_rooted_keyword():
+    query = a_query(
+        kind=ChangeKind.RENAMED,
+        method="post",
+        path="/v1/charges",
+        operation_candidates=("charges.create",),
+        field_name="amount",
+        change_field="amount",
+        field_presence="must_exist",
+    )
+    call = a_hit(line=5, column=16, symbol="create", chain=("charges", "create"))
+    amount = a_hit(
+        line=5,
+        column=23,
+        shape=SiteShape.KEYWORD,
+        symbol="amount",
+        chain=("charges", "create"),
+    )
+    currency = a_hit(
+        line=5,
+        column=38,
+        shape=SiteShape.KEYWORD,
+        symbol="currency",
+        chain=("charges", "create"),
+    )
+    decoy = a_hit(
+        line=9,
+        column=8,
+        shape=SiteShape.KEYWORD,
+        symbol="amount",
+        chain=(),
+        rooted=False,
+    )
+
+    result = resolve(a_change(), query, a_scan(call, amount, currency, decoy), CONFIG)
+
+    assert result.certain == (
+        Site("m.py", 5, 23, SiteShape.KEYWORD, "amount"),
+    )
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+def test_must_exist_with_star_kwargs_reports_the_call_site_only():
+    query = a_query(
+        kind=ChangeKind.RENAMED,
+        field_name="amount",
+        change_field="amount",
+        field_presence="must_exist",
+        operation_candidates=("charges.create",),
+    )
+    call = a_hit(line=7, column=27, symbol="create", chain=("charges", "create"))
+
+    result = resolve(
+        a_change(), query, a_scan(call, dynamics=(a_dynamic(line=7, column=34),)), CONFIG
+    )
+
+    assert result.certain == ()
+    assert len(result.ambiguous) == 1
+    group = result.ambiguous[0]
+    assert group.reason is AmbiguityReason.DYNAMIC_KWARGS
+    assert group.symbol == "amount"
+    assert group.candidates == (Site("m.py", 7, 27, SiteShape.CALL, "create"),)
+
+
+def test_must_be_added_marks_the_resolved_call_sites_certain():
+    query = a_query(
+        kind=ChangeKind.PARAMETER_REQUIRED_ADDED,
+        field_name="idempotency_key",
+        change_field="idempotency_key",
+        field_presence="must_be_added",
+        operation_candidates=("charges.create",),
+    )
+    first = a_hit(line=5, column=16, symbol="create", chain=("charges", "create"))
+    second = a_hit(line=9, column=16, symbol="create", chain=("charges", "create"))
+
+    result = resolve(a_change(), query, a_scan(first, second), CONFIG)
+
+    assert result.certain == (
+        Site("m.py", 5, 16, SiteShape.CALL, "create"),
+        Site("m.py", 9, 16, SiteShape.CALL, "create"),
+    )
+    assert result.ambiguous == ()
+
+
+def test_must_be_added_keeps_an_already_present_field_certain():
+    query = a_query(
+        kind=ChangeKind.PROPERTY_REQUIRED_ADDED,
+        field_name="currency",
+        change_field="currency",
+        field_presence="must_be_added",
+        operation_candidates=("charges.create",),
+    )
+    call = a_hit(line=5, column=16, symbol="create", chain=("charges", "create"))
+    currency = a_hit(
+        line=5,
+        column=38,
+        shape=SiteShape.KEYWORD,
+        symbol="currency",
+        chain=("charges", "create"),
+    )
+
+    result = resolve(a_change(), query, a_scan(call, currency), CONFIG)
+
+    assert result.certain == (
+        Site("m.py", 5, 16, SiteShape.CALL, "create"),
+        Site("m.py", 5, 38, SiteShape.KEYWORD, "currency"),
+    )
+
+
+def test_an_unresolved_operation_with_getattr_naming_its_leaf_is_dynamic():
+    getattr = a_dynamic(line=3, column=12, kind=DynamicKind.GETATTR, symbol="delete")
+
+    result = resolve(a_change(), a_query(), a_scan(dynamics=(getattr,)), CONFIG)
+
+    assert result.certain == ()
+    assert len(result.ambiguous) == 1
+    group = result.ambiguous[0]
+    assert group.reason is AmbiguityReason.DYNAMIC_GETATTR
+    assert group.symbol == "delete"
+    assert group.candidates == (Site("m.py", 3, 12, SiteShape.ATTRIBUTE, "delete"),)
+
+
+def test_a_getattr_without_a_name_is_not_attributed_to_a_field():
+    unnamed = a_dynamic(kind=DynamicKind.GETATTR, symbol=None)
+
+    result = resolve(a_change(), a_query(), a_scan(dynamics=(unnamed,)), CONFIG)
+
+    assert result.reason is LocateReason.NO_SITES
+
+
+def test_a_site_cannot_be_certain_and_a_candidate():
+    site = Site("m.py", 1, 1, SiteShape.CALL, "delete")
+    group = AmbiguousGroup(
+        AmbiguityReason.MULTIPLE_CANDIDATES, "delete", (site,)
+    )
+
+    with pytest.raises(AssertionError):
+        _build(a_change(), certain=(site,), groups=(group,))
