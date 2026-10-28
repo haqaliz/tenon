@@ -243,3 +243,118 @@ def _reachable(modules: list[_Module], sdk_package: str) -> list[_Module]:
                 queue.append(importer)
     by_rel = {module.rel: module for module in modules}
     return [by_rel[rel] for rel in sorted(seen)]
+
+
+def _bindings(
+    tree: ast.Module, sdk_package: str
+) -> tuple[dict[str, tuple[str, ...]], set[str], set[tuple[str, ...]]]:
+    """Names bound to the SDK, the class names, and their full dotted paths."""
+    roots: dict[str, tuple[str, ...]] = {}
+    classes: set[str] = set()
+    class_paths: set[tuple[str, ...]] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if not _is_sdk(alias.name, sdk_package):
+                    continue
+                full = tuple(alias.name.split("."))
+                roots[alias.asname or full[0]] = (
+                    full if alias.asname else full[:1]
+                )
+        elif isinstance(node, ast.ImportFrom):
+            if (
+                node.level
+                or not node.module
+                or not _is_sdk(node.module, sdk_package)
+            ):
+                continue
+            base = tuple(node.module.split("."))
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                full = base + (alias.name,)
+                name = alias.asname or alias.name
+                roots[name] = full
+                classes.add(name)
+                class_paths.add(full)
+    return roots, classes, class_paths
+
+
+def _parts(node: ast.expr) -> tuple[str | None, tuple[str, ...]]:
+    """The root name and attribute tail of a dotted expression."""
+    tail = []
+    while isinstance(node, ast.Attribute):
+        tail.append(node.attr)
+        node = node.value
+    tail.reverse()
+    return (node.id if isinstance(node, ast.Name) else None), tuple(tail)
+
+
+def _full(
+    root: str | None,
+    tail: tuple[str, ...],
+    roots: dict[str, tuple[str, ...]],
+    sdk_parts: tuple[str, ...],
+) -> tuple[str, ...] | None:
+    """The full dotted path when it starts at the SDK root, else ``None``."""
+    if root is None or root not in roots:
+        return None
+    full = roots[root] + tail
+    return full if full[: len(sdk_parts)] == sdk_parts else None
+
+
+def _dynamic(
+    source: _Source, node: ast.AST, kind: DynamicKind, symbol: str | None = None
+) -> Dynamic:
+    return Dynamic(source.path, node.lineno, node.col_offset + 1, kind, symbol)
+
+
+def _aliases(
+    tree: ast.Module,
+    roots: dict[str, tuple[str, ...]],
+    class_paths: set[tuple[str, ...]],
+    source: _Source,
+    sdk_package: str,
+) -> tuple[dict[str, tuple[str, ...]], set[str], list[Dynamic]]:
+    """One-hop aliases in source order; a second hop becomes a dynamic."""
+    sdk_parts = tuple(sdk_package.split("."))
+    aliases: dict[str, tuple[str, ...]] = {}
+    class_aliases: set[str] = set()
+    dynamics: list[Dynamic] = []
+    assigned: set[str] = set()
+    nodes = sorted(
+        (node for node in ast.walk(tree) if isinstance(node, ast.Assign)),
+        key=lambda node: (node.lineno, node.col_offset),
+    )
+    for node in nodes:
+        if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+            continue
+        target = node.targets[0]
+        value = node.value
+        if isinstance(value, ast.Name):
+            if value.id in assigned:
+                dynamics.append(
+                    _dynamic(source, target, DynamicKind.ALIAS_CHAIN, target.id)
+                )
+                continue
+            full = roots.get(value.id)
+        elif isinstance(value, ast.Call):
+            root, tail = _parts(value.func)
+            full = _full(root, tail, roots, sdk_parts)
+            if full is not None:
+                class_aliases.update(
+                    {target.id} if full in class_paths else set()
+                )
+                full = sdk_parts
+        elif isinstance(value, ast.Attribute):
+            root, tail = _parts(value)
+            full = _full(root, tail, roots, sdk_parts)
+        else:
+            full = None
+        if full is None:
+            continue
+        aliases[target.id] = full
+        assigned.add(target.id)
+        if full in class_paths:
+            class_aliases.add(target.id)
+    return aliases, class_aliases, dynamics
