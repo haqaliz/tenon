@@ -1,3 +1,7 @@
+import os
+import subprocess
+import sys
+
 import pytest
 
 from tenon.detect import Change, ChangeKind, Location
@@ -393,7 +397,9 @@ def test_operation_mapping_method_match_is_case_insensitive(key, method):
         path="/v1/charges/{id}",
     )
 
-    query = derive(change, LocateConfig(sdk_package="stripe", operations={key: "charges.delete"}))
+    query = derive(
+        change, LocateConfig(sdk_package="stripe", operations={key: "charges.delete"})
+    )
 
     assert query.operation_candidates == ("charges.delete",)
     assert query.origin == "mapping"
@@ -469,3 +475,195 @@ def test_an_unmapped_field_keeps_the_spec_name_verbatim():
 
     assert query.field_name == "amountCents"
     assert query.origin == "inferred"
+
+
+# Plan edge case: a pointer outside components/schemas skips the mapping, never crashes.
+def test_a_pointer_outside_components_schemas_skips_the_field_mapping():
+    change = a_change(
+        ChangeKind.PROPERTY_REMOVED,
+        pointer="#/definitions/Charge/properties",
+        before=payload("amount", "integer"),
+    )
+    config = LocateConfig(
+        sdk_package="stripe", fields={"Charge.amount": "amount_cents"}
+    )
+
+    query = derive(change, config)
+
+    assert query.field_name == "amount"
+    assert query.origin == "inferred"
+
+
+# Spec AC3: the exact candidates and their order, not a set.
+@pytest.mark.parametrize(
+    "method, path, expected",
+    [
+        pytest.param(
+            "delete", "/v1/charges/{id}", ("charges.delete",), id="delete"
+        ),
+        pytest.param(
+            "GET",
+            "/v1/customers/{id}",
+            ("customers.get", "customers.list", "customers.retrieve"),
+            id="get",
+        ),
+        pytest.param(
+            "post",
+            "/v2/files/{id}/refunds",
+            ("files.refunds.create",),
+            id="post_keeps_intermediate_segment",
+        ),
+        pytest.param("put", "/v1/charges/{id}", ("charges.update",), id="put"),
+        pytest.param(
+            "patch", "/v1/charges/{id}", ("charges.update",), id="patch"
+        ),
+    ],
+)
+def test_operation_candidates_are_inferred_from_path_and_verb(method, path, expected):
+    change = a_change(
+        ChangeKind.ENDPOINT_REMOVED,
+        pointer="#/paths",
+        before=path,
+        method=method,
+        path=path,
+    )
+
+    query = derive(change, CONFIG)
+
+    assert query.operation_candidates == expected
+    assert query.origin == "inferred"
+
+
+# Plan §Phase 3: one-segment path with a verb name is still a candidate.
+def test_a_one_segment_path_still_yields_a_verb_candidate():
+    change = a_change(
+        ChangeKind.ENDPOINT_REMOVED,
+        pointer="#/paths",
+        before="/legacy",
+        method="delete",
+        path="/legacy",
+    )
+
+    query = derive(change, CONFIG)
+
+    assert query.operation_candidates == ("legacy.delete",)
+
+
+def test_the_leading_version_and_path_parameters_are_dropped():
+    change = a_change(
+        ChangeKind.ENDPOINT_REMOVED,
+        pointer="#/paths",
+        before="/v1/{tenant}/customers/{id}",
+        method="get",
+        path="/v1/{tenant}/customers/{id}",
+    )
+
+    query = derive(change, CONFIG)
+
+    assert query.operation_candidates == (
+        "customers.get",
+        "customers.list",
+        "customers.retrieve",
+    )
+
+
+# Plan §Phase 3: no verb mapping means no candidates, and no invented reason.
+def test_an_unknown_verb_yields_no_candidates_and_no_reason():
+    change = a_change(
+        ChangeKind.ENDPOINT_REMOVED,
+        pointer="#/paths",
+        before="/v1/charges",
+        method="trace",
+        path="/v1/charges",
+    )
+
+    query = derive(change, CONFIG)
+
+    assert query.operation_candidates == ()
+    assert query.origin == "none"
+    assert query.reason is None
+
+
+def test_an_operation_mapping_beats_inference():
+    change = a_change(
+        ChangeKind.ENDPOINT_REMOVED,
+        pointer="#/paths",
+        before="/v1/charges/{id}",
+        method="delete",
+        path="/v1/charges/{id}",
+    )
+    config = LocateConfig(
+        sdk_package="stripe",
+        operations={"DELETE /v1/charges/{id}": "charges.remove"},
+    )
+
+    query = derive(change, config)
+
+    assert query.operation_candidates == ("charges.remove",)
+    assert query.origin == "mapping"
+
+
+def test_an_operation_scoped_field_change_carries_both_candidates_and_the_name():
+    change = a_change(
+        ChangeKind.PROPERTY_TYPE_CHANGED,
+        pointer=CHARGES_BODY,
+        method="post",
+        path="/v1/charges",
+        before=payload("amount", "integer"),
+        after=payload("amount", "string"),
+    )
+
+    query = derive(change, CONFIG)
+
+    assert query.operation_candidates == ("charges.create",)
+    assert query.field_name == "amount"
+    assert query.origin == "inferred"
+
+
+# Spec: a genuinely new required property points at the enclosing operation.
+def test_a_brand_new_required_property_uses_the_enclosing_operation():
+    change = a_change(
+        ChangeKind.PROPERTY_REQUIRED_ADDED,
+        pointer=CHARGES_BODY,
+        method="post",
+        path="/v1/charges",
+        after=payload("currency"),
+    )
+
+    query = derive(change, CONFIG)
+
+    assert query.scope == "operation"
+    assert query.operation_candidates == ("charges.create",)
+    assert query.field_name == "currency"
+    assert query.field_presence == "must_be_added"
+
+
+SUBPROCESS_SCRIPT = """
+from tenon.detect import Change, ChangeKind, Location
+from tenon.locate import LocateConfig, derive
+
+change = Change(
+    kind=ChangeKind.ENDPOINT_REMOVED,
+    location=Location(
+        pointer="#/paths", method="get", path="/v1/customers/{id}"
+    ),
+    before="/v1/customers/{id}",
+)
+print(repr(derive(change, LocateConfig(sdk_package="stripe"))), end="")
+"""
+
+
+def derive_with_hash_seed(seed):
+    result = subprocess.run(
+        [sys.executable, "-c", SUBPROCESS_SCRIPT],
+        env={**os.environ, "PYTHONHASHSEED": seed},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+# Spec AC6: same input, identical Query across runs and hash seeds.
+def test_the_query_is_identical_across_hash_seeds():
+    assert derive_with_hash_seed("0") == derive_with_hash_seed("1")

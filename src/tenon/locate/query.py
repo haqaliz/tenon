@@ -4,6 +4,7 @@ A change speaks HTTP; the scanner speaks Python names. ``derive`` is the single
 translation point, so it names what it cannot map instead of guessing.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -26,6 +27,18 @@ _MUST_BE_ADDED_KINDS = frozenset(
         ChangeKind.PARAMETER_REQUIRED_ADDED,
     }
 )
+
+_VERSION_SEGMENT = re.compile(r"v\d+")
+_PATH_PARAMETER = re.compile(r"\{[^/{}]+\}")
+
+# The verb leaves the PRD settles on; order is part of the contract.
+_VERB_LEAVES: dict[str, tuple[str, ...]] = {
+    "get": ("get", "list", "retrieve"),
+    "post": ("create",),
+    "put": ("update",),
+    "patch": ("update",),
+    "delete": ("delete",),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,17 +99,20 @@ def derive(change: Change, config: LocateConfig) -> Query:
         )
 
     mapped_operation = _mapped_operation(config, location.method, location.path)
-    operation_candidates = (mapped_operation,) if mapped_operation else ()
+    if mapped_operation is not None:
+        operation_candidates = (mapped_operation,)
+    else:
+        operation_candidates = _infer_operations(location.method, location.path)
     mapped_field = _mapped_field(config, location.pointer, spec_name)
     if mapped_field is not None:
         field_name = mapped_field
 
     if mapped_operation is not None or mapped_field is not None:
         origin: Origin = "mapping"
-    elif field_name is not None:
-        origin = "inferred"
+    elif scope == "operation":
+        origin = "inferred" if operation_candidates else "none"
     else:
-        origin = "none"
+        origin = "inferred" if field_name is not None else "none"
 
     return Query(
         scope=scope,
@@ -134,19 +150,36 @@ def _mapped_operation(
     return None
 
 
+def _segments(path: str) -> tuple[str, ...]:
+    """Resource segments: no leading ``v<N>`` and no ``{param}`` placeholders."""
+    parts = [part for part in path.split("/") if part]
+    if parts and _VERSION_SEGMENT.fullmatch(parts[0]):
+        parts = parts[1:]
+    return tuple(part for part in parts if not _PATH_PARAMETER.fullmatch(part))
+
+
+def _infer_operations(method: str | None, path: str | None) -> tuple[str, ...]:
+    """Ordered dotted candidates from the path and the verb; empty when unnamed."""
+    if not method or not path:
+        return ()
+    leaves = _VERB_LEAVES.get(method.lower())
+    if leaves is None:
+        return ()
+    base = _segments(path)
+    if not base:
+        return ()
+    return tuple(".".join((*base, leaf)) for leaf in leaves)
+
+
 def _schema_name(pointer: str) -> str | None:
-    """The schema segment of an RFC 6901 pointer, or None outside ``components``."""
+    """The schema segment of a ``#/components/schemas/<name>`` pointer, else None."""
     segments = [
         token.replace("~1", "/").replace("~0", "~")
         for token in pointer.split("/")
     ]
-    try:
-        index = segments.index("schemas")
-    except ValueError:
+    if segments[:3] != ["#", "components", "schemas"] or len(segments) < 4:
         return None
-    if index + 1 >= len(segments):
-        return None
-    return segments[index + 1] or None
+    return segments[3] or None
 
 
 def _mapped_field(
