@@ -117,6 +117,12 @@ def _resolve_operation(
     if query.origin == "none":
         return _build(change, reason=LocateReason.OPERATION_NOT_MAPPED)
     calls = _operation_calls(query, scan_result)
+    companions: list[AmbiguousGroup] = list(
+        _getattr_groups(_candidate_leaves(query), scan_result)
+    )
+    unrooted = _unrooted_group(query, scan_result)
+    if unrooted is not None:
+        companions.append(unrooted)
     if len(calls) >= 2:
         group = AmbiguousGroup(
             AmbiguityReason.MULTIPLE_CANDIDATES,
@@ -125,16 +131,15 @@ def _resolve_operation(
                 _site(hit) for hits in calls.values() for hit in hits
             ),
         )
-        return _build(change, groups=(group,))
+        return _build(change, groups=(group, *companions))
     if not calls:
-        groups = _getattr_groups(_candidate_leaves(query), scan_result)
-        if groups:
-            return _build(change, groups=groups)
+        if companions:
+            return _build(change, groups=companions)
         return _build(change, reason=LocateReason.NO_SITES)
 
     (chain, call_hits), = calls.items()
     certain: list[Site] = []
-    groups: list[AmbiguousGroup] = []
+    groups: list[AmbiguousGroup] = list(companions)
     if query.field_name is None:
         certain.extend(_site(hit) for hit in call_hits)
     else:
@@ -142,7 +147,7 @@ def _resolve_operation(
         if query.field_presence == "must_be_added":
             certain.extend(_site(hit) for hit in call_hits)
         elif query.field_presence == "must_exist":
-            star_kwargs = _star_kwargs_call_sites(call_hits, scan_result)
+            star_kwargs = _star_kwargs_call_sites(call_hits, scan_result, chain)
             if star_kwargs:
                 groups.append(
                     AmbiguousGroup(
@@ -160,6 +165,25 @@ def _resolve_operation(
     if not certain and not groups:
         return _build(change, reason=LocateReason.NO_SITES)
     return _build(change, certain=certain, groups=groups)
+
+
+def _unrooted_group(
+    query: Query, scan_result: ScanResult
+) -> AmbiguousGroup | None:
+    """Unrooted calls whose own chain names a candidate operation."""
+    chains = {tuple(candidate.split(".")) for candidate in query.operation_candidates}
+    hits = tuple(
+        hit
+        for hit in scan_result.hits
+        if hit.shape is SiteShape.CALL and not hit.rooted and hit.chain in chains
+    )
+    if not hits:
+        return None
+    return AmbiguousGroup(
+        AmbiguityReason.UNROOTED_RECEIVER,
+        _operation_symbol(query),
+        _unique(_site(hit) for hit in hits),
+    )
 
 
 def _operation_calls(
@@ -194,13 +218,13 @@ def _field_hits(
 
 
 def _star_kwargs_call_sites(
-    call_hits: Sequence[Hit], scan_result: ScanResult
+    call_hits: Sequence[Hit], scan_result: ScanResult, chain: tuple[str, ...]
 ) -> tuple[Hit, ...]:
-    """Resolved calls in a file where a rooted ``**kwargs`` was seen."""
+    """Resolved calls in a file where ``**kwargs`` was seen on this same chain."""
     files = {
         dynamic.path
         for dynamic in scan_result.dynamics
-        if dynamic.kind is DynamicKind.STAR_KWARGS
+        if dynamic.kind is DynamicKind.STAR_KWARGS and dynamic.chain == chain
     }
     return tuple(hit for hit in call_hits if hit.path in files)
 

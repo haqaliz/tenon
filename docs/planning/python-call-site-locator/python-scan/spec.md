@@ -20,8 +20,10 @@ elsewhere.
     `client.charges.delete`), the chain of the attribute for rooted `attribute` hits, the chain of
     the enclosing rooted call for rooted `keyword`/`dict_key` hits, and `()` otherwise — including
     every unrooted `keyword`, `dict_key` and `attribute` hit.
-  - `dynamics: tuple[Dynamic, ...]` — `Dynamic(path, line, column, kind, symbol | None)` with
-    `kind` in `star_kwargs|star_args|getattr|alias_chain`.
+  - `dynamics: tuple[Dynamic, ...]` — `Dynamic(path, line, column, kind, symbol | None, chain)` with
+    `kind` in `star_kwargs|star_args|getattr|alias_chain`. `chain` is the enclosing rooted call's
+    dotted chain for `star_kwargs`/`star_args`, the receiver's chain for `getattr`, and `()` when
+    unknown, so a consumer can attribute a dynamic to one operation instead of a whole file.
 - Reachability: parse every `.py` under `root` (skipping `.venv`, `node_modules`, `build`, `dist`,
   `__pycache__`, and dot-directories); a module is scanned when it directly imports the SDK package
   or imports a local module that is scanned. Relative imports resolve against the package chain;

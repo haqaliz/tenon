@@ -177,6 +177,58 @@ def test_getattr_is_dynamic_and_never_certain(tmp_path):
     )
 
 
+# A getattr naming the leaf is a companion, never a replacement, for a resolved call.
+def test_a_getattr_companion_is_reported_alongside_a_resolved_call(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        'from stripe import Stripe\n\nclient = Stripe()\n'
+        'client.charges.delete("ch_1")\n'
+        'getattr(client.charges, "delete")("ch_2")\n',
+    )
+
+    result = locate(
+        a_change(
+            ChangeKind.ENDPOINT_REMOVED,
+            before="/v1/charges/{id}",
+            method="delete",
+            path="/v1/charges/{id}",
+        ),
+        repo,
+        STRIPE,
+    )
+
+    assert [(site.path, site.line, site.column, site.shape) for site in result.certain] == [
+        ("app.py", 4, 16, SiteShape.CALL)
+    ]
+    assert len(result.ambiguous) == 1
+    group = result.ambiguous[0]
+    assert group.reason is AmbiguityReason.DYNAMIC_GETATTR
+    assert group.candidates == (
+        Site("app.py", 5, 1, SiteShape.ATTRIBUTE, "delete"),
+    )
+
+
+# An unrooted cross-file call is evidence for the operation, not noise to drop.
+def test_an_unrooted_cross_file_call_is_reported_not_dropped():
+    change = a_change(
+        ChangeKind.ENDPOINT_REMOVED,
+        before="/v1/charges",
+        method="get",
+        path="/v1/charges",
+    )
+
+    result = locate(change, SDK_BASIC, STRIPE)
+
+    assert result.certain == ()
+    assert result.reason is None
+    assert len(result.ambiguous) == 1
+    group = result.ambiguous[0]
+    assert group.reason is AmbiguityReason.UNROOTED_RECEIVER
+    assert [
+        (site.path, site.line, site.column, site.shape) for site in group.candidates
+    ] == [("acme/reporting.py", 3, 16, SiteShape.CALL)]
+
+
 # Spec AC5: both inferred candidates resolve, so both sites are kept.
 def test_two_resolving_candidates_are_one_group():
     change = a_change(

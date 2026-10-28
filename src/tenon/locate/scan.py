@@ -47,17 +47,24 @@ class Hit:
 
 @dataclass(frozen=True, slots=True)
 class Dynamic:
-    """A construct that hides at least one name from static inspection."""
+    """A construct that hides at least one name from static inspection.
+
+    ``chain`` attributes the dynamic to one operation where the scanner can
+    see the receiver: the enclosing rooted call's chain for stars, the
+    receiver's chain for ``getattr``, and ``()`` when unknown.
+    """
 
     path: str
     line: int
     column: int
     kind: DynamicKind
     symbol: str | None = None
+    chain: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.kind, DynamicKind):
             object.__setattr__(self, "kind", DynamicKind(self.kind))
+        object.__setattr__(self, "chain", tuple(self.chain))
 
 
 def _hit_key(hit: Hit) -> tuple:
@@ -80,6 +87,7 @@ def _dynamic_key(dynamic: Dynamic) -> tuple:
         dynamic.column,
         dynamic.kind.value,
         dynamic.symbol or "",
+        dynamic.chain,
     )
 
 
@@ -325,11 +333,15 @@ def _full(
 
 
 def _dynamic(
-    source: _Source, node: ast.AST, kind: DynamicKind, symbol: str | None = None
+    source: _Source,
+    node: ast.AST,
+    kind: DynamicKind,
+    symbol: str | None = None,
+    chain: tuple[str, ...] = (),
 ) -> Dynamic:
     line = source.lines[node.lineno - 1]
     return Dynamic(
-        source.path, node.lineno, _column(line, node.col_offset), kind, symbol
+        source.path, node.lineno, _column(line, node.col_offset), kind, symbol, chain
     )
 
 
@@ -527,8 +539,9 @@ class _Visitor(ast.NodeVisitor):
                 if isinstance(name, ast.Constant) and isinstance(name.value, str)
                 else None
             )
+            receiver, _ = self._ref(*_parts(node.args[0]))
             self.dynamics.append(
-                _dynamic(self._source, node, DynamicKind.GETATTR, symbol)
+                _dynamic(self._source, node, DynamicKind.GETATTR, symbol, receiver)
             )
         rooted_call = rooted or (
             self._is_getattr(node.func) and self._rooted_expr(node.func.args[0])
@@ -537,7 +550,12 @@ class _Visitor(ast.NodeVisitor):
             if keyword.arg is None:
                 if rooted_call:
                     self.dynamics.append(
-                        _dynamic(self._source, keyword, DynamicKind.STAR_KWARGS)
+                        _dynamic(
+                            self._source,
+                            keyword,
+                            DynamicKind.STAR_KWARGS,
+                            chain=chain,
+                        )
                     )
                 continue
             self._emit(
@@ -551,7 +569,12 @@ class _Visitor(ast.NodeVisitor):
             for argument in node.args:
                 if isinstance(argument, ast.Starred):
                     self.dynamics.append(
-                        _dynamic(self._source, argument, DynamicKind.STAR_ARGS)
+                        _dynamic(
+                            self._source,
+                            argument,
+                            DynamicKind.STAR_ARGS,
+                            chain=chain,
+                        )
                     )
         for argument in node.args:
             for mapping in _dict_literals(argument):

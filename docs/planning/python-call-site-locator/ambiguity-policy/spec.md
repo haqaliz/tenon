@@ -11,8 +11,9 @@ here, in one readable file.
 
 ## In scope
 
-- `resolve(query, scan, config) -> LocateResult`, plus the `locate(change, root, config)` wrapper
-  that derives the query, scans, and resolves.
+- `resolve(change, query, scan, config) -> LocateResult`, plus the `locate(change, root, config)` wrapper
+  that derives the query, scans, and resolves. `change` is passed through to the result unchanged;
+  `config` is present for symmetry and future policy, even when unused.
 - Result ordering and serialization come from aspect 1; this aspect only builds the values.
 - Rule order (first match wins, all rules deterministic):
   1. `query.reason` → pass it through, both lists empty.
@@ -23,10 +24,17 @@ here, in one readable file.
        candidates resolving → one `MULTIPLE_CANDIDATES` group holding all those call sites.
        Zero → `DYNAMIC_GETATTR` when a `getattr` dynamic names one of the candidate leaves (the
        dynamic's own site is the candidate), else `NO_SITES`.
+     - Unrooted `call` hits whose `chain` equals any candidate are always reported as a
+       `UNROOTED_RECEIVER` group, alongside any certain sites. A cross-file alias is evidence, not
+       noise to discard.
+     - A `getattr` dynamic naming any candidate leaf is always a `DYNAMIC_GETATTR` group, even when
+       a normal rooted call to the same operation resolved.
      - With a field:
        - `field_presence="must_exist"` (removed, renamed, type-changed): certain = rooted
          `keyword`/`dict_key` hits with `symbol == field_name` and `chain == resolved chain`.
-         A resolved call with `star_kwargs` → `DYNAMIC_KWARGS` group with the call site.
+         A `star_kwargs` dynamic whose `chain` equals the resolved chain → `DYNAMIC_KWARGS` group
+         with the call site. A `star_kwargs` dynamic in the same file but a different chain is not
+         evidence for this operation.
        - `field_presence="must_be_added"` (added, required-added): certain = the resolved call
          sites themselves (the fix is an added argument), and rooted keyword hits for the field are
          also certain when already present.

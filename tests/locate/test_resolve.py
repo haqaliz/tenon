@@ -84,8 +84,10 @@ def a_hit(
     return Hit(path, line, column, shape, symbol, chain, rooted, line_text)
 
 
-def a_dynamic(path="m.py", line=1, column=1, kind=DynamicKind.STAR_KWARGS, symbol=None):
-    return Dynamic(path, line, column, kind, symbol)
+def a_dynamic(
+    path="m.py", line=1, column=1, kind=DynamicKind.STAR_KWARGS, symbol=None, chain=()
+):
+    return Dynamic(path, line, column, kind, symbol, chain)
 
 
 # Phase 1: result-level rules.
@@ -129,14 +131,17 @@ def test_an_operation_without_a_mapping_or_inference_is_not_mapped():
     assert result.reason is LocateReason.OPERATION_NOT_MAPPED
 
 
-def test_a_mapped_operation_with_no_rooted_calls_has_no_sites():
+def test_a_mapped_operation_with_only_an_unrooted_call_reports_the_receiver():
     unrooted = a_hit(line=3, column=10, rooted=False)
 
     result = resolve(a_change(), a_query(), a_scan(unrooted), CONFIG)
 
-    assert result.reason is LocateReason.NO_SITES
     assert result.certain == ()
-    assert result.ambiguous == ()
+    assert result.reason is None
+    assert len(result.ambiguous) == 1
+    group = result.ambiguous[0]
+    assert group.reason is AmbiguityReason.UNROOTED_RECEIVER
+    assert group.candidates == (Site("m.py", 3, 10, SiteShape.CALL, "delete"),)
 
 
 def test_no_sites_and_unsupported_kind_are_distinguishable():
@@ -161,6 +166,23 @@ def test_a_single_resolved_operation_call_is_certain():
     assert result.certain == (Site("m.py", 6, 16, SiteShape.CALL, "delete"),)
     assert result.ambiguous == ()
     assert result.reason is None
+
+
+def test_a_resolved_operation_still_reports_its_unrooted_call():
+    result = resolve(a_change(), a_query(), scan(SDK_DYNAMIC, "stripe"), CONFIG)
+
+    assert [(site.path, site.line) for site in result.certain] == [
+        ("acme/flows.py", 15)
+    ]
+    groups = {group.reason: group for group in result.ambiguous}
+    assert set(groups) == {
+        AmbiguityReason.UNROOTED_RECEIVER,
+        AmbiguityReason.DYNAMIC_GETATTR,
+    }
+    assert [
+        (site.line, site.symbol)
+        for site in groups[AmbiguityReason.UNROOTED_RECEIVER].candidates
+    ] == [(18, "delete")]
 
 
 def test_two_resolved_operation_candidates_become_one_ambiguous_group():
@@ -239,7 +261,13 @@ def test_must_exist_with_star_kwargs_reports_the_call_site_only():
     call = a_hit(line=7, column=27, symbol="create", chain=("charges", "create"))
 
     result = resolve(
-        a_change(), query, a_scan(call, dynamics=(a_dynamic(line=7, column=34),)), CONFIG
+        a_change(),
+        query,
+        a_scan(
+            call,
+            dynamics=(a_dynamic(line=7, column=34, chain=("charges", "create")),),
+        ),
+        CONFIG,
     )
 
     assert result.certain == ()
@@ -248,6 +276,29 @@ def test_must_exist_with_star_kwargs_reports_the_call_site_only():
     assert group.reason is AmbiguityReason.DYNAMIC_KWARGS
     assert group.symbol == "amount"
     assert group.candidates == (Site("m.py", 7, 27, SiteShape.CALL, "create"),)
+
+
+def test_star_kwargs_are_evidence_only_for_their_own_call_chain():
+    query = a_query(
+        field_name="amount",
+        change_field="amount",
+        field_presence="must_exist",
+        operation_candidates=("charges.delete",),
+    )
+    create_call = a_hit(line=7, column=27, symbol="create", chain=("charges", "create"))
+    delete_call = a_hit(line=9, column=11, symbol="delete", chain=("charges", "delete"))
+    create_star = a_dynamic(line=7, column=34, chain=("charges", "create"))
+
+    result = resolve(
+        a_change(),
+        query,
+        a_scan(create_call, delete_call, dynamics=(create_star,)),
+        CONFIG,
+    )
+
+    assert result.certain == ()
+    assert result.ambiguous == ()
+    assert result.reason is LocateReason.NO_SITES
 
 
 def test_must_be_added_marks_the_resolved_call_sites_certain():

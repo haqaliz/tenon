@@ -286,13 +286,29 @@ def test_star_arguments_getattr_and_alias_chains_are_dynamics():
     result = scan(SDK_DYNAMIC, "stripe")
 
     assert result.dynamics == (
-        Dynamic("acme/flows.py", 7, 34, DynamicKind.STAR_KWARGS),
-        Dynamic("acme/flows.py", 11, 12, DynamicKind.GETATTR, "delete"),
+        Dynamic("acme/flows.py", 7, 34, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+        Dynamic("acme/flows.py", 11, 12, DynamicKind.GETATTR, "delete", ("charges",)),
         Dynamic("acme/flows.py", 11, 46, DynamicKind.STAR_ARGS),
         Dynamic("acme/flows.py", 17, 1, DynamicKind.ALIAS_CHAIN, "d"),
     )
     deletes = [hit for hit in result.hits if hit.symbol == "delete"]
     assert [(hit.line, hit.rooted) for hit in deletes] == [(15, True), (18, False)]
+
+
+def test_star_kwargs_carry_the_enclosing_call_chain(tmp_path):
+    (tmp_path / "app.py").write_text(
+        "from stripe import Stripe\n\nclient = Stripe()\n"
+        "client.charges.create(**row)\n"
+        "client.customers.list(**filters)\n",
+        encoding="utf-8",
+    )
+
+    result = scan(tmp_path, "stripe")
+
+    assert [(dynamic.kind, dynamic.chain) for dynamic in result.dynamics] == [
+        (DynamicKind.STAR_KWARGS, ("charges", "create")),
+        (DynamicKind.STAR_KWARGS, ("customers", "list")),
+    ]
 
 
 def test_src_layout_is_scanned():
