@@ -76,8 +76,9 @@ def derive(change: Change, config: LocateConfig) -> Query:
         old = change.before
         if not isinstance(old, str) or not old:
             return _unsupported(change, scope)
-        if location.pointer == "#/paths":
-            # An endpoint rename: the old path is reporting data, not a field.
+        if scope == "operation" and _path_like(old) and _path_like(change.after):
+            # An endpoint rename carries paths on both sides; a property rename
+            # under an operation carries names even though method/path are set.
             field_name = None
             change_field = old
             presence = "absent"
@@ -133,6 +134,10 @@ def _name_of(payload: object) -> str | None:
         if isinstance(name, str) and name:
             return name
     return None
+
+
+def _path_like(value: object) -> bool:
+    return isinstance(value, str) and value.startswith("/")
 
 
 def _mapped_operation(

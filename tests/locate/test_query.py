@@ -294,6 +294,41 @@ def test_a_renamed_endpoint_has_no_field_name_and_reports_the_old_path():
     assert query.field_presence == "absent"
 
 
+# Bug: an endpoint rename on a retained path has a deeper pointer, not "#/paths".
+def test_a_renamed_endpoint_on_a_retained_path_is_not_a_field_rename():
+    change = a_change(
+        ChangeKind.RENAMED,
+        pointer="#/paths/~1v2~1charges",
+        method="GET",
+        path="/v2/charges",
+        before="/v1/charges",
+        after="/v2/charges",
+    )
+
+    query = derive(change, CONFIG)
+
+    assert query.field_name is None
+    assert query.change_field == "/v1/charges"
+    assert query.field_presence == "absent"
+    assert query.operation_candidates == (
+        "charges.get",
+        "charges.list",
+        "charges.retrieve",
+    )
+
+
+# Guard: a component property rename still searches the old field name.
+def test_a_renamed_component_property_still_uses_the_old_name():
+    change = a_change(ChangeKind.RENAMED, before="amount", after="amount_cents")
+
+    query = derive(change, CONFIG)
+
+    assert query.scope == "component"
+    assert query.field_name == "amount"
+    assert query.change_field == "amount"
+    assert query.field_presence == "must_exist"
+
+
 MALFORMED = [
     pytest.param(
         a_change(ChangeKind.PROPERTY_REMOVED, before=None),
