@@ -334,7 +334,9 @@ def _dynamic(
 
 
 def _column(line: str, byte_col: int) -> int:
-    return byte_col + 1
+    """Convert an ``ast`` UTF-8 byte offset to a 1-based character column."""
+    prefix = line.encode("utf-8")[:byte_col]
+    return len(prefix.decode("utf-8", errors="replace")) + 1
 
 
 def _aliases(
@@ -368,12 +370,12 @@ def _aliases(
             full = roots.get(value.id)
         elif isinstance(value, ast.Call):
             root, tail = _parts(value.func)
-            full = _full(root, tail, roots, sdk_parts)
-            if full is not None:
-                class_aliases.update(
-                    {target.id} if full in class_paths else set()
-                )
-                full = sdk_parts
+            callee = _full(root, tail, roots, sdk_parts)
+            if callee is None:
+                continue
+            if callee in class_paths:
+                class_aliases.add(target.id)
+            full = sdk_parts
         elif isinstance(value, ast.Attribute):
             root, tail = _parts(value)
             full = _full(root, tail, roots, sdk_parts)
@@ -468,7 +470,14 @@ class _Visitor(ast.NodeVisitor):
         callee_is_attribute = isinstance(node.func, ast.Attribute)
         if callee_is_attribute or (rooted and chain):
             symbol = tail[-1] if tail else (root or "")
-            self._emit(node.func, SiteShape.CALL, symbol, chain, rooted, leaf=callee_is_attribute)
+            self._emit(
+                node.func,
+                SiteShape.CALL,
+                symbol,
+                chain,
+                rooted,
+                leaf=callee_is_attribute,
+            )
         if self._is_getattr(node) and self._rooted_expr(node.args[0]):
             name = node.args[1]
             symbol = (

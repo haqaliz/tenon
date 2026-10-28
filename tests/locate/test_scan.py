@@ -21,6 +21,7 @@ SDK_DECOY = FIXTURES / "sdk-decoy"
 SDK_DYNAMIC = FIXTURES / "sdk-dynamic"
 SDK_MULTIPLE = FIXTURES / "sdk-multiple"
 SDK_SRC_LAYOUT = FIXTURES / "sdk-src-layout"
+SDK_UNICODE = FIXTURES / "sdk-unicode"
 
 
 def parse(text):
@@ -347,3 +348,22 @@ def test_undecodable_module_is_skipped(tmp_path):
     result = scan(tmp_path, "stripe")
 
     assert result.modules == ("pkg/ok.py",)
+
+
+# Phase 4: character columns.
+def test_columns_are_characters_not_utf8_bytes():
+    result = scan(SDK_UNICODE, "stripe")
+
+    assert result.hits == (
+        hit(SDK_UNICODE, "acme/unicode_demo.py", 3, 10, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        hit(SDK_UNICODE, "acme/unicode_demo.py", 4, 31, SiteShape.CALL, "delete", ("charges", "delete"), True),
+    )
+    line = (SDK_UNICODE / "acme/unicode_demo.py").read_text(encoding="utf-8").split(
+        "\n"
+    )[3]
+    delete = result.hits[1]
+    character_column = line.index("delete") + 1
+    byte_column = len(line[: line.index("delete")].encode("utf-8")) + 1
+    assert delete.column == character_column
+    assert delete.column != byte_column
+    assert delete.line_text == line
