@@ -2,6 +2,8 @@ from pathlib import Path
 
 import ast
 
+import pytest
+
 from tenon.locate import SiteShape
 from tenon.locate.scan import (
     Dynamic,
@@ -177,15 +179,38 @@ def test_alias_inside_a_function_is_rooted():
     assert aliases == {"c": ("stripe",)}
 
 
-def test_alias_of_an_alias_is_a_dynamic():
-    aliases, _, dynamics = rooted(
-        "from stripe import Stripe\nclient = Stripe()\nd = client\n"
+def test_one_hop_alias_of_an_alias_is_rooted():
+    aliases, class_aliases, dynamics = rooted(
+        "from stripe import Stripe\nclient = Stripe()\nc = client\n"
     )
 
-    assert "d" not in aliases
-    assert dynamics == [
-        Dynamic("m.py", 3, 1, DynamicKind.ALIAS_CHAIN, symbol="d")
-    ]
+    assert aliases == {"client": ("stripe",), "c": ("stripe",)}
+    assert class_aliases == {"client", "c"}
+    assert dynamics == []
+
+
+def test_second_hop_alias_is_a_dynamic():
+    aliases, class_aliases, dynamics = rooted(
+        "from stripe import Stripe\nclient = Stripe()\nc = client\nd = c\n"
+    )
+
+    assert set(aliases) == {"client", "c"}
+    assert class_aliases == {"client", "c"}
+    assert dynamics == [Dynamic("m.py", 4, 1, DynamicKind.ALIAS_CHAIN, "d")]
+
+
+def test_self_assignment_is_an_alias_chain():
+    aliases, _, dynamics = rooted("x = x\n")
+
+    assert aliases == {}
+    assert dynamics == [Dynamic("m.py", 1, 1, DynamicKind.ALIAS_CHAIN, "x")]
+
+
+def test_alias_cycle_is_an_alias_chain():
+    aliases, _, dynamics = rooted("a = b\nb = a\n")
+
+    assert aliases == {}
+    assert dynamics == [Dynamic("m.py", 2, 1, DynamicKind.ALIAS_CHAIN, "b")]
 
 
 def test_unrooted_call_is_not_an_alias():
@@ -233,12 +258,28 @@ def test_dict_keys_and_unrooted_attributes_are_reported():
     assert result.hits == (
         hit(SDK_DYNAMIC, "acme/flows.py", 3, 17, SiteShape.CALL, "Stripe", ("Stripe",), True),
         hit(SDK_DYNAMIC, "acme/flows.py", 7, 27, SiteShape.CALL, "create", ("charges", "create"), True),
-        hit(SDK_DYNAMIC, "acme/flows.py", 15, 11, SiteShape.CALL, "delete", ("charges", "delete"), False),
-        hit(SDK_DYNAMIC, "acme/flows.py", 17, 16, SiteShape.CALL, "create", ("charges", "create"), True),
-        hit(SDK_DYNAMIC, "acme/flows.py", 17, 24, SiteShape.DICT_KEY, "amount", ("charges", "create"), True),
-        hit(SDK_DYNAMIC, "acme/flows.py", 17, 37, SiteShape.DICT_KEY, "currency", ("charges", "create"), True),
-        hit(SDK_DYNAMIC, "acme/flows.py", 19, 6, SiteShape.ATTRIBUTE, "amount", ("amount",), False),
+        hit(SDK_DYNAMIC, "acme/flows.py", 15, 11, SiteShape.CALL, "delete", ("charges", "delete"), True),
+        hit(SDK_DYNAMIC, "acme/flows.py", 18, 11, SiteShape.CALL, "delete", ("charges", "delete"), False),
+        hit(SDK_DYNAMIC, "acme/flows.py", 20, 16, SiteShape.CALL, "create", ("charges", "create"), True),
+        hit(SDK_DYNAMIC, "acme/flows.py", 20, 24, SiteShape.DICT_KEY, "amount", ("charges", "create"), True),
+        hit(SDK_DYNAMIC, "acme/flows.py", 20, 37, SiteShape.DICT_KEY, "currency", ("charges", "create"), True),
+        hit(SDK_DYNAMIC, "acme/flows.py", 22, 6, SiteShape.ATTRIBUTE, "amount", (), False),
     )
+
+
+@pytest.mark.parametrize(
+    "argument", ['{"amount": 1}', '[{"amount": 1}]', '({"amount": 1},)']
+)
+def test_unrooted_dict_key_is_reported_unrooted(argument):
+    text = f"record({argument})\n"
+    visitor = _Visitor(source(text), "stripe", {}, set())
+
+    visitor.visit(parse(text))
+
+    column = text.index('"amount"') + 1
+    assert visitor.hits == [
+        Hit("m.py", 1, column, SiteShape.DICT_KEY, "amount", (), False, text[:-1])
+    ]
 
 
 def test_star_arguments_getattr_and_alias_chains_are_dynamics():
@@ -248,11 +289,10 @@ def test_star_arguments_getattr_and_alias_chains_are_dynamics():
         Dynamic("acme/flows.py", 7, 34, DynamicKind.STAR_KWARGS),
         Dynamic("acme/flows.py", 11, 12, DynamicKind.GETATTR, "delete"),
         Dynamic("acme/flows.py", 11, 46, DynamicKind.STAR_ARGS),
-        Dynamic("acme/flows.py", 14, 1, DynamicKind.ALIAS_CHAIN, "c"),
+        Dynamic("acme/flows.py", 17, 1, DynamicKind.ALIAS_CHAIN, "d"),
     )
-    assert [hit for hit in result.hits if hit.line == 15 and hit.symbol == "delete"] == [
-        hit(SDK_DYNAMIC, "acme/flows.py", 15, 11, SiteShape.CALL, "delete", ("charges", "delete"), False)
-    ]
+    deletes = [hit for hit in result.hits if hit.symbol == "delete"]
+    assert [(hit.line, hit.rooted) for hit in deletes] == [(15, True), (18, False)]
 
 
 def test_src_layout_is_scanned():

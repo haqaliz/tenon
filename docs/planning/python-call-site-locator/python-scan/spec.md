@@ -16,9 +16,10 @@ elsewhere.
   - `hits: tuple[Hit, ...]` — `Hit(path, line, column, shape, symbol, chain, rooted)` where `shape`
     is `call|keyword|dict_key|attribute`, `symbol` is the matched Python name (method name, keyword
     name, dict key string or attribute name), and `chain` is the dotted attribute path after the SDK
-    root: the chain of the call itself for `call`/`attribute` hits (`("charges", "delete")` for
-    `client.charges.delete`), and the chain of the enclosing rooted call for `keyword`/`dict_key`
-    hits, else `()`.
+    root: the chain of the call itself for `call` hits (`("charges", "delete")` for
+    `client.charges.delete`), the chain of the attribute for rooted `attribute` hits, the chain of
+    the enclosing rooted call for rooted `keyword`/`dict_key` hits, and `()` otherwise — including
+    every unrooted `keyword`, `dict_key` and `attribute` hit.
   - `dynamics: tuple[Dynamic, ...]` — `Dynamic(path, line, column, kind, symbol | None)` with
     `kind` in `star_kwargs|star_args|getattr|alias_chain`.
 - Reachability: parse every `.py` under `root` (skipping `.venv`, `node_modules`, `build`, `dist`,
@@ -30,15 +31,18 @@ elsewhere.
   `Stripe`; `import stripe as st` → `st`; `from stripe.charges import create` → `create`. Parent
   package of a submodule counts as rooted (`stripe.charges.create` is rooted).
 - One-hop aliases: `client = Stripe(...)`, `c = stripe.Stripe(...)`, `c = client` where `client` is
-  already rooted. A second hop (`d = c`) is `alias_chain`, not a rooted name.
+  already rooted. A second hop (`d = c`) is `alias_chain`, not a rooted name. A self-assignment or
+  an assignment cycle is also `alias_chain` and must terminate.
 - Visitor emits:
-  - `call` for an attribute chain ending in a call (`client.charges.delete(...)`), symbol = leaf;
-  - `keyword` for each keyword argument in a call with a rooted receiver, or in a call whose
-    arguments include a rooted chain;
+  - `call` for an attribute chain ending in a call (`client.charges.delete(...)`), symbol = leaf,
+    rooted when the chain's root is an SDK binding; unrooted call hits keep their dotted chain;
+  - `keyword` for each keyword argument in a call; rooted when the call's receiver is rooted;
   - `dict_key` for string keys of a dict literal passed (directly or in a list/tuple argument) to a
-    rooted call;
+    call; rooted when that call is rooted;
   - `attribute` for attribute access not in a call position (`charge.amount`), rooted only when the
-    receiver is an SDK-imported class or a rooted alias bound to an SDK-imported class.
+    receiver is an SDK-imported class or a rooted alias bound to an SDK-imported class;
+  - unrooted `keyword`, `dict_key` and `attribute` hits are still emitted, with `rooted=False` and
+    `chain=()`;
   - `star_kwargs` / `star_args` dynamics for `**x` / `*x` in a call with a rooted receiver.
   - `getattr` dynamics for `getattr(<rooted expr>, "name", ...)` with the literal name when present.
 - Columns: 1-based **character** columns, converting `ast`'s UTF-8 byte offsets through the source
@@ -60,7 +64,8 @@ elsewhere.
 2. The same call in a module that imports nothing from `stripe` is not scanned at all, and a module
    that imports the SDK but calls an unrelated `obj.delete()` yields a non-rooted hit.
 3. `client.charges.create(amount=1)` yields a rooted `keyword` for `amount`; `create(**row)` yields a
-   `star_kwargs` dynamic; `create({"amount": 1})` yields a rooted `dict_key` for `amount`;
+   `star_kwargs` dynamic; `create({"amount": 1})` yields a rooted `dict_key` for `amount`, and dict
+   keys in an unrooted call are reported with `rooted=False`;
    `getattr(client, "delete")` yields a `getattr` dynamic with `symbol="delete"`.
 4. `d = c; d.charges.delete("ch")` yields an `alias_chain` dynamic, not a rooted hit.
 5. A non-ASCII line before a site yields the correct character column (a byte-offset column would

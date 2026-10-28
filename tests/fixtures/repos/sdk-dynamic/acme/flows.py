@@ -14,6 +14,9 @@ def delete(*args):
 c = client
 c.charges.delete("ch_1")
 
+d = c
+d.charges.delete("ch_2")
+
 client.charges.create({"amount": 1, "currency": "usd"})
 
 resp.amount

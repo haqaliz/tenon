@@ -339,6 +339,20 @@ def _column(line: str, byte_col: int) -> int:
     return len(prefix.decode("utf-8", errors="replace")) + 1
 
 
+def _alias_cycle(pending: dict[str, str], target: str, rhs: str) -> bool:
+    """Whether ``target = rhs`` closes a chain of pending name assignments."""
+    if target == rhs:
+        return True
+    seen = {target}
+    name = rhs
+    while name in pending:
+        if name in seen:
+            return True
+        seen.add(name)
+        name = pending[name]
+    return name in seen
+
+
 def _aliases(
     tree: ast.Module,
     roots: dict[str, tuple[str, ...]],
@@ -346,47 +360,75 @@ def _aliases(
     source: _Source,
     sdk_package: str,
 ) -> tuple[dict[str, tuple[str, ...]], set[str], list[Dynamic]]:
-    """One-hop aliases in source order; a second hop becomes a dynamic."""
+    """One-hop aliases in source order; a second Name hop is a dynamic."""
     sdk_parts = tuple(sdk_package.split("."))
     aliases: dict[str, tuple[str, ...]] = {}
+    hops: dict[str, int] = {}
     class_aliases: set[str] = set()
     dynamics: list[Dynamic] = []
-    assigned: set[str] = set()
+    pending: dict[str, str] = {}
     nodes = sorted(
         (node for node in ast.walk(tree) if isinstance(node, ast.Assign)),
         key=lambda node: (node.lineno, node.col_offset),
     )
+
+    def forget(name: str) -> None:
+        aliases.pop(name, None)
+        hops.pop(name, None)
+        class_aliases.discard(name)
+        pending.pop(name, None)
+
     for node in nodes:
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             continue
         target = node.targets[0]
+        name = target.id
         value = node.value
+        forget(name)
         if isinstance(value, ast.Name):
-            if value.id in assigned:
+            rhs = value.id
+            if _alias_cycle(pending, name, rhs):
                 dynamics.append(
-                    _dynamic(source, target, DynamicKind.ALIAS_CHAIN, target.id)
+                    _dynamic(source, target, DynamicKind.ALIAS_CHAIN, name)
                 )
                 continue
-            full = roots.get(value.id)
+            if rhs in aliases:
+                if hops[rhs] >= 1:
+                    dynamics.append(
+                        _dynamic(source, target, DynamicKind.ALIAS_CHAIN, name)
+                    )
+                    continue
+                full = aliases[rhs]
+                hop = 1
+                if rhs in class_aliases:
+                    class_aliases.add(name)
+            elif rhs in roots:
+                full = roots[rhs]
+                hop = 1
+            else:
+                pending[name] = rhs
+                continue
         elif isinstance(value, ast.Call):
             root, tail = _parts(value.func)
             callee = _full(root, tail, roots, sdk_parts)
             if callee is None:
                 continue
             if callee in class_paths:
-                class_aliases.add(target.id)
+                class_aliases.add(name)
             full = sdk_parts
+            hop = 0
         elif isinstance(value, ast.Attribute):
             root, tail = _parts(value)
             full = _full(root, tail, roots, sdk_parts)
+            if full is None:
+                continue
+            hop = 0
         else:
-            full = None
-        if full is None:
             continue
-        aliases[target.id] = full
-        assigned.add(target.id)
+        aliases[name] = full
+        hops[name] = hop
         if full in class_paths:
-            class_aliases.add(target.id)
+            class_aliases.add(name)
     return aliases, class_aliases, dynamics
 
 
@@ -511,16 +553,17 @@ class _Visitor(ast.NodeVisitor):
                     self.dynamics.append(
                         _dynamic(self._source, argument, DynamicKind.STAR_ARGS)
                     )
-                for mapping in _dict_literals(argument):
-                    for key in mapping.keys:
-                        if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                            self._emit(
-                                key,
-                                SiteShape.DICT_KEY,
-                                key.value,
-                                chain,
-                                rooted_call,
-                            )
+        for argument in node.args:
+            for mapping in _dict_literals(argument):
+                for key in mapping.keys:
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                        self._emit(
+                            key,
+                            SiteShape.DICT_KEY,
+                            key.value,
+                            chain if rooted_call else (),
+                            rooted_call,
+                        )
         self._callee += 1
         self.visit(node.func)
         self._callee -= 1
@@ -533,12 +576,13 @@ class _Visitor(ast.NodeVisitor):
         if self._callee == 0:
             root, tail = _parts(node)
             chain, rooted = self._ref(root, tail)
+            rooted = rooted and root in self._classes
             self._emit(
                 node,
                 SiteShape.ATTRIBUTE,
                 node.attr,
-                chain,
-                rooted and root in self._classes,
+                chain if rooted else (),
+                rooted,
                 leaf=True,
             )
         self._callee += 1
