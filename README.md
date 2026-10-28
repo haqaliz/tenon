@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20shipped%20·%20detect%20only-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T2%20built%20·%20detect%20%2B%20locate-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -12,16 +12,22 @@ affected calls, and proves the fix against your own checks before it opens a pul
 
 ## Status
 
-**T1 (change detection) is built.** `src/tenon/detect/` diffs two OpenAPI 3.x documents into typed
-`Change` records, fully offline. Everything else in the pipeline — locate, propose, prove, PR — does
-not exist yet. Read `CLAUDE.md` before writing any code here.
+**T1 (change detection) and T2 (Python call-site location) are built.** `src/tenon/detect/` diffs
+two OpenAPI 3.x documents into typed `Change` records; `src/tenon/locate/` turns one of those records
+into call sites with file, line and column, and keeps anything it cannot prove in a separate
+ambiguity list. Both run fully offline. Propose, prove and PR do not exist yet. Read `CLAUDE.md`
+before writing any code here.
 
 ```python
 from tenon.detect import diff, load
+from tenon.locate import LocateConfig, locate
 
-result = diff(load("v1.yaml"), load("v2.yaml"))
-result.changes   # typed records, canonically ordered
-result.to_json() # byte-stable
+changes = diff(load("v1.yaml"), load("v2.yaml")).changes
+for change in changes:
+    result = locate(change, "path/to/repo", LocateConfig(sdk_package="stripe"))
+    result.certain    # sites we can point at
+    result.ambiguous  # groups with candidates and a named reason
+    result.reason     # why there is nothing, when there is nothing
 ```
 
 `uv run pytest` — no network, no model calls.
