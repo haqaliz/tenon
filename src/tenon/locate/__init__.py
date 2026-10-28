@@ -9,16 +9,21 @@ from .result import (
     Site,
     SiteShape,
 )
+from .scan import Dynamic, Hit, ScanResult, scan
 
 __all__ = [
     "AmbiguityReason",
     "AmbiguousGroup",
+    "Dynamic",
+    "Hit",
     "LocateConfig",
     "LocateReason",
     "LocateResult",
     "Query",
+    "ScanResult",
     "Site",
     "SiteShape",
     "derive",
     "load_config",
+    "scan",
 ]
