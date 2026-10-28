@@ -354,3 +354,118 @@ def test_query_is_frozen():
 
     with pytest.raises(AttributeError):
         query.field_name = "other"
+
+
+# Spec AC2: an explicit operation mapping wins for an endpoint change.
+def test_an_explicit_operation_mapping_resolves_an_endpoint_change():
+    change = a_change(
+        ChangeKind.ENDPOINT_REMOVED,
+        pointer="#/paths",
+        before="/v1/charges/{id}",
+        method="delete",
+        path="/v1/charges/{id}",
+    )
+    config = LocateConfig(
+        sdk_package="stripe",
+        operations={"DELETE /v1/charges/{id}": "charges.remove"},
+    )
+
+    query = derive(change, config)
+
+    assert query.operation_candidates == ("charges.remove",)
+    assert query.origin == "mapping"
+
+
+# Spec AC2: the exact METHOD /path key matches whatever the method's case.
+@pytest.mark.parametrize(
+    "key, method",
+    [
+        pytest.param("DELETE /v1/charges/{id}", "delete", id="uppercase_key"),
+        pytest.param("delete /v1/charges/{id}", "DELETE", id="lowercase_key"),
+    ],
+)
+def test_operation_mapping_method_match_is_case_insensitive(key, method):
+    change = a_change(
+        ChangeKind.ENDPOINT_REMOVED,
+        pointer="#/paths",
+        before="/v1/charges/{id}",
+        method=method,
+        path="/v1/charges/{id}",
+    )
+
+    query = derive(change, LocateConfig(sdk_package="stripe", operations={key: "charges.delete"}))
+
+    assert query.operation_candidates == ("charges.delete",)
+    assert query.origin == "mapping"
+
+
+# Spec AC2: the mapped Python name replaces the spec name, which stays for reporting.
+def test_an_explicit_field_mapping_renames_the_python_field():
+    change = a_change(ChangeKind.PROPERTY_REMOVED, before=payload("amount", "integer"))
+    config = LocateConfig(
+        sdk_package="stripe", fields={"Charge.amount": "amount_cents"}
+    )
+
+    query = derive(change, config)
+
+    assert query.field_name == "amount_cents"
+    assert query.change_field == "amount"
+    assert query.origin == "mapping"
+
+
+# Spec AC2: a mapping for one schema must not apply to another.
+def test_a_field_mapping_does_not_bleed_into_another_schema():
+    change = a_change(
+        ChangeKind.PROPERTY_REMOVED,
+        pointer="#/components/schemas/Customer/properties",
+        before=payload("amount", "integer"),
+    )
+    config = LocateConfig(
+        sdk_package="stripe", fields={"Charge.amount": "amount_cents"}
+    )
+
+    query = derive(change, config)
+
+    assert query.field_name == "amount"
+    assert query.origin == "inferred"
+
+
+# Plan §Phase 2: RFC 6901 tokens are unescaped before the mapping lookup.
+def test_the_schema_name_is_unescaped_from_the_pointer():
+    change = a_change(
+        ChangeKind.PROPERTY_REMOVED,
+        pointer="#/components/schemas/My~1Schema/properties",
+        before=payload("amount", "integer"),
+    )
+    config = LocateConfig(
+        sdk_package="stripe", fields={"My/Schema.amount": "amount_cents"}
+    )
+
+    query = derive(change, config)
+
+    assert query.field_name == "amount_cents"
+    assert query.origin == "mapping"
+
+
+def test_a_field_mapping_uses_the_old_name_of_a_rename():
+    change = a_change(ChangeKind.RENAMED, before="amount", after="amount_cents")
+    config = LocateConfig(
+        sdk_package="stripe", fields={"Charge.amount": "amount_cents"}
+    )
+
+    query = derive(change, config)
+
+    assert query.field_name == "amount_cents"
+    assert query.change_field == "amount"
+    assert query.origin == "mapping"
+
+
+def test_an_unmapped_field_keeps_the_spec_name_verbatim():
+    change = a_change(
+        ChangeKind.PROPERTY_REMOVED, before=payload("amountCents", "integer")
+    )
+
+    query = derive(change, CONFIG)
+
+    assert query.field_name == "amountCents"
+    assert query.origin == "inferred"
