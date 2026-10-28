@@ -190,7 +190,9 @@ def test_certain_sites_are_sorted_by_path_line_column_symbol():
         certain=some_sites() + [a_site(path="a.py", line=9, column=3, symbol="create")]
     )
     assert isinstance(result.certain, tuple)
-    assert [(site.path, site.line, site.column, site.symbol) for site in result.certain] == [
+    assert [
+        (site.path, site.line, site.column, site.symbol) for site in result.certain
+    ] == [
         ("a.py", 9, 3, "amount"),
         ("a.py", 9, 3, "create"),
         ("a.py", 9, 10, "amount"),
@@ -221,7 +223,8 @@ def test_ambiguous_groups_and_their_candidates_are_canonically_ordered():
 # Spec AC2: insertion order must not leak into the serialised bytes.
 def test_to_json_is_identical_for_any_insertion_order():
     expected = a_result(some_sites(), some_groups()).to_json()
-    assert a_result(reversed(some_sites()), reversed(some_groups())).to_json() == expected
+    reversed_result = a_result(reversed(some_sites()), reversed(some_groups()))
+    assert reversed_result.to_json() == expected
     rotated_sites = some_sites()[1:] + some_sites()[:1]
     rotated_groups = some_groups()[1:] + some_groups()[:1]
     assert a_result(rotated_sites, rotated_groups).to_json() == expected
@@ -246,6 +249,15 @@ def test_reason_only_result_round_trips_every_reason(reason):
     assert parsed["reason"] == reason.value
     assert parsed["certain"] == []
     assert parsed["ambiguous"] == []
+
+
+# Spec AC1: every AmbiguityReason is constructible and survives to_dict() -> JSON.
+@pytest.mark.parametrize("reason", list(AmbiguityReason))
+def test_group_round_trips_every_ambiguity_reason(reason):
+    result = a_result(ambiguous=(a_group(reason=reason),))
+    parsed = json.loads(result.to_json())
+    assert parsed == result.to_dict()
+    assert parsed["ambiguous"][0]["reason"] == reason.value
 
 
 # Spec AC3: no tuple, set, enum object or dataclass repr reaches the payload.
