@@ -41,7 +41,64 @@ def resolve(
         return _build(change, reason=LocateReason.NO_SDK_IMPORT)
     if query.scope == "operation":
         return _resolve_operation(change, query, scan_result)
-    return _build(change, reason=LocateReason.NO_SITES)
+    return _resolve_component(change, query, scan_result)
+
+
+def _resolve_component(
+    change: Change, query: Query, scan_result: ScanResult
+) -> LocateResult:
+    """Rules for a field on a shared schema, with no operation to narrow it."""
+    if query.field_name is None:
+        return _build(change, reason=LocateReason.NO_SITES)
+    matching = tuple(
+        hit for hit in scan_result.hits if hit.symbol == query.field_name
+    )
+    certain = tuple(
+        _site(hit)
+        for hit in matching
+        if hit.rooted and hit.shape in (*_FIELD_SHAPES, SiteShape.ATTRIBUTE)
+    )
+    unrooted = _unique(_site(hit) for hit in matching if not hit.rooted)
+    groups: list[AmbiguousGroup] = []
+    if unrooted:
+        groups.append(
+            AmbiguousGroup(
+                AmbiguityReason.UNROOTED_RECEIVER, query.field_name, unrooted
+            )
+        )
+    if not certain:
+        unmapped = _unmapped_symbol_group(query, scan_result)
+        if unmapped is not None:
+            groups.append(unmapped)
+    alias_group = _alias_group(query.field_name, scan_result)
+    if alias_group is not None:
+        groups.append(alias_group)
+    if not certain and not groups:
+        return _build(change, reason=LocateReason.NO_SITES)
+    return _build(change, certain=certain, groups=groups)
+
+
+def _unmapped_symbol_group(
+    query: Query, scan_result: ScanResult
+) -> AmbiguousGroup | None:
+    """The repo spelling when the mapped name is absent from the repository."""
+    if (
+        query.origin != "mapping"
+        or query.change_field is None
+        or query.change_field == query.field_name
+    ):
+        return None
+    hits = (
+        hit
+        for hit in scan_result.hits
+        if hit.rooted
+        and hit.shape in (*_FIELD_SHAPES, SiteShape.ATTRIBUTE)
+        and hit.symbol == query.change_field
+    )
+    sites = _unique(_site(hit) for hit in hits)
+    if not sites:
+        return None
+    return AmbiguousGroup(AmbiguityReason.UNMAPPED_SYMBOL, query.change_field, sites)
 
 
 def _resolve_operation(

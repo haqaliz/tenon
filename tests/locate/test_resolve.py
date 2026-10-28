@@ -1,8 +1,11 @@
 """Certainty policy: one rule table from query plus scan evidence to a result.
 
-Literal inputs on purpose: every rule is exercised without a filesystem, while
-``test_locate.py`` proves the same rules through the public API.
+Literal inputs on purpose for the rule matrix; the decoy, alias and unmapped
+cases scan the committed fixtures, while ``test_locate.py`` proves the same
+rules through the public API.
 """
+
+from pathlib import Path
 
 import pytest
 
@@ -18,12 +21,17 @@ from tenon.locate import (
     ScanResult,
     Site,
     SiteShape,
+    scan,
 )
 from tenon.locate.resolve import _build, resolve
 from tenon.locate.scan import DynamicKind
 
 CONFIG = LocateConfig(sdk_package="stripe")
 CHARGE_PROPERTIES = "#/components/schemas/Charge/properties"
+FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
+SDK_BASIC = FIXTURES / "sdk-basic"
+SDK_DECOY = FIXTURES / "sdk-decoy"
+SDK_DYNAMIC = FIXTURES / "sdk-dynamic"
 
 
 def a_change(
@@ -316,3 +324,125 @@ def test_a_site_cannot_be_certain_and_a_candidate():
 
     with pytest.raises(AssertionError):
         _build(a_change(), certain=(site,), groups=(group,))
+
+
+# Phase 3: component scope and the decoy.
+def a_component_query(field_name, *, change_field=None, origin="inferred"):
+    return a_query(
+        scope="component",
+        kind=ChangeKind.RENAMED,
+        method=None,
+        path=None,
+        operation_candidates=(),
+        field_name=field_name,
+        change_field=field_name if change_field is None else change_field,
+        field_presence="must_exist",
+        origin=origin,
+    )
+
+
+def test_a_rooted_component_field_is_certain():
+    change = a_change(
+        ChangeKind.RENAMED,
+        before="amount",
+        pointer=CHARGE_PROPERTIES,
+        method=None,
+        path=None,
+    )
+
+    result = resolve(
+        change, a_component_query("amount"), scan(SDK_BASIC, "stripe"), CONFIG
+    )
+
+    assert [
+        (site.path, site.line, site.column, site.shape)
+        for site in result.certain
+    ] == [("acme/billing.py", 5, 23, SiteShape.KEYWORD)]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+def test_the_decoy_keyword_is_never_certain():
+    scan_result = scan(SDK_DECOY, "stripe")
+
+    result = resolve(
+        a_change(pointer=CHARGE_PROPERTIES, method=None, path=None),
+        a_component_query("amount"),
+        scan_result,
+        CONFIG,
+    )
+
+    assert [(site.path, site.line, site.column) for site in result.certain] == [
+        ("acme/mixed.py", 11, 23)
+    ]
+    assert len(result.ambiguous) == 1
+    group = result.ambiguous[0]
+    assert group.reason is AmbiguityReason.UNROOTED_RECEIVER
+    assert [(site.path, site.line, site.column) for site in group.candidates] == [
+        ("acme/mixed.py", 10, 8)
+    ]
+    # The release gate: the unrooted call is the only `amount=` on line 10 and
+    # may never be reported as certain, whatever else the result contains.
+    assert all(site.line != 10 for site in result.certain)
+
+
+def test_a_field_named_like_a_method_is_not_a_component_site():
+    result = resolve(
+        a_change(pointer=CHARGE_PROPERTIES, method=None, path=None),
+        a_component_query("delete"),
+        scan(SDK_BASIC, "stripe"),
+        CONFIG,
+    )
+
+    assert result.certain == ()
+    assert result.reason is LocateReason.NO_SITES
+
+
+def test_an_alias_chain_for_the_field_is_a_group_not_a_site():
+    result = resolve(
+        a_change(pointer=CHARGE_PROPERTIES, method=None, path=None),
+        a_component_query("d"),
+        scan(SDK_DYNAMIC, "stripe"),
+        CONFIG,
+    )
+
+    assert result.certain == ()
+    assert len(result.ambiguous) == 1
+    group = result.ambiguous[0]
+    assert group.reason is AmbiguityReason.ALIAS_CHAIN
+    assert group.symbol == "d"
+    assert group.candidates == (
+        Site("acme/flows.py", 17, 1, SiteShape.ATTRIBUTE, "d"),
+    )
+
+
+def test_a_mapped_spelling_absent_from_the_repo_names_the_repo_spelling():
+    result = resolve(
+        a_change(pointer=CHARGE_PROPERTIES, method=None, path=None),
+        a_component_query("amount_cents", change_field="amount", origin="mapping"),
+        scan(SDK_BASIC, "stripe"),
+        CONFIG,
+    )
+
+    assert result.certain == ()
+    assert len(result.ambiguous) == 1
+    group = result.ambiguous[0]
+    assert group.reason is AmbiguityReason.UNMAPPED_SYMBOL
+    assert group.symbol == "amount"
+    assert [(site.path, site.line, site.column) for site in group.candidates] == [
+        ("acme/billing.py", 5, 23)
+    ]
+
+
+def test_without_the_mapping_the_different_spelling_is_no_sites():
+    query = a_component_query("amount_cents", change_field="amount", origin="inferred")
+
+    result = resolve(
+        a_change(pointer=CHARGE_PROPERTIES, method=None, path=None),
+        query,
+        scan(SDK_BASIC, "stripe"),
+        CONFIG,
+    )
+
+    assert result.reason is LocateReason.NO_SITES
+    assert result.ambiguous == ()
