@@ -1,0 +1,8 @@
+[locate]
+sdk_package = "stripe"
+
+[locate.operations]
+"DELETE /v1/charges/{id}" = "charges.delete"
+
+[locate.fields]
+"Charge.amount" = "amount_cents"
