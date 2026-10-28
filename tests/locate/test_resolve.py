@@ -316,6 +316,27 @@ def test_a_getattr_without_a_name_is_not_attributed_to_a_field():
     assert result.reason is LocateReason.NO_SITES
 
 
+def test_field_hits_from_other_operations_are_not_certain_without_a_call():
+    query = a_query(
+        field_name="amount",
+        change_field="amount",
+        field_presence="must_exist",
+        operation_candidates=("charges.delete",),
+    )
+    other_operation = a_hit(
+        line=5,
+        column=23,
+        shape=SiteShape.KEYWORD,
+        symbol="amount",
+        chain=("charges", "create"),
+    )
+
+    result = resolve(a_change(), query, a_scan(other_operation), CONFIG)
+
+    assert result.reason is LocateReason.NO_SITES
+    assert result.certain == ()
+
+
 def test_a_site_cannot_be_certain_and_a_candidate():
     site = Site("m.py", 1, 1, SiteShape.CALL, "delete")
     group = AmbiguousGroup(

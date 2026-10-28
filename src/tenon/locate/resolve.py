@@ -9,11 +9,12 @@ Aggregation note: any non-empty ``ambiguous`` list maps to the
 finer reasons and never that aggregate string itself.
 """
 
+from pathlib import Path
 from typing import Iterable, Sequence
 
 from tenon.detect import Change
 
-from .query import Query
+from .query import Query, derive
 from .result import (
     AmbiguityReason,
     AmbiguousGroup,
@@ -23,9 +24,17 @@ from .result import (
     Site,
     SiteShape,
 )
-from .scan import DynamicKind, Hit, ScanResult
+from .scan import DynamicKind, Hit, ScanResult, scan
 
 _FIELD_SHAPES = (SiteShape.KEYWORD, SiteShape.DICT_KEY)
+
+
+def locate(change: Change, root: str | Path, config: LocateConfig) -> LocateResult:
+    """Derive the query, scan the repository, and apply the certainty policy."""
+    query = derive(change, config)
+    if query.reason is not None:
+        return _build(change, reason=query.reason)
+    return resolve(change, query, scan(root, config.sdk_package), config)
 
 
 def resolve(

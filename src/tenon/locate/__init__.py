@@ -9,6 +9,7 @@ from .result import (
     Site,
     SiteShape,
 )
+from .resolve import locate
 from .scan import Dynamic, Hit, ScanResult, scan
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "SiteShape",
     "derive",
     "load_config",
+    "locate",
     "scan",
 ]
