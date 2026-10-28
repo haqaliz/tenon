@@ -1,55 +1,41 @@
-# Card: feat/python-call-site-locator
+# Card: feat/patch-proposer
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` → empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T2 — Call-site location (Python)** (`docs/technical/CAPABILITY_ROADMAP.md`)
-- **Milestone:** M0.2 (`docs/ROADMAP.md`, Phase 0)
-- **Branch:** `feat/python-call-site-locator/aliz`
-- **Worktree:** `.claude/worktrees/feat-python-call-site-locator`
+- **Capability:** **T3 — Patch proposer seam** (`docs/technical/CAPABILITY_ROADMAP.md`)
+- **Milestone:** M1.1 (`docs/ROADMAP.md`, Phase 1)
+- **Branch:** `feat/patch-proposer/aliz`
+- **Worktree:** `.claude/worktrees/feat-patch-proposer`
 
-## Brief (verbatim from the `tenon-next` handoff)
+## Brief (agreed with the user before implementation)
 
-> Build `src/tenon/locate/` (path reserved in `docs/technical/ARCHITECTURE.md`) so that, given a
-> `Change` record from `src/tenon/detect/` and a Python repo root, it returns call sites with
-> `file`, `line`, `column`, and a `certain`/`ambiguous` verdict — never a guessed one. Fix the
-> spec→Python-symbol contract first: an explicit mapping plus safe inference from `operationId`
-> and field/parameter names, with everything else reported as ambiguity. Use the stdlib `ast`
-> module plus imports/`pyproject.toml` scanning; no new dependency unless `ast` genuinely cannot
-> do it, and no language server.
+Build `src/tenon/propose/` so that a `Change` plus a `LocateResult` becomes a candidate unified diff,
+or a named reason. Rules first and deterministic; a model may sit behind the same seam later, but no
+model ships in this card. The proposer never writes, applies or runs anything.
 
-## Acceptance tests named in the handoff
-
-1. A rename record locates `client.things.create(foo=...)` at the right file and line in a fixture repo.
-2. `**kwargs`, `getattr` and multi-candidate sites are returned as ambiguous with their
-   candidates, never silently resolved.
-3. Same input yields byte-stable JSON ordered by path then line.
-4. Unresolvable cases surface the `AMBIGUOUS_CALL_SITE` cause from `docs/technical/ARCHITECTURE.md`.
-5. Tests stay offline — no network, no model calls.
+Acceptance tests: a renamed field at a certain keyword site produces a diff that renames only that
+keyword; `**kwargs`, `getattr`, unrooted and multi-candidate sites are never edited and appear as
+skipped suggestions; a site whose source no longer matches refuses with `STALE_SITE`; a kind with no
+mechanical rule returns `NO_RULE`; identical inputs produce a byte-stable diff; the scanned tree is
+not modified.
 
 ## Constraints carried in from the repo
 
-- `CLAUDE.md` §1: execution decides, never the model — a locator never upgrades confidence.
-- `CLAUDE.md` §7: test-first.
-- `CAPABILITY_ROADMAP.md` T2 guardrail: "Ambiguity reported, never guessed".
-- `ARCHITECTURE.md`: "Change record is the unit" — the locator consumes `Change` records and
-  nothing else from T1.
-- `ARCHITECTURE.md`: determinism — same inputs, same output, byte-stable.
-- Risk register `R4` (call-site location wrong in dynamic code) and `R8` (language sprawl).
-- `docs/technical/ARCHITECTURE.md`: T2 is the first stage behind `locate/`; T6 (TS/JS) reuses its
-  contract, so keep the language behind a package boundary.
-
-## Attachments
-
-None.
+- `CLAUDE.md` §1: a model proposes only; execution decides. Nothing here is labelled verified.
+- `CLAUDE.md` §2: honest proof levels. A proposal has no proof level; T4 assigns one.
+- `CLAUDE.md` §5: never touch the default branch. This card writes no git state at all.
+- `ARCHITECTURE.md`: propose sits between locate and prove; the patch applies only to a copy (T4).
+- `VISION.md`: a fix with no proof is a flagged suggestion, never a confident PR.
+- Risk `R2` (a verified PR still breaks production) and `R4` (wrong location): consume certain
+  sites only; ambiguity becomes a suggestion.
 
 ## Open question parked for this card
 
-T1 records carry HTTP identity only (`Location.pointer`, `method`, `path`) and no Python symbol.
-The spec→Python-symbol contract is the design decision this card must settle before the locator
-is written — see the PRD.
+T1 reports a field rename with `confidence: "inferred"`. The proposal must expose that the rename
+itself was inferred, so T4/T5 can say so, without downgrading the locator's site certainty.
 
 ## Scope fence
 
-Not this card: T3 propose, T4 prove, T5 PR, T6 TS/JS, the `tenon check` CLI surface (M1.4).
-T2 stops at "here are the call sites, and here is what we refuse to claim".
+Not this card: applying the diff, running tests, proof levels (T4); branches and PRs (T5); any model
+provider or BYOK plumbing; fixes for removals, additions or type changes.
