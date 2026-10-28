@@ -5,7 +5,7 @@ Engine capabilities in build order. Each lands test-first.
 | ID | Capability | Depends on | Guardrail tie-in | State |
 |---|---|---|---|---|
 | **T1** | **Change detection.** Diff two OpenAPI versions into typed change records. | none | Machine-readable sources first | **Shipped 2026-10-26** |
-| **T2** | **Call-site location (Python).** Find usages of a changed symbol or endpoint with file and line. | T1 | Ambiguity reported, never guessed | **Built 2026-10-28** |
+| **T2** | **Call-site location (Python).** Find usages of a changed symbol or endpoint with file and line. | T1 | Ambiguity reported, never guessed | **Shipped 2026-10-29** |
 | **T3** | **Patch proposer seam.** Rule-based proposer for mechanical changes; optional BYOK model proposer. | T1, T2 | A model proposes only | Not started |
 | **T4** | **Proof runner.** Apply the patch in an isolated working copy, run the user's tests, record the proof level. | T3 | Execution decides the label | Not started |
 | **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging | Not started |

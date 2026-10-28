@@ -15,7 +15,7 @@ Milestone order is my proposal; reorder freely.
 | # | Milestone | Done when | State |
 |---|---|---|---|
 | M0.1 | OpenAPI differ (T1) | Two spec versions diff into typed change records (removed, renamed, required-added, type-changed); unparseable input is a named refusal | **Shipped 2026-10-26** (`src/tenon/detect/`, 136 tests) |
-| M0.2 | Python call-site locator (T2) | Given a change, finds usages in a Python repo with file and line; ambiguity is reported, never guessed | **Built 2026-10-28** (`src/tenon/locate/`, 207 tests) |
+| M0.2 | Python call-site locator (T2) | Given a change, finds usages in a Python repo with file and line; ambiguity is reported, never guessed | **Shipped 2026-10-29** (`src/tenon/locate/`, 207 tests) |
 | M0.3 | One end-to-end case | A real public SDK change applied to a real repo, with the repo's tests as proof | Not started |
 
 ## Phase 1: OSS core (weeks 4-8)

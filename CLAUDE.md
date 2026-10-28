@@ -16,7 +16,7 @@ usable by AI agents, by running an agent against it.
 The name: a *tenon* is the tongue cut on a timber to fit its mortise exactly. The joint holds
 only if the two sides still match. Tenon asks of an integration: *does your side still fit theirs?*
 
-Status: **T1 shipped, T2 built.** `src/tenon/detect/` turns two OpenAPI 3.x documents into typed
+Status: **T1 and T2 shipped.** `src/tenon/detect/` turns two OpenAPI 3.x documents into typed
 `Change` records; `src/tenon/locate/` turns a record into call sites with file, line and column,
 keeping anything unprovable in named ambiguity groups. Tests live in `tests/`. T3 (propose) is next.
 Nothing else in the pipeline exists — do not describe capability that isn't there yet.
