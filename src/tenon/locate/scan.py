@@ -120,7 +120,28 @@ def scan(root: str | Path, sdk_package: str) -> ScanResult:
     """Parse ``root`` read-only and report SDK-rooted evidence."""
     modules = _read(Path(root))
     reachable = _reachable(modules, sdk_package)
-    return ScanResult(modules=tuple(module.rel for module in reachable))
+    hits: list[Hit] = []
+    dynamics: list[Dynamic] = []
+    for module in reachable:
+        roots, classes, class_paths = _bindings(module.tree, sdk_package)
+        alias_roots, class_aliases, alias_dynamics = _aliases(
+            module.tree, roots, class_paths, module.source, sdk_package
+        )
+        visitor = _Visitor(
+            module.source,
+            sdk_package,
+            {**roots, **alias_roots},
+            classes | class_aliases,
+        )
+        visitor.visit(module.tree)
+        hits.extend(visitor.hits)
+        dynamics.extend(alias_dynamics)
+        dynamics.extend(visitor.dynamics)
+    return ScanResult(
+        modules=tuple(module.rel for module in reachable),
+        hits=tuple(hits),
+        dynamics=tuple(dynamics),
+    )
 
 
 def _modules(root: Path) -> list[Path]:
@@ -306,7 +327,14 @@ def _full(
 def _dynamic(
     source: _Source, node: ast.AST, kind: DynamicKind, symbol: str | None = None
 ) -> Dynamic:
-    return Dynamic(source.path, node.lineno, node.col_offset + 1, kind, symbol)
+    line = source.lines[node.lineno - 1]
+    return Dynamic(
+        source.path, node.lineno, _column(line, node.col_offset), kind, symbol
+    )
+
+
+def _column(line: str, byte_col: int) -> int:
+    return byte_col + 1
 
 
 def _aliases(
@@ -358,3 +386,152 @@ def _aliases(
         if full in class_paths:
             class_aliases.add(target.id)
     return aliases, class_aliases, dynamics
+
+
+def _dict_literals(node: ast.expr) -> tuple[ast.Dict, ...]:
+    if isinstance(node, ast.Dict):
+        return (node,)
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return tuple(item for item in node.elts if isinstance(item, ast.Dict))
+    return ()
+
+
+class _Visitor(ast.NodeVisitor):
+    """Emit hits for the four shapes and dynamics for the opaque ones."""
+
+    def __init__(
+        self,
+        source: _Source,
+        sdk_package: str,
+        roots: dict[str, tuple[str, ...]],
+        classes: set[str],
+    ) -> None:
+        self._source = source
+        self._sdk_parts = tuple(sdk_package.split("."))
+        self._roots = roots
+        self._classes = classes
+        self._callee = 0
+        self.hits: list[Hit] = []
+        self.dynamics: list[Dynamic] = []
+
+    def _ref(
+        self, root: str | None, tail: tuple[str, ...]
+    ) -> tuple[tuple[str, ...], bool]:
+        full = _full(root, tail, self._roots, self._sdk_parts)
+        if full is None:
+            return tail, False
+        return full[len(self._sdk_parts) :], True
+
+    def _emit(
+        self,
+        node: ast.AST,
+        shape: SiteShape,
+        symbol: str,
+        chain: tuple[str, ...],
+        rooted: bool,
+        leaf: bool = False,
+    ) -> None:
+        line = self._source.lines[node.lineno - 1]
+        byte_col = (
+            node.end_col_offset - len(symbol.encode("utf-8"))
+            if leaf
+            else node.col_offset
+        )
+        self.hits.append(
+            Hit(
+                self._source.path,
+                node.lineno,
+                _column(line, byte_col),
+                shape,
+                symbol,
+                chain,
+                rooted,
+                line,
+            )
+        )
+
+    def _is_getattr(self, node: ast.expr) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+        )
+
+    def _rooted_expr(self, node: ast.expr) -> bool:
+        root, tail = _parts(node)
+        return _full(root, tail, self._roots, self._sdk_parts) is not None
+
+    def visit_Call(self, node: ast.Call) -> None:
+        root, tail = _parts(node.func)
+        chain, rooted = self._ref(root, tail)
+        callee_is_attribute = isinstance(node.func, ast.Attribute)
+        if callee_is_attribute or (rooted and chain):
+            symbol = tail[-1] if tail else (root or "")
+            self._emit(node.func, SiteShape.CALL, symbol, chain, rooted, leaf=callee_is_attribute)
+        if self._is_getattr(node) and self._rooted_expr(node.args[0]):
+            name = node.args[1]
+            symbol = (
+                name.value
+                if isinstance(name, ast.Constant) and isinstance(name.value, str)
+                else None
+            )
+            self.dynamics.append(
+                _dynamic(self._source, node, DynamicKind.GETATTR, symbol)
+            )
+        rooted_call = rooted or (
+            self._is_getattr(node.func) and self._rooted_expr(node.func.args[0])
+        )
+        for keyword in node.keywords:
+            if keyword.arg is None:
+                if rooted_call:
+                    self.dynamics.append(
+                        _dynamic(self._source, keyword, DynamicKind.STAR_KWARGS)
+                    )
+                continue
+            self._emit(
+                keyword,
+                SiteShape.KEYWORD,
+                keyword.arg,
+                chain if rooted_call else (),
+                rooted_call,
+            )
+        if rooted_call:
+            for argument in node.args:
+                if isinstance(argument, ast.Starred):
+                    self.dynamics.append(
+                        _dynamic(self._source, argument, DynamicKind.STAR_ARGS)
+                    )
+                for mapping in _dict_literals(argument):
+                    for key in mapping.keys:
+                        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                            self._emit(
+                                key,
+                                SiteShape.DICT_KEY,
+                                key.value,
+                                chain,
+                                rooted_call,
+                            )
+        self._callee += 1
+        self.visit(node.func)
+        self._callee -= 1
+        for argument in node.args:
+            self.visit(argument)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        if self._callee == 0:
+            root, tail = _parts(node)
+            chain, rooted = self._ref(root, tail)
+            self._emit(
+                node,
+                SiteShape.ATTRIBUTE,
+                node.attr,
+                chain,
+                rooted and root in self._classes,
+                leaf=True,
+            )
+        self._callee += 1
+        self.visit(node.value)
+        self._callee -= 1
