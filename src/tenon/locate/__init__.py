@@ -1,3 +1,4 @@
+from .config import load_config
 from .result import (
     AmbiguityReason,
     AmbiguousGroup,
@@ -16,4 +17,5 @@ __all__ = [
     "LocateResult",
     "Site",
     "SiteShape",
+    "load_config",
 ]
