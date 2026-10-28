@@ -1,4 +1,5 @@
 from .config import load_config
+from .query import Query, derive
 from .result import (
     AmbiguityReason,
     AmbiguousGroup,
@@ -15,7 +16,9 @@ __all__ = [
     "LocateConfig",
     "LocateReason",
     "LocateResult",
+    "Query",
     "Site",
     "SiteShape",
+    "derive",
     "load_config",
 ]
