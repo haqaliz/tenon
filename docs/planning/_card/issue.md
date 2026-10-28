@@ -1,33 +1,43 @@
-# Card: feat/openapi-differ
+# Card: feat/python-call-site-locator
 
-- **Source:** FALLBACK — no GitHub issue (`gh issue view openapi-differ` → not found; `gh issue list` → empty).
+- **Source:** FALLBACK — no GitHub issue (`gh issue list` → empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T1 — Change detection** (`docs/technical/CAPABILITY_ROADMAP.md`)
-- **Milestone:** M0.1 (`docs/ROADMAP.md`, Phase 0)
-- **Branch:** `feat/openapi-differ/aliz`
-- **Worktree:** `.claude/worktrees/feat-openapi-differ`
+- **Capability:** **T2 — Call-site location (Python)** (`docs/technical/CAPABILITY_ROADMAP.md`)
+- **Milestone:** M0.2 (`docs/ROADMAP.md`, Phase 0)
+- **Branch:** `feat/python-call-site-locator/aliz`
+- **Worktree:** `.claude/worktrees/feat-python-call-site-locator`
 
 ## Brief (verbatim from the `tenon-next` handoff)
 
-> Build T1: a deterministic OpenAPI v1→v2 differ producing typed `Change` records, per M0.1 in
-> `docs/ROADMAP.md` and the "Change record is the unit" decision in
-> `docs/technical/ARCHITECTURE.md`. Acceptance tests: two spec versions diff into typed records for
-> at least removed endpoints, renamed fields/methods, newly-required parameters, and type changes;
-> unparseable or non-OpenAPI input returns a named refusal rather than an exception or a partial
-> result; output is byte-stable for identical inputs. Test-first (`CLAUDE.md` constraint 7), fully
-> offline with spec fixtures, no network and no model calls. Scaffold the Python package here too
-> (`uv`, `src/tenon/detect/`, `tests/` per the planned layout) since nothing exists yet — but keep
-> the diff to T1 alone; `tenon check`'s CLI, exit codes and JSON surface are M1.4, not this card.
+> Build `src/tenon/locate/` (path reserved in `docs/technical/ARCHITECTURE.md`) so that, given a
+> `Change` record from `src/tenon/detect/` and a Python repo root, it returns call sites with
+> `file`, `line`, `column`, and a `certain`/`ambiguous` verdict — never a guessed one. Fix the
+> spec→Python-symbol contract first: an explicit mapping plus safe inference from `operationId`
+> and field/parameter names, with everything else reported as ambiguity. Use the stdlib `ast`
+> module plus imports/`pyproject.toml` scanning; no new dependency unless `ast` genuinely cannot
+> do it, and no language server.
+
+## Acceptance tests named in the handoff
+
+1. A rename record locates `client.things.create(foo=...)` at the right file and line in a fixture repo.
+2. `**kwargs`, `getattr` and multi-candidate sites are returned as ambiguous with their
+   candidates, never silently resolved.
+3. Same input yields byte-stable JSON ordered by path then line.
+4. Unresolvable cases surface the `AMBIGUOUS_CALL_SITE` cause from `docs/technical/ARCHITECTURE.md`.
+5. Tests stay offline — no network, no model calls.
 
 ## Constraints carried in from the repo
 
-- `CLAUDE.md` §3: machine-readable sources only — a changelog paragraph is a hint, not a source.
+- `CLAUDE.md` §1: execution decides, never the model — a locator never upgrades confidence.
 - `CLAUDE.md` §7: test-first.
-- `ARCHITECTURE.md`: "Change record is the unit" — everything downstream (T2 locate, T3 propose,
-  T4 prove) consumes these records.
-- `ARCHITECTURE.md`: determinism — same inputs, same records.
-- Offline tests: no network, no model calls (`ARCHITECTURE.md` layout note).
+- `CAPABILITY_ROADMAP.md` T2 guardrail: "Ambiguity reported, never guessed".
+- `ARCHITECTURE.md`: "Change record is the unit" — the locator consumes `Change` records and
+  nothing else from T1.
+- `ARCHITECTURE.md`: determinism — same inputs, same output, byte-stable.
+- Risk register `R4` (call-site location wrong in dynamic code) and `R8` (language sprawl).
+- `docs/technical/ARCHITECTURE.md`: T2 is the first stage behind `locate/`; T6 (TS/JS) reuses its
+  contract, so keep the language behind a package boundary.
 
 ## Attachments
 
@@ -35,5 +45,11 @@ None.
 
 ## Open question parked for this card
 
-`CAPABILITY_ROADMAP.md` asks *which vendor/SDK is the first real case?* T1 does not need the answer
-to be built (offline fixtures), but the first real spec pair should become a fixture when picked.
+T1 records carry HTTP identity only (`Location.pointer`, `method`, `path`) and no Python symbol.
+The spec→Python-symbol contract is the design decision this card must settle before the locator
+is written — see the PRD.
+
+## Scope fence
+
+Not this card: T3 propose, T4 prove, T5 PR, T6 TS/JS, the `tenon check` CLI surface (M1.4).
+T2 stops at "here are the call sites, and here is what we refuse to claim".
