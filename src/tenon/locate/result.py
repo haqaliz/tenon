@@ -1,5 +1,6 @@
 """The locate result contract: sites, ambiguity groups and named reasons."""
 
+import json
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -55,6 +56,20 @@ class Site:
         if not isinstance(self.shape, SiteShape):
             object.__setattr__(self, "shape", SiteShape(self.shape))
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            "line": self.line,
+            "column": self.column,
+            "shape": self.shape.value,
+            "symbol": self.symbol,
+            "line_text": self.line_text,
+        }
+
+
+def _site_key(site: Site) -> tuple[str, int, int, str, str]:
+    return (site.path, site.line, site.column, site.symbol, site.shape.value)
+
 
 @dataclass(frozen=True, slots=True)
 class AmbiguousGroup:
@@ -70,7 +85,14 @@ class AmbiguousGroup:
         candidates = tuple(self.candidates)
         if not candidates:
             raise ValueError("an ambiguous group needs at least one candidate")
-        object.__setattr__(self, "candidates", candidates)
+        object.__setattr__(self, "candidates", tuple(sorted(candidates, key=_site_key)))
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "reason": self.reason.value,
+            "symbol": self.symbol,
+            "candidates": [candidate.to_dict() for candidate in self.candidates],
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +103,35 @@ class LocateResult:
     certain: Sequence[Site]
     ambiguous: Sequence[AmbiguousGroup]
     reason: LocateReason | None = None
+
+    def __post_init__(self) -> None:
+        reason = self.reason
+        if reason is not None and not isinstance(reason, LocateReason):
+            reason = LocateReason(reason)
+        certain = tuple(sorted(self.certain, key=_site_key))
+        ambiguous = tuple(
+            sorted(self.ambiguous, key=lambda group: (group.reason.value, group.symbol))
+        )
+        if reason is None and not certain and not ambiguous:
+            raise ValueError("an empty result must carry a reason")
+        if reason is not None and (certain or ambiguous):
+            raise ValueError("a result with sites must not carry a reason")
+        object.__setattr__(self, "reason", reason)
+        object.__setattr__(self, "certain", certain)
+        object.__setattr__(self, "ambiguous", ambiguous)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "change": self.change.to_dict(),
+            "certain": [site.to_dict() for site in self.certain],
+            "ambiguous": [group.to_dict() for group in self.ambiguous],
+            "reason": None if self.reason is None else self.reason.value,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(
+            self.to_dict(), sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
 
 
 @dataclass(frozen=True, slots=True)
