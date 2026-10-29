@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20shipped%20·%20detect%20%2B%20locate-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20shipped%20·%20T3%20built-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -12,22 +12,24 @@ affected calls, and proves the fix against your own checks before it opens a pul
 
 ## Status
 
-**T1 (change detection) and T2 (Python call-site location) are shipped.** `src/tenon/detect/` diffs
-two OpenAPI 3.x documents into typed `Change` records; `src/tenon/locate/` turns one of those records
-into call sites with file, line and column, and keeps anything it cannot prove in a separate
-ambiguity list. Both run fully offline. Propose, prove and PR do not exist yet. Read `CLAUDE.md`
-before writing any code here.
+**T1 (change detection) and T2 (Python call-site location) are shipped; T3 (patch proposal) is
+built.** `src/tenon/detect/` diffs two OpenAPI 3.x documents into typed `Change` records;
+`src/tenon/locate/` turns one of those records into call sites with file, line and column, and keeps
+anything it cannot prove in a separate ambiguity list; `src/tenon/propose/` turns the certain sites
+into a candidate diff and never applies it. All three run fully offline. Prove and PR do not exist
+yet. Read `CLAUDE.md` before writing any code here.
 
 ```python
 from tenon.detect import diff, load
 from tenon.locate import LocateConfig, locate
+from tenon.propose import propose
 
 changes = diff(load("v1.yaml"), load("v2.yaml")).changes
 for change in changes:
-    result = locate(change, "path/to/repo", LocateConfig(sdk_package="stripe"))
-    result.certain    # sites we can point at
-    result.ambiguous  # groups with candidates and a named reason
-    result.reason     # why there is nothing, when there is nothing
+    located = locate(change, "path/to/repo", LocateConfig(sdk_package="stripe"))
+    proposal = propose(change, located, "path/to/repo")
+    proposal.diff     # unified diff; never applied
+    proposal.skipped  # what Tenon refused to touch, and why
 ```
 
 `uv run pytest` — no network, no model calls.

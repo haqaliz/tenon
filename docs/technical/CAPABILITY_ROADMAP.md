@@ -6,7 +6,7 @@ Engine capabilities in build order. Each lands test-first.
 |---|---|---|---|---|
 | **T1** | **Change detection.** Diff two OpenAPI versions into typed change records. | none | Machine-readable sources first | **Shipped 2026-10-26** |
 | **T2** | **Call-site location (Python).** Find usages of a changed symbol or endpoint with file and line. | T1 | Ambiguity reported, never guessed | **Shipped 2026-10-29** |
-| **T3** | **Patch proposer seam.** Rule-based proposer for mechanical changes; optional BYOK model proposer. | T1, T2 | A model proposes only | Not started |
+| **T3** | **Patch proposer seam.** Rule-based proposer for mechanical changes; optional BYOK model proposer. | T1, T2 | A model proposes only | **Built 2026-10-29** |
 | **T4** | **Proof runner.** Apply the patch in an isolated working copy, run the user's tests, record the proof level. | T3 | Execution decides the label | Not started |
 | **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging | Not started |
 | **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | | Not started |
@@ -45,6 +45,20 @@ Known limits at this level: an SDK-shaped repo is assumed (a raw `requests`/`htt
 `NO_SDK_IMPORT`); aliases resolve one hop past an assignment-created alias; operation-scoped field
 changes report only the resolved call's arguments; `AMBIGUOUS_CALL_SITE` is the aggregate cause T4
 will report, not a T2 output.
+
+### T3 as built (2026-10-29)
+
+`src/tenon/propose/`: a `Proposal` contract, a deterministic `RuleProposer` for field renames, and
+an assembly that verifies every candidate span against the current source before applying it in
+memory and rendering a unified diff. Ambiguous sites, uneditable call sites and stale spans become
+skipped suggestions with named reasons; a proposal carries `NO_RULE`, `NO_CERTAIN_SITES`,
+`NO_EDITABLE_SITES` or `STALE_SITE` when nothing survives. 114 tests, offline and deterministic.
+
+Known limits at this level: one rule only (field rename, `keyword`/`dict_key`/`attribute` shapes);
+removals, required additions, type changes and endpoint renames have no mechanical fix; a
+proposer seam exists but no model ships; nothing is applied, so every proposal is unverified until
+T4; a file without a final newline produces a diff `git apply` will reject (documented shortcut).
+
 
 
 ## Open questions
