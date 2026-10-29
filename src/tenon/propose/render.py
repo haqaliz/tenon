@@ -1,7 +1,8 @@
 """Verify located spans, apply edits in memory, and render a unified diff."""
 
+import difflib
 from pathlib import Path, PurePosixPath
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from tenon.locate import SiteShape
 
@@ -93,3 +94,30 @@ def apply_edits(text: str, edits: Sequence[Edit]) -> str:
             last_start = start
         lines[line_number - 1] = line
     return "\n".join(lines)
+
+
+def render(files: Mapping[str, tuple[str, str]]) -> str:
+    """Render ``path -> (old, new)`` as one ordered, newline-stable diff.
+
+    An unchanged file emits nothing. A file with no final newline keeps
+    difflib's adjacent ``-``/``+`` lines, without git's no-newline markers.
+    """
+    chunks: list[str] = []
+    for path in sorted(files):
+        old, new = files[path]
+        if old == new:
+            continue
+        chunks.extend(
+            difflib.unified_diff(
+                old.splitlines(keepends=True),
+                new.splitlines(keepends=True),
+                fromfile=f"a/{path}",
+                tofile=f"b/{path}",
+                n=3,
+                lineterm="\n",
+            )
+        )
+    diff = "".join(chunks)
+    if diff and not diff.endswith("\n"):
+        diff += "\n"
+    return diff

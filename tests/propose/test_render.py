@@ -8,7 +8,7 @@ import pytest
 from tenon.detect import Change, ChangeKind, Location
 from tenon.locate import LocateConfig, SiteShape, locate
 from tenon.propose import Edit, RuleProposer
-from tenon.propose.render import apply_edits, verify
+from tenon.propose.render import apply_edits, render, verify
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
 SDK_BASIC = FIXTURES / "sdk-basic"
@@ -138,3 +138,72 @@ def test_apply_edits_raises_on_overlapping_edits():
 
     with pytest.raises(ValueError):
         apply_edits("f(amount=amount)\n", edits)
+
+
+BILLING_OLD = (
+    "from stripe import Stripe\n"
+    "\n"
+    "client = Stripe()\n"
+    "\n"
+    'client.charges.create(amount=amount, currency="usd")\n'
+    "client.charges.delete(charge_id)\n"
+)
+BILLING_NEW = BILLING_OLD.replace("amount=amount", "amount_cents=amount")
+
+
+def test_render_one_file_one_edit_is_a_unified_diff():
+    diff = render({"acme/billing.py": (BILLING_OLD, BILLING_NEW)})
+
+    assert diff.startswith(
+        "--- a/acme/billing.py\n+++ b/acme/billing.py\n@@ -2,5 +2,5 @@\n"
+    )
+    assert '-client.charges.create(amount=amount, currency="usd")\n' in diff
+    assert '+client.charges.create(amount_cents=amount, currency="usd")\n' in diff
+    lines = diff.splitlines()
+    assert sum(1 for line in lines if line.startswith("-") and not line.startswith("---")) == 1
+    assert sum(1 for line in lines if line.startswith("+") and not line.startswith("+++")) == 1
+
+
+def test_render_orders_files_by_path():
+    first = ("one\n", "ONE\n")
+    second = ("two\n", "TWO\n")
+
+    diff = render({"b.py": second, "a.py": first})
+
+    assert diff.index("a/a.py") < diff.index("a/b.py")
+
+
+def test_render_emits_nothing_for_an_unchanged_file():
+    assert render({"a.py": ("same\n", "same\n")}) == ""
+
+    diff = render({"a.py": ("same\n", "same\n"), "b.py": ("one\n", "two\n")})
+
+    assert "a/a.py" not in diff
+    assert "a/b.py" in diff
+
+
+def test_render_is_deterministic_without_timestamps_or_absolute_paths():
+    files = {"b.py": ("two\n", "TWO\n"), "a.py": ("one\n", "ONE\n")}
+
+    first = render(files)
+    second = render(dict(reversed(list(files.items()))))
+
+    assert first == second
+    assert str(SDK_BASIC) not in first
+    assert "2026-" not in first
+
+
+def test_render_ends_with_exactly_one_newline():
+    diff = render({"a.py": ("one\n", "ONE\n")})
+
+    assert diff.endswith("\n")
+    assert not diff.endswith("\n\n")
+
+
+def test_render_uses_three_lines_of_context_from_line_one():
+    old = "".join(f"line{number}\n" for number in range(1, 7))
+    new = old.replace("line1\n", "LINE1\n")
+
+    diff = render({"a.py": (old, new)})
+
+    assert "@@ -1,4 +1,4 @@" in diff
