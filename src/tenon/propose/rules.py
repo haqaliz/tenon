@@ -7,9 +7,13 @@ verification (``STALE_SITE``) and the diff belong to assembly.
 from pathlib import Path
 
 from tenon.detect import Change, ChangeKind
-from tenon.locate import LocateResult
+from tenon.locate import LocateResult, SiteShape
 
 from .result import Edit
+
+_EDITABLE_SHAPES = frozenset(
+    {SiteShape.KEYWORD, SiteShape.DICT_KEY, SiteShape.ATTRIBUTE}
+)
 
 
 def _is_endpoint_rename(change: Change) -> bool:
@@ -45,8 +49,12 @@ class RuleProposer:
             return ()
         if _is_endpoint_rename(change):
             return ()
-        return tuple(
-            Edit(
+        edits: list[Edit] = []
+        seen: set[tuple[str, int, int, str, str]] = set()
+        for site in located.certain:
+            if site.shape not in _EDITABLE_SHAPES or site.symbol != old:
+                continue
+            edit = Edit(
                 path=site.path,
                 line=site.line,
                 column=site.column,
@@ -54,6 +62,9 @@ class RuleProposer:
                 old=old,
                 new=new,
             )
-            for site in located.certain
-            if site.symbol == old
-        )
+            key = (edit.path, edit.line, edit.column, edit.shape.value, edit.old)
+            if key in seen:
+                continue
+            seen.add(key)
+            edits.append(edit)
+        return tuple(edits)

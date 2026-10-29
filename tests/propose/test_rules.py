@@ -4,7 +4,7 @@ import pathlib
 import pytest
 
 from tenon.detect import Change, ChangeKind, Location
-from tenon.locate import LocateReason, LocateResult, Site
+from tenon.locate import AmbiguityReason, AmbiguousGroup, LocateReason, LocateResult, Site
 from tenon.propose import RuleProposer
 
 PROPOSER = RuleProposer()
@@ -114,3 +114,76 @@ def test_propose_never_touches_the_filesystem(tmp_path, monkeypatch):
     edits = PROPOSER.propose(a_rename(), a_result(a_site()), tmp_path / "missing")
 
     assert edits
+
+
+def test_two_certain_keyword_sites_become_two_edits_in_locator_order():
+    later = a_site(line=12, column=9)
+    earlier = a_site(line=10, column=5)
+
+    edits = PROPOSER.propose(a_rename(), a_result(later, earlier), "/nowhere")
+
+    assert [(edit.path, edit.line, edit.column) for edit in edits] == [
+        ("billing.py", 10, 5),
+        ("billing.py", 12, 9),
+    ]
+
+
+def test_a_certain_call_site_yields_no_edit_but_keyword_sites_still_do():
+    call_site = a_site(path="client.py", line=3, column=7, shape="call")
+    keyword_site = a_site()
+
+    edits = PROPOSER.propose(
+        a_rename(), a_result(call_site, keyword_site), "/nowhere"
+    )
+
+    assert [(edit.path, edit.shape) for edit in edits] == [
+        ("billing.py", "keyword")
+    ]
+
+
+@pytest.mark.parametrize("shape", ["dict_key", "attribute"])
+def test_dict_key_and_attribute_sites_are_editable(shape):
+    edits = PROPOSER.propose(
+        a_rename(), a_result(a_site(shape=shape)), "/nowhere"
+    )
+
+    assert len(edits) == 1
+    assert edits[0].shape == shape
+    assert edits[0].old == "amount"
+    assert edits[0].new == "amount_cents"
+
+
+def test_a_site_for_another_symbol_yields_no_edit():
+    other = a_site(symbol="amount_cents")
+
+    assert PROPOSER.propose(a_rename(), a_result(other), "/nowhere") == ()
+
+
+def test_duplicate_certain_sites_yield_one_edit():
+    edits = PROPOSER.propose(a_rename(), a_result(a_site(), a_site()), "/nowhere")
+
+    assert len(edits) == 1
+
+
+def test_an_ambiguous_only_result_yields_no_edits():
+    group = AmbiguousGroup(
+        reason=AmbiguityReason.DYNAMIC_KWARGS,
+        symbol="amount",
+        candidates=(a_site(),),
+    )
+
+    assert PROPOSER.propose(a_rename(), a_result(ambiguous=(group,)), "/nowhere") == ()
+
+
+def test_ambiguous_groups_do_not_change_the_edits():
+    group = AmbiguousGroup(
+        reason=AmbiguityReason.DYNAMIC_KWARGS,
+        symbol="amount",
+        candidates=(a_site(path="other.py"),),
+    )
+
+    edits = PROPOSER.propose(
+        a_rename(), a_result(a_site(), ambiguous=(group,)), "/nowhere"
+    )
+
+    assert len(edits) == 1
