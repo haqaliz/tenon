@@ -1,0 +1,12 @@
+# These ignored names are test data, not build output.
+!__pycache__/
+!venv/
+!node_modules/
+!build/
+!dist/
+!.venv/
+!.pytest_cache/
+!.mypy_cache/
+!.ruff_cache/
+!.github/
+!.env
