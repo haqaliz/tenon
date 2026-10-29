@@ -27,10 +27,11 @@ final `Proposal`, including everything that was skipped.
   3. skipped = every site of every `located.ambiguous` group (with the group's reason) + certain
      sites whose shape is `CALL` (`SHAPE_NOT_EDITABLE`) + stale candidates (`STALE_SITE`), each once,
      canonically ordered;
-  4. reason: `NO_RULE` when the proposer produced no candidates **and** the kind has no rule
-     (delegate to the rule's own gate: a `NO_RULE` marker), `NO_CERTAIN_SITES` when there were no
-     certain sites at all, `STALE_SITE` when candidates existed but none verified. `None` when
-     edits survived.
+  4. reason: `NO_RULE` when the kind has no mechanical rule, `NO_CERTAIN_SITES` when there were
+     no certain sites at all, `NO_EDITABLE_SITES` when certain sites exist but none has an
+     editable shape, `STALE_SITE` when candidates existed but none verified. `None` when edits
+     survived. One read per file: verify and apply against the same text, so a mid-run edit cannot
+     slip into the diff unverified.
   5. build the diff; return the `Proposal`. Never write.
 - Files with no surviving edits produce no diff hunk.
 

@@ -76,8 +76,8 @@ T3 itself never claims either.
   with no surviving edits.
 - **M8 — Skipped suggestions.** Every ambiguous group becomes a `Skipped` entry with its reason and
   candidates; uneditable shapes and stale sites join it. The list is ordered by path, line, column.
-- **M9 — Named reasons.** `ProposalReason`: `NO_RULE`, `NO_CERTAIN_SITES`, `STALE_SITE`. Set only
-  when `edits` is empty.
+- **M9 — Named reasons.** `ProposalReason`: `NO_RULE`, `NO_CERTAIN_SITES`, `NO_EDITABLE_SITES`,
+  `STALE_SITE`. Set only when `edits` is empty.
 - **M10 — Seam.** `Proposer` protocol: `propose(change, located, root) -> tuple[Edit, ...]`.
   `RuleProposer` implements it. A `Proposal` is assembled from whichever proposer ran, so a future
   model proposer cannot bypass verification or the skipped list — those live in the assembly, not
@@ -117,7 +117,7 @@ Proposal
   skipped: tuple[Skipped, ...]
   files: tuple[str, ...]
   diff: str            # unified diff, "" when no edits
-  reason: ProposalReason | None   # set iff edits == ()
+  reason: ProposalReason | None   # set iff edits == (); NO_RULE | NO_CERTAIN_SITES | NO_EDITABLE_SITES | STALE_SITE
   to_dict() / to_json()
 ```
 
@@ -137,7 +137,7 @@ proposal = propose(change, located, "path/to/repo", proposer=RuleProposer())
 proposal.diff       # unified diff; "" when nothing is editable
 proposal.edits      # structured edits
 proposal.skipped    # suggestions with reasons
-proposal.reason     # NO_RULE | NO_CERTAIN_SITES | STALE_SITE | None
+proposal.reason     # NO_RULE | NO_CERTAIN_SITES | NO_EDITABLE_SITES | STALE_SITE | None
 proposal.to_json()  # byte-stable
 ```
 
@@ -186,5 +186,5 @@ No CLI, no exit codes, no file writes.
 | Aspect | Boundary |
 |---|---|
 | `proposal-result` | `Edit`, `Skipped`, `Proposal`, `ProposalReason`, `SkipReason`, invariants, order, JSON. No file reads. |
-| `rename-rule` | `RuleProposer`: kind gate, certain-site loop, shape offsets, source verification (`STALE_SITE`), dedupe. Reads source lines only. |
-| `diff-render` | In-memory application per file, unified diff, path safety, `files`, determinism, `git apply --check`. No rule logic. |
+| `rename-rule` | `RuleProposer`: kind gate, certain-site loop, shape filter, dedupe. Pure — no file reads; verification happens in assembly. |
+| `diff-render` | Span verification (`STALE_SITE`), in-memory application per file, unified diff, path safety, skipped assembly, reason selection, `files`, determinism, `git apply --check`. No rule logic. |

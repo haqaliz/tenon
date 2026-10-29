@@ -14,7 +14,7 @@ skipped and why, when a proposal carries a reason, and how it serializes. No I/O
   `StrEnum`. Every ambiguity reason maps to the same value, so a `Skipped` entry never needs two
   enums.
 - `Skipped`: `site: Site`, `reason: SkipReason`.
-- `ProposalReason`: `NO_RULE`, `NO_CERTAIN_SITES`, `STALE_SITE`.
+- `ProposalReason`: `NO_RULE`, `NO_CERTAIN_SITES`, `NO_EDITABLE_SITES`, `STALE_SITE`.
 - `Proposal`: `change`, `edits`, `skipped`, `files`, `diff`, `reason`.
   - `files` is **derived**, not passed: the sorted unique edit paths.
   - `reason` is set iff `edits` is empty; an empty proposal with a non-empty skipped list is valid.
