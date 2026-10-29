@@ -4,9 +4,11 @@ import difflib
 from pathlib import Path, PurePosixPath
 from typing import Mapping, Sequence
 
-from tenon.locate import SiteShape
+from tenon.detect import Change
+from tenon.locate import LocateResult, Site, SiteShape
 
-from .result import Edit
+from .result import Edit, Proposal, ProposalReason, SkipReason, Skipped
+from .rules import RuleProposer, has_rule
 
 
 def _safety(path: str) -> None:
@@ -99,8 +101,11 @@ def apply_edits(text: str, edits: Sequence[Edit]) -> str:
 def render(files: Mapping[str, tuple[str, str]]) -> str:
     """Render ``path -> (old, new)`` as one ordered, newline-stable diff.
 
-    An unchanged file emits nothing. A file with no final newline keeps
-    difflib's adjacent ``-``/``+`` lines, without git's no-newline markers.
+    An unchanged file emits nothing.
+
+    shortcut: a file without a final newline keeps difflib's adjacent ``-``/``+``
+    lines and no git no-newline markers, so that hunk will not git-apply; add
+    the markers when such files must apply.
     """
     chunks: list[str] = []
     for path in sorted(files):
@@ -121,3 +126,88 @@ def render(files: Mapping[str, tuple[str, str]]) -> str:
     if diff and not diff.endswith("\n"):
         diff += "\n"
     return diff
+
+
+def _add_skipped(
+    entries: dict[tuple[str, int, int, str], Skipped], entry: Skipped
+) -> None:
+    key = (entry.site.path, entry.site.line, entry.site.column, entry.reason.value)
+    entries.setdefault(key, entry)
+
+
+def propose(
+    change: Change,
+    located: LocateResult,
+    root: str | Path,
+    proposer=RuleProposer(),
+) -> Proposal:
+    """Assemble verified edits into a diff; never write to disk.
+
+    The proposer is untrusted: a candidate is edited only if its exact span
+    still verifies, and a site the locator called ambiguous is never edited.
+    """
+    candidates = tuple(proposer.propose(change, located, root))
+    ambiguous = {
+        (site.path, site.line, site.column)
+        for group in located.ambiguous
+        for site in group.candidates
+    }
+    uneditable = {
+        (site.path, site.line, site.column)
+        for site in located.certain
+        if site.shape is SiteShape.CALL
+    }
+    certain = {
+        (site.path, site.line, site.column): site for site in located.certain
+    }
+    skipped: dict[tuple[str, int, int, str], Skipped] = {}
+    for group in located.ambiguous:
+        reason = SkipReason(group.reason.value)
+        for site in group.candidates:
+            _add_skipped(skipped, Skipped(site, reason))
+    for site in located.certain:
+        if site.shape is SiteShape.CALL:
+            _add_skipped(skipped, Skipped(site, SkipReason.SHAPE_NOT_EDITABLE))
+    accepted: list[Edit] = []
+    stale = 0
+    for candidate in dict.fromkeys(candidates):
+        key = (candidate.path, candidate.line, candidate.column)
+        if key in ambiguous or key in uneditable:
+            continue
+        if verify(candidate, root):
+            accepted.append(candidate)
+            continue
+        site = certain.get(key) or Site(
+            path=candidate.path,
+            line=candidate.line,
+            column=candidate.column,
+            shape=candidate.shape,
+            symbol=candidate.old,
+        )
+        _add_skipped(skipped, Skipped(site, SkipReason.STALE_SITE))
+        stale += 1
+    texts: dict[str, tuple[str, str]] = {}
+    for path in sorted({edit.path for edit in accepted}):
+        old = (Path(root) / path).read_text(encoding="utf-8")
+        texts[path] = (
+            old,
+            apply_edits(old, [edit for edit in accepted if edit.path == path]),
+        )
+    if accepted:
+        reason = None
+    elif not has_rule(change):
+        reason = ProposalReason.NO_RULE
+    elif not located.certain:
+        reason = ProposalReason.NO_CERTAIN_SITES
+    elif stale:
+        reason = ProposalReason.STALE_SITE
+    else:
+        # A mechanical rule, certain sites, but nothing it can edit.
+        reason = ProposalReason.NO_CERTAIN_SITES
+    return Proposal(
+        change=change,
+        edits=tuple(accepted),
+        skipped=tuple(skipped.values()),
+        diff=render(texts),
+        reason=reason,
+    )

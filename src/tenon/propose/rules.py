@@ -34,21 +34,27 @@ def _is_endpoint_rename(change: Change) -> bool:
     )
 
 
+def has_rule(change: Change) -> bool:
+    """Whether the mechanical rename rule applies to this change."""
+    if change.kind is not ChangeKind.RENAMED:
+        return False
+    old, new = change.before, change.after
+    if not isinstance(old, str) or not isinstance(new, str):
+        return False
+    if not old or not new or old == new:
+        return False
+    return not _is_endpoint_rename(change)
+
+
 class RuleProposer:
     """Rename a field at the sites the locator called certain."""
 
     def propose(
         self, change: Change, located: LocateResult, root: str | Path
     ) -> tuple[Edit, ...]:
-        if change.kind is not ChangeKind.RENAMED:
+        if not has_rule(change):
             return ()
         old, new = change.before, change.after
-        if not isinstance(old, str) or not isinstance(new, str):
-            return ()
-        if not old or not new or old == new:
-            return ()
-        if _is_endpoint_rename(change):
-            return ()
         edits: list[Edit] = []
         seen: set[tuple[str, int, int, str, str]] = set()
         for site in located.certain:

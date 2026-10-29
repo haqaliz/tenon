@@ -1,5 +1,6 @@
 from .result import Edit, Proposal, ProposalReason, SkipReason, Skipped
 from .rules import RuleProposer
+from .render import propose
 
 __all__ = [
     "Edit",
@@ -8,4 +9,5 @@ __all__ = [
     "RuleProposer",
     "SkipReason",
     "Skipped",
+    "propose",
 ]
