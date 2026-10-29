@@ -1,0 +1,95 @@
+"""Verify located spans, apply edits in memory, and render a unified diff."""
+
+from pathlib import Path, PurePosixPath
+from typing import Sequence
+
+from tenon.locate import SiteShape
+
+from .result import Edit
+
+
+def _safety(path: str) -> None:
+    """Reject a path that could escape the repository root."""
+    candidate = PurePosixPath(path)
+    if candidate.is_absolute() or ".." in candidate.parts or "\\" in path:
+        raise ValueError(f"unsafe repository path: {path!r}")
+
+
+def _line(root: str | Path, path: str, line: int) -> str:
+    """One 1-based source line, with no line terminator."""
+    text = (Path(root) / path).read_text(encoding="utf-8")
+    return text.split("\n")[line - 1].removesuffix("\r")
+
+
+def _identifier_char(char: str) -> bool:
+    return bool(char) and (char.isalnum() or char == "_")
+
+
+def _at_identifier(line: str, column: int, old: str) -> bool:
+    """The span equals ``old`` and is the whole identifier, not a prefix."""
+    start = column - 1
+    end = start + len(old)
+    if line[start:end] != old:
+        return False
+    before = line[start - 1] if start else ""
+    after = line[end] if end < len(line) else ""
+    return not _identifier_char(before) and not _identifier_char(after)
+
+
+def verify(edit: Edit, root: str | Path) -> bool:
+    """Whether the current source still holds this edit's exact old span.
+
+    A missing file, a short line or a decode error is ``False``: assembly turns
+    those into ``STALE_SITE``. An unsafe path is a caller error and raises.
+    """
+    _safety(edit.path)
+    if edit.line < 1 or edit.column < 1 or not edit.old:
+        return False
+    try:
+        line = _line(root, edit.path, edit.line)
+    except (OSError, UnicodeDecodeError, IndexError):
+        return False
+    if edit.shape is SiteShape.DICT_KEY:
+        start = edit.column - 1
+        quote = line[start : start + 1]
+        end = start + len(edit.old) + 2
+        return (
+            quote in ("'", '"')
+            and line[start + 1 : end - 1] == edit.old
+            and line[end - 1 : end] == quote
+        )
+    if edit.shape in (SiteShape.KEYWORD, SiteShape.ATTRIBUTE):
+        return _at_identifier(line, edit.column, edit.old)
+    return False
+
+
+def apply_edits(text: str, edits: Sequence[Edit]) -> str:
+    """Apply edits in descending ``(line, column)`` order to one file's text."""
+    lines = text.split("\n")
+    grouped: dict[int, list[Edit]] = {}
+    for edit in edits:
+        if edit.line < 1 or edit.column < 1:
+            raise ValueError(f"edit outside the file: {edit!r}")
+        grouped.setdefault(edit.line, []).append(edit)
+    for line_number, line_edits in grouped.items():
+        if line_number > len(lines):
+            raise ValueError(f"edit beyond the last line: {line_number}")
+        line = lines[line_number - 1]
+        last_start: int | None = None
+        for edit in sorted(line_edits, key=lambda item: item.column, reverse=True):
+            start = edit.column - 1
+            if edit.shape is SiteShape.DICT_KEY:
+                quote = line[start : start + 1]
+                if quote not in ("'", '"'):
+                    raise ValueError(f"dict key without a quote: {edit!r}")
+                end = start + len(edit.old) + 2
+                replacement = quote + edit.new + quote
+            else:
+                end = start + len(edit.old)
+                replacement = edit.new
+            if last_start is not None and end > last_start:
+                raise ValueError(f"overlapping edits on line {line_number}")
+            line = line[:start] + replacement + line[end:]
+            last_start = start
+        lines[line_number - 1] = line
+    return "\n".join(lines)
