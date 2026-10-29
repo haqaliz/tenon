@@ -32,6 +32,7 @@ class ProposalReason(StrEnum):
 
     NO_RULE = "NO_RULE"
     NO_CERTAIN_SITES = "NO_CERTAIN_SITES"
+    NO_EDITABLE_SITES = "NO_EDITABLE_SITES"
     STALE_SITE = "STALE_SITE"
 
 

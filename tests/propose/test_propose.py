@@ -15,6 +15,7 @@ from tenon.locate import (
     LocateConfig,
     LocateReason,
     LocateResult,
+    Site,
     SiteShape,
     locate,
 )
@@ -149,6 +150,28 @@ def test_a_certain_call_site_is_shape_not_editable():
     ] == [("acme/billing.py", 6, 16, SkipReason.SHAPE_NOT_EDITABLE)]
 
 
+def test_a_renamed_change_with_only_a_certain_call_site_has_no_editable_sites():
+    change = a_component_rename()
+    site = Site(
+        path="acme/billing.py",
+        line=5,
+        column=23,
+        shape=SiteShape.CALL,
+        symbol="amount",
+    )
+    located = LocateResult(change=change, certain=(site,), ambiguous=())
+
+    proposal = propose(change, located, SDK_BASIC)
+
+    assert proposal.reason is ProposalReason.NO_EDITABLE_SITES
+    assert proposal.edits == ()
+    assert proposal.diff == ""
+    assert [
+        (entry.site.path, entry.site.line, entry.site.column, entry.reason)
+        for entry in proposal.skipped
+    ] == [("acme/billing.py", 5, 23, SkipReason.SHAPE_NOT_EDITABLE)]
+
+
 def test_a_source_that_moved_after_locate_is_stale(tmp_path):
     repo = copy_basic(tmp_path)
     change = a_component_rename()
@@ -214,6 +237,25 @@ def test_an_unmechanical_rename_returns_no_rule():
     assert proposal.reason is ProposalReason.NO_RULE
     assert proposal.edits == ()
     assert proposal.diff == ""
+
+
+def test_propose_reads_each_touched_file_exactly_once(monkeypatch):
+    change = a_component_rename()
+    located = locate(change, SDK_BASIC, STRIPE)
+    original = Path.read_text
+    reads = []
+
+    def counting_read_text(self, *args, **kwargs):
+        if self.parent.name == "acme" and self.name == "billing.py":
+            reads.append(self)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counting_read_text)
+
+    proposal = propose(change, located, SDK_BASIC)
+
+    assert len(reads) == 1
+    assert proposal.edits
 
 
 def test_propose_never_writes_to_the_fixture_repos():

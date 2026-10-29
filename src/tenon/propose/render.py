@@ -18,10 +18,12 @@ def _safety(path: str) -> None:
         raise ValueError(f"unsafe repository path: {path!r}")
 
 
-def _line(root: str | Path, path: str, line: int) -> str:
-    """One 1-based source line, with no line terminator."""
-    text = (Path(root) / path).read_text(encoding="utf-8")
-    return text.split("\n")[line - 1].removesuffix("\r")
+def _read_text(root: str | Path, path: str) -> str | None:
+    """Read one file once; a missing or undecodable file is ``None``."""
+    try:
+        return (Path(root) / path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def _identifier_char(char: str) -> bool:
@@ -39,19 +41,13 @@ def _at_identifier(line: str, column: int, old: str) -> bool:
     return not _identifier_char(before) and not _identifier_char(after)
 
 
-def verify(edit: Edit, root: str | Path) -> bool:
-    """Whether the current source still holds this edit's exact old span.
-
-    A missing file, a short line or a decode error is ``False``: assembly turns
-    those into ``STALE_SITE``. An unsafe path is a caller error and raises.
-    """
-    _safety(edit.path)
+def _verify_text(text: str, edit: Edit) -> bool:
     if edit.line < 1 or edit.column < 1 or not edit.old:
         return False
-    try:
-        line = _line(root, edit.path, edit.line)
-    except (OSError, UnicodeDecodeError, IndexError):
+    lines = text.split("\n")
+    if edit.line > len(lines):
         return False
+    line = lines[edit.line - 1].removesuffix("\r")
     if edit.shape is SiteShape.DICT_KEY:
         start = edit.column - 1
         quote = line[start : start + 1]
@@ -64,6 +60,19 @@ def verify(edit: Edit, root: str | Path) -> bool:
     if edit.shape in (SiteShape.KEYWORD, SiteShape.ATTRIBUTE):
         return _at_identifier(line, edit.column, edit.old)
     return False
+
+
+def verify(edit: Edit, root: str | Path) -> bool:
+    """Whether the current source still holds this edit's exact old span.
+
+    A missing file, a short line or a decode error is ``False``: assembly turns
+    those into ``STALE_SITE``. An unsafe path is a caller error and raises.
+    """
+    _safety(edit.path)
+    if edit.line < 1 or edit.column < 1 or not edit.old:
+        return False
+    text = _read_text(root, edit.path)
+    return text is not None and _verify_text(text, edit)
 
 
 def apply_edits(text: str, edits: Sequence[Edit]) -> str:
@@ -170,11 +179,20 @@ def propose(
             _add_skipped(skipped, Skipped(site, SkipReason.SHAPE_NOT_EDITABLE))
     accepted: list[Edit] = []
     stale = 0
+    cache: dict[str, str | None] = {}
+
+    def cached_text(path: str) -> str | None:
+        if path not in cache:
+            _safety(path)
+            cache[path] = _read_text(root, path)
+        return cache[path]
+
     for candidate in dict.fromkeys(candidates):
         key = (candidate.path, candidate.line, candidate.column)
         if key in ambiguous or key in uneditable:
             continue
-        if verify(candidate, root):
+        text = cached_text(candidate.path)
+        if text is not None and _verify_text(text, candidate):
             accepted.append(candidate)
             continue
         site = certain.get(key) or Site(
@@ -188,7 +206,8 @@ def propose(
         stale += 1
     texts: dict[str, tuple[str, str]] = {}
     for path in sorted({edit.path for edit in accepted}):
-        old = (Path(root) / path).read_text(encoding="utf-8")
+        old = cache[path]
+        assert old is not None
         texts[path] = (
             old,
             apply_edits(old, [edit for edit in accepted if edit.path == path]),
@@ -202,8 +221,7 @@ def propose(
     elif stale:
         reason = ProposalReason.STALE_SITE
     else:
-        # A mechanical rule, certain sites, but nothing it can edit.
-        reason = ProposalReason.NO_CERTAIN_SITES
+        reason = ProposalReason.NO_EDITABLE_SITES
     return Proposal(
         change=change,
         edits=tuple(accepted),

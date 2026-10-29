@@ -98,11 +98,12 @@ def test_skipped_accepts_every_reason(reason):
     assert skipped.reason is reason
 
 
-# Spec: ProposalReason is the closed three-value vocabulary.
-def test_proposal_reason_values_are_the_closed_three():
+# Spec: ProposalReason is the closed four-value vocabulary.
+def test_proposal_reason_values_are_the_closed_four():
     assert [reason.value for reason in ProposalReason] == [
         "NO_RULE",
         "NO_CERTAIN_SITES",
+        "NO_EDITABLE_SITES",
         "STALE_SITE",
     ]
 
