@@ -1,7 +1,8 @@
 # Tenon: Architecture
 
-Design intent. **T1 (detect), T2 (locate, Python) and T3 (propose) are implemented** under
-`src/tenon/detect/`, `src/tenon/locate/` and `src/tenon/propose/`; T4–T5 are not.
+Design intent. **T1 (detect), T2 (locate, Python), T3 (propose) and T4 (prove) are implemented**
+under `src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/` and `src/tenon/prove/`; T5 is
+not.
 
 ## Pipeline
 
@@ -31,7 +32,7 @@ src/tenon/
   detect/     T1: spec parsers, differ, Change records      <- built
   locate/     T2: per-language call-site finders            <- built (Python)
   propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
-  prove/      T4/T7: working-copy runner, proof levels
+  prove/      T4/T7: working-copy runner, proof levels     <- built (TESTS_PASSED)
   pr/         T5: branch and PR writer
   probe/      T8: agent run against an API or MCP server
   corpus/     T9: benchmark records

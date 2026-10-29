@@ -16,11 +16,13 @@ usable by AI agents, by running an agent against it.
 The name: a *tenon* is the tongue cut on a timber to fit its mortise exactly. The joint holds
 only if the two sides still match. Tenon asks of an integration: *does your side still fit theirs?*
 
-Status: **T1, T2 and T3 shipped.** `src/tenon/detect/` turns two OpenAPI 3.x documents into
-typed `Change` records; `src/tenon/locate/` turns a record into call sites with file, line and
+Status: **T1, T2 and T3 shipped, T4 built.** `src/tenon/detect/` turns two OpenAPI 3.x documents
+into typed `Change` records; `src/tenon/locate/` turns a record into call sites with file, line and
 column, keeping anything unprovable in named ambiguity groups; `src/tenon/propose/` turns certain
-sites into a candidate diff and never applies it. Tests live in `tests/`. T4 (prove) is next.
-Nothing else in the pipeline exists — do not describe capability that isn't there yet.
+sites into a candidate diff and never applies it; `src/tenon/prove/` applies that diff to a copy,
+runs the user's check before and after, and records `TESTS_PASSED` or `UNVERIFIED` with a cause.
+Tests live in `tests/`. T5 (PR) is next. Nothing else in the pipeline exists — do not describe
+capability that isn't there yet.
 
 Lineage: one of three siblings scaffolded together on 2026-10-22 (with Assay and Pry) from a
 market-demand pass (`~/dev/at/ideas/market-demand-2026-10.md`). It answers the YC Fall 2026

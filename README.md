@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20shipped-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20shipped%20·%20T4%20built-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -12,22 +12,27 @@ affected calls, and proves the fix against your own checks before it opens a pul
 
 ## Status
 
-**T1 (change detection), T2 (Python call-site location) and T3 (patch proposal) are shipped.** `src/tenon/detect/` diffs two OpenAPI 3.x documents into typed `Change` records;
-`src/tenon/locate/` turns one of those records into call sites with file, line and column, and keeps
-anything it cannot prove in a separate ambiguity list; `src/tenon/propose/` turns the certain sites
-into a candidate diff and never applies it. All three run fully offline. Prove and PR do not exist
-yet. Read `CLAUDE.md` before writing any code here.
+**T1 (change detection), T2 (Python call-site location) and T3 (patch proposal) are shipped; T4
+(proof runner) is built.** `src/tenon/detect/` diffs two OpenAPI 3.x documents into typed `Change`
+records; `src/tenon/locate/` turns one of those records into call sites with file, line and column,
+and keeps anything it cannot prove in a separate ambiguity list; `src/tenon/propose/` turns the
+certain sites into a candidate diff and never applies it; `src/tenon/prove/` applies that diff to a
+copy and runs your check before and after, recording `TESTS_PASSED` or `UNVERIFIED` with a reason.
+All four run fully offline. PR creation does not exist yet. Read `CLAUDE.md` before writing any code
+here.
 
 ```python
 from tenon.detect import diff, load
 from tenon.locate import LocateConfig, locate
 from tenon.propose import propose
+from tenon.prove import prove
 
 changes = diff(load("v1.yaml"), load("v2.yaml")).changes
 for change in changes:
     located = locate(change, "path/to/repo", LocateConfig(sdk_package="stripe"))
     proposal = propose(change, located, "path/to/repo")
-    proposal.diff     # unified diff; never applied
+    result = prove(proposal, "path/to/repo", ["python", "-m", "pytest", "-q"])
+    result.level      # TESTS_PASSED, or UNVERIFIED with a cause
     proposal.skipped  # what Tenon refused to touch, and why
 ```
 
