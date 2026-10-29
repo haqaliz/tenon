@@ -1,5 +1,6 @@
-"""Isolated copies: the skip list, symlinks, cleanup and copy failures."""
+"""Isolated copies: skip list, symlinks, cleanup, failures and diff application."""
 
+import hashlib
 import os
 import shutil
 import tempfile
@@ -7,10 +8,22 @@ from pathlib import Path
 
 import pytest
 
-from tenon.prove import CopyError, ProofCause, copy_tree, isolated_copy
+from tenon.detect import Change, ChangeKind, Location
+from tenon.locate import LocateConfig, locate
+from tenon.propose import propose
+from tenon.prove import (
+    CopyError,
+    ProofCause,
+    apply_diff,
+    copy_tree,
+    isolated_copy,
+)
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
 COPY_DOT = FIXTURES / "copy-dot"
+SDK_BASIC = FIXTURES / "sdk-basic"
+STRIPE = LocateConfig(sdk_package="stripe")
+CHARGE_PROPERTIES = "#/components/schemas/Charge/properties"
 
 SKIPPED = [
     ".git",
@@ -134,3 +147,80 @@ def test_copy_error_str_renders_the_cause_and_message():
     assert error.message == "root is missing"
     assert "COPY_FAILED" in str(error)
     assert "root is missing" in str(error)
+
+
+def a_shipped_diff():
+    """The diff T3 ships for a rename on the basic fixture."""
+    change = Change(
+        kind=ChangeKind.RENAMED,
+        location=Location(pointer=CHARGE_PROPERTIES),
+        before="amount",
+        after="amount_cents",
+    )
+    return propose(change, locate(change, SDK_BASIC, STRIPE), SDK_BASIC).diff
+
+
+def tree_hashes(root):
+    return {
+        str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(Path(root).rglob("*"))
+        if path.is_file()
+    }
+
+
+# Spec AC4: the exact diff T5 will ship applies inside the copy.
+def test_a_shipped_proposal_diff_applies_to_a_copy(tmp_path):
+    copy = tmp_path / "copy"
+    copy_tree(SDK_BASIC, copy)
+
+    assert apply_diff(copy, a_shipped_diff()) is True
+
+    assert "amount_cents=amount" in (copy / "acme/billing.py").read_text(
+        encoding="utf-8"
+    )
+
+
+# Spec AC4: a garbage diff fails and never half-writes the copy.
+def test_a_garbage_diff_returns_false_and_leaves_the_copy_unchanged(tmp_path):
+    copy = tmp_path / "copy"
+    copy_tree(SDK_BASIC, copy)
+    before = (copy / "acme/billing.py").read_text(encoding="utf-8")
+
+    assert apply_diff(copy, "this is not a diff\n") is False
+
+    assert (copy / "acme/billing.py").read_text(encoding="utf-8") == before
+
+
+# Spec AC5: an empty diff is success without a subprocess.
+def test_an_empty_diff_returns_true_without_running_git(tmp_path, monkeypatch):
+    copy = tmp_path / "copy"
+    copy_tree(SDK_BASIC, copy)
+    before = (copy / "acme/billing.py").read_text(encoding="utf-8")
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("empty diff must not run git")
+
+    monkeypatch.setattr("tenon.prove.copy.subprocess.run", unexpected)
+
+    assert apply_diff(copy, "") is True
+    assert (copy / "acme/billing.py").read_text(encoding="utf-8") == before
+
+
+# Spec AC8: a missing git binary is False, never an exception.
+def test_apply_diff_returns_false_when_git_is_missing(tmp_path, monkeypatch):
+    def missing(*args, **kwargs):
+        raise FileNotFoundError("git")
+
+    monkeypatch.setattr("tenon.prove.copy.subprocess.run", missing)
+
+    assert apply_diff(tmp_path, "diff\n") is False
+
+
+# Spec AC6: the source tree is byte-identical after a copy-and-apply cycle.
+def test_a_copy_and_apply_cycle_leaves_the_source_unchanged():
+    before = tree_hashes(SDK_BASIC)
+
+    with isolated_copy(SDK_BASIC) as copy:
+        assert apply_diff(copy, a_shipped_diff()) is True
+
+    assert tree_hashes(SDK_BASIC) == before

@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import subprocess
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -62,3 +63,25 @@ def isolated_copy(root: str | Path) -> Iterator[Path]:
         dest = Path(tmp) / "repo"
         copy_tree(root, dest)
         yield dest
+
+
+def apply_diff(copy: str | Path, diff: str) -> bool:
+    """Apply ``diff`` inside ``copy``; a missing ``git`` is a quiet failure.
+
+    ``-p1`` strips the ``a/`` / ``b/`` prefixes T3 emits. No ``--unsafe-paths``:
+    a diff path escaping the copy is git's own rejection to make.
+    """
+    if not diff:
+        return True
+    try:
+        result = subprocess.run(
+            ["git", "apply", "-p1", "-"],
+            cwd=copy,
+            input=diff,
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0
