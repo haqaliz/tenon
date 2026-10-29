@@ -58,11 +58,23 @@ def copy_tree(root: str | Path, dest: str | Path) -> None:
 
 @contextmanager
 def isolated_copy(root: str | Path) -> Iterator[Path]:
-    """Yield a temporary copy of ``root``; delete it on success and on error."""
-    with tempfile.TemporaryDirectory(prefix="tenon-prove-") as tmp:
-        dest = Path(tmp) / "repo"
+    """Yield a temporary copy of ``root``; delete it on success and on error.
+
+    Only the copy step maps failures to ``CopyError``: an error raised inside
+    the body is the caller's and propagates unchanged.
+    """
+    try:
+        tmp = tempfile.mkdtemp(prefix="tenon-prove-")
+    except OSError as exc:
+        raise CopyError(
+            ProofCause.COPY_FAILED, f"could not create a temporary directory: {exc}"
+        ) from exc
+    dest = Path(tmp) / "repo"
+    try:
         copy_tree(root, dest)
         yield dest
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def apply_diff(copy: str | Path, diff: str) -> bool:
@@ -82,6 +94,6 @@ def apply_diff(copy: str | Path, diff: str) -> bool:
             capture_output=True,
             timeout=60,
         )
-    except FileNotFoundError:
+    except OSError:
         return False
     return result.returncode == 0

@@ -216,6 +216,16 @@ def test_apply_diff_returns_false_when_git_is_missing(tmp_path, monkeypatch):
     assert apply_diff(tmp_path, "diff\n") is False
 
 
+# Spec AC8 / fix: a git that cannot start is False, never an exception.
+def test_apply_diff_returns_false_when_git_cannot_start(tmp_path, monkeypatch):
+    def denied(*args, **kwargs):
+        raise PermissionError("git")
+
+    monkeypatch.setattr("tenon.prove.copy.subprocess.run", denied)
+
+    assert apply_diff(tmp_path, "diff\n") is False
+
+
 # Spec AC6: the source tree is byte-identical after a copy-and-apply cycle.
 def test_a_copy_and_apply_cycle_leaves_the_source_unchanged():
     before = tree_hashes(SDK_BASIC)

@@ -14,7 +14,7 @@ from tenon.detect import Change, ChangeKind, Location, diff, parse
 from tenon.locate import LocateConfig, locate
 from tenon.propose import Edit, Proposal, ProposalReason, propose
 from tenon.propose.render import render
-from tenon.prove import ProofCause, ProofLevel, prove
+from tenon.prove import CopyError, ProofCause, ProofLevel, prove
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
 PROOF_BASIC = FIXTURES / "proof-basic"
@@ -281,10 +281,10 @@ def test_a_missing_root_is_copy_failed(tmp_path):
     assert result.patch_applied is False
 
 
-# Spec AC12: an OSError while copying is COPY_FAILED too.
-def test_an_oserror_while_copying_is_copy_failed(monkeypatch):
+# Spec AC12: a CopyError while copying is COPY_FAILED.
+def test_a_copy_error_while_copying_is_copy_failed(monkeypatch):
     def failing(*args, **kwargs):
-        raise OSError("disk full")
+        raise CopyError(ProofCause.COPY_FAILED, "disk full")
 
     monkeypatch.setattr("tenon.prove.copy.copy_tree", failing)
 
@@ -294,6 +294,32 @@ def test_an_oserror_while_copying_is_copy_failed(monkeypatch):
     assert result.cause is ProofCause.COPY_FAILED
     assert result.baseline is None
     assert result.after is None
+
+
+# Fix: creating the temp directory is part of the copy step.
+def test_a_temp_directory_failure_is_copy_failed(monkeypatch):
+    def failing(*args, **kwargs):
+        raise OSError("no temp space")
+
+    monkeypatch.setattr(tempfile, "mkdtemp", failing)
+
+    result = prove(a_rename_proposal(), PROOF_BASIC, COMMAND)
+
+    assert result.level is ProofLevel.UNVERIFIED
+    assert result.cause is ProofCause.COPY_FAILED
+    assert result.baseline is None
+    assert result.after is None
+
+
+# Fix: an OSError from the checked body is not a copy failure and must escape.
+def test_an_oserror_from_the_body_propagates_instead_of_copy_failed(monkeypatch):
+    def exploding(*args, **kwargs):
+        raise OSError("body exploded")
+
+    monkeypatch.setattr("tenon.prove.run._run", exploding)
+
+    with pytest.raises(OSError, match="body exploded"):
+        prove(a_rename_proposal(), PROOF_BASIC, COMMAND)
 
 
 # Aspect-3 task: a git that hangs while applying is a diff that did not apply.

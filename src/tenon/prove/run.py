@@ -154,5 +154,5 @@ def prove(
     try:
         with isolated_copy(root) as copy:
             return _run(proposal, copy, command, timeout)
-    except (CopyError, OSError):
+    except CopyError:
         return _unverified(ProofCause.COPY_FAILED)
