@@ -7,7 +7,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T1** | **Change detection.** Diff two OpenAPI versions into typed change records. | none | Machine-readable sources first | **Shipped 2026-10-26** |
 | **T2** | **Call-site location (Python).** Find usages of a changed symbol or endpoint with file and line. | T1 | Ambiguity reported, never guessed | **Shipped 2026-10-29** |
 | **T3** | **Patch proposer seam.** Rule-based proposer for mechanical changes; optional BYOK model proposer. | T1, T2 | A model proposes only | **Shipped 2026-10-29** |
-| **T4** | **Proof runner.** Apply the patch in an isolated working copy, run the user's tests, record the proof level. | T3 | Execution decides the label | Not started |
+| **T4** | **Proof runner.** Apply the patch in an isolated working copy, run the user's tests, record the proof level. | T3 | Execution decides the label | **Built 2026-10-29** |
 | **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging | Not started |
 | **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | | Not started |
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | Not started |
@@ -58,6 +58,19 @@ Known limits at this level: one rule only (field rename, `keyword`/`dict_key`/`a
 removals, required additions, type changes and endpoint renames have no mechanical fix; a
 proposer seam exists but no model ships; nothing is applied, so every proposal is unverified until
 T4; a file without a final newline produces a diff `git apply` will reject (documented shortcut).
+
+### T4 as built (2026-10-29)
+
+`src/tenon/prove/`: a proof-result contract (`TESTS_PASSED` / `UNVERIFIED` with a closed cause set),
+an isolated copy that drops VCS and cache state, `git apply` of the exact diff T5 will ship, and a
+baseline-first runner with a timeout and capped output tails. A red baseline is
+`TESTS_FAILED_BEFORE` and never applies the patch. 105 tests, offline.
+
+Known limits at this level: only `TESTS_PASSED` and `UNVERIFIED` exist (`CHARACTERIZED`, `REPLAYED`
+and `TYPES_BUILD_ONLY` are T7); one command, no retries, no dependency installation; the copy is not
+a sandbox and the user's command is arbitrary code the user chose to run; a repo that depends on a
+venv or generated state inside the tree may not be runnable in the copy.
+
 
 
 
