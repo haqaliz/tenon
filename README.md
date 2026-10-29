@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20shipped%20·%20T3%20built-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20shipped-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -12,8 +12,7 @@ affected calls, and proves the fix against your own checks before it opens a pul
 
 ## Status
 
-**T1 (change detection) and T2 (Python call-site location) are shipped; T3 (patch proposal) is
-built.** `src/tenon/detect/` diffs two OpenAPI 3.x documents into typed `Change` records;
+**T1 (change detection), T2 (Python call-site location) and T3 (patch proposal) are shipped.** `src/tenon/detect/` diffs two OpenAPI 3.x documents into typed `Change` records;
 `src/tenon/locate/` turns one of those records into call sites with file, line and column, and keeps
 anything it cannot prove in a separate ambiguity list; `src/tenon/propose/` turns the certain sites
 into a candidate diff and never applies it. All three run fully offline. Prove and PR do not exist
