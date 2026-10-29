@@ -1,7 +1,7 @@
 # Tenon: Architecture
 
-Design intent. **T1 (detect) and T2 (locate, Python) are implemented** under `src/tenon/detect/` and
-`src/tenon/locate/`; T3–T5 are not.
+Design intent. **T1 (detect), T2 (locate, Python) and T3 (propose) are implemented** under
+`src/tenon/detect/`, `src/tenon/locate/` and `src/tenon/propose/`; T4–T5 are not.
 
 ## Pipeline
 
@@ -30,7 +30,7 @@ API change source (OpenAPI v1 -> v2 | MCP schema | SDK metadata)
 src/tenon/
   detect/     T1: spec parsers, differ, Change records      <- built
   locate/     T2: per-language call-site finders            <- built (Python)
-  propose/    T3: proposer seam, rule-based mechanical fixes
+  propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
   prove/      T4/T7: working-copy runner, proof levels
   pr/         T5: branch and PR writer
   probe/      T8: agent run against an API or MCP server
