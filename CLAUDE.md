@@ -21,8 +21,10 @@ into typed `Change` records; `src/tenon/locate/` turns a record into call sites 
 column, keeping anything unprovable in named ambiguity groups; `src/tenon/propose/` turns certain
 sites into a candidate diff and never applies it; `src/tenon/prove/` applies that diff to a copy,
 runs the user's check before and after, and records `TESTS_PASSED` or `UNVERIFIED` with a cause.
-Tests live in `tests/`. T5 (PR) is next. Nothing else in the pipeline exists — do not describe
-capability that isn't there yet.
+Tests live in `tests/`. T5 (PR) is next. The Phase 0 gate is met on one real case (Stripe
+`payment_method_types` → `allowed_payment_method_types` on `yezz123/stripe-template@9d9178c`,
+`TESTS_PASSED` on that repo's offline subset; `docs/planning/m0-3-real-case/evidence.md`). Nothing
+else in the pipeline exists — do not describe capability that isn't there yet.
 
 Lineage: one of three siblings scaffolded together on 2026-10-22 (with Assay and Pry) from a
 market-demand pass (`~/dev/at/ideas/market-demand-2026-10.md`). It answers the YC Fall 2026

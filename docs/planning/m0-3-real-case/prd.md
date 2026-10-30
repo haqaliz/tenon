@@ -4,7 +4,7 @@
 - **Capability:** Phase 0 gate **M0.3** (`docs/ROADMAP.md`) plus the smallest T2 follow-on it needs
 - **Milestone:** closes the Phase 0 gate: one real API change, one real repo, one patch that passes a
   real check
-- **Status:** draft, awaiting the review gate
+- **Status:** approved by the user for implementation on 2026-10-31
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement
