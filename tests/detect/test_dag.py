@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tenon.detect.ingest import load
+from tenon.detect.ingest import load, parse
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "specs"
 
@@ -36,6 +36,35 @@ def test_two_refs_to_the_same_schema_are_one_object():
 
     properties = document["components"]["schemas"]["L0"]["properties"]
     assert properties["a"] is properties["b"]
+
+
+def test_a_ref_to_a_component_is_the_component_object():
+    document = parse(
+        "openapi: 3.1.0\n"
+        "paths: {}\n"
+        "components:\n"
+        "  schemas:\n"
+        "    User: {type: object}\n"
+        "x-alias: {$ref: '#/components/schemas/User'}\n",
+        "<inline>",
+    )
+
+    assert document["x-alias"] is document["components"]["schemas"]["User"]
+
+
+def test_two_refs_to_a_list_share_the_list():
+    document = parse(
+        "openapi: 3.1.0\n"
+        "paths: {}\n"
+        "x-list: [1, 2]\n"
+        "x-refs:\n"
+        "  a: {$ref: '#/x-list'}\n"
+        "  b: {$ref: '#/x-list'}\n",
+        "<inline>",
+    )
+
+    assert document["x-refs"]["a"] is document["x-refs"]["b"]
+    assert document["x-refs"]["a"] is document["x-list"]
 
 
 @pytest.mark.xfail(
