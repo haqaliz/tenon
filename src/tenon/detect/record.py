@@ -163,9 +163,10 @@ def _canonical(value: Any) -> str:
 
 @dataclass(frozen=True, slots=True)
 class DiffResult:
-    """Canonically ordered changes, serialisable byte-stably."""
+    """Canonically ordered changes and skipped subtrees, serialisable byte-stably."""
 
     changes: Sequence[Change]
+    unanalyzed: Sequence[Unanalyzed] = ()
 
     def __post_init__(self) -> None:
         ordered = sorted(
@@ -178,9 +179,17 @@ class DiffResult:
             ),
         )
         object.__setattr__(self, "changes", tuple(ordered))
+        unanalyzed = sorted(
+            set(self.unanalyzed),
+            key=lambda entry: (entry.pointer, entry.reason.value),
+        )
+        object.__setattr__(self, "unanalyzed", tuple(unanalyzed))
 
     def to_dict(self) -> dict[str, object]:
-        return {"changes": [change.to_dict() for change in self.changes]}
+        return {
+            "changes": [change.to_dict() for change in self.changes],
+            "unanalyzed": [entry.to_dict() for entry in self.unanalyzed],
+        }
 
     def to_json(self) -> str:
         return json.dumps(
