@@ -16,7 +16,7 @@ Milestone order is my proposal; reorder freely.
 |---|---|---|---|
 | M0.1 | OpenAPI differ (T1) | Two spec versions diff into typed change records (removed, renamed, required-added, type-changed); unparseable input is a named refusal | **Shipped 2026-10-26** (`src/tenon/detect/`, 136 tests) |
 | M0.2 | Python call-site locator (T2) | Given a change, finds usages in a Python repo with file and line; ambiguity is reported, never guessed | **Shipped 2026-10-29** (`src/tenon/locate/`, 207 tests) |
-| M0.3 | One end-to-end case | A real public SDK change applied to a real repo, with the repo's tests as proof | **Blocked:** T1 eager `$ref` expansion; the readable Twilio pair has no fixable change (see `docs/planning/real-spec-readability/evidence.md`) |
+| M0.3 | One end-to-end case | A real public SDK change applied to a real repo, with the repo's tests as proof | **Ready:** T1 reads Stripe `v2500` -> `v2596` (one real rename); the repo run is the next card (`docs/planning/lazy-ref-resolution/evidence.md`) |
 
 ## Phase 1: OSS core (weeks 4-8)
 
