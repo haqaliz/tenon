@@ -5,8 +5,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-import pytest
-
 from tenon.detect.ingest import load, parse
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "specs"
@@ -67,13 +65,9 @@ def test_two_refs_to_a_list_share_the_list():
     assert document["x-refs"]["a"] is document["x-list"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="aspect 2 replaces canonical hashing; json.dumps expands a DAG",
-)
 def test_diffing_the_dag_reports_the_deep_change_once():
-    # Out of process so the current exponential hash fails instead of hanging
-    # the suite; aspect 2 makes the in-process diff linear.
+    # Out of process so a regression to exponential hashing times out instead
+    # of hanging the suite.
     script = textwrap.dedent(
         f"""
         from tenon.detect import ChangeKind, diff

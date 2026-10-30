@@ -7,8 +7,6 @@ from .record import (
     ChangeKind,
     DiffResult,
     Location,
-    RefusalCode,
-    SpecRefusal,
     Unanalyzed,
     UnanalyzedReason,
 )
@@ -647,27 +645,12 @@ def _schemas_of(document: dict) -> dict:
     return schemas if isinstance(schemas, dict) else {}
 
 
-def _component_canons(document: dict) -> frozenset[str]:
-    schemas = _schemas_of(document)
-    canons: set[str] = set()
-    for name in sorted(schemas):
-        try:
-            canons.add(_canonical(schemas[name]))
-        except ValueError:
-            raise SpecRefusal(
-                RefusalCode.UNRESOLVED_REF,
-                f"#/components/schemas/{_escape(name)}",
-                message="cyclic schema structure",
-            ) from None
-    return frozenset(canons)
-
-
 class _SchemaContext:
-    """Per-diff state: resolved component signatures and the recursion guard."""
+    """Per-diff state: component identities and the recursion guard."""
 
     def __init__(self, old_document: dict, new_document: dict) -> None:
-        self.old_canons = _component_canons(old_document)
-        self.new_canons = _component_canons(new_document)
+        self.old_ids = {id(schema) for schema in _schemas_of(old_document).values()}
+        self.new_ids = {id(schema) for schema in _schemas_of(new_document).values()}
         self.active: set[tuple[int, int]] = set()
         self.unanalyzed: list[Unanalyzed] = []
 
@@ -678,16 +661,11 @@ class _SchemaContext:
             self.unanalyzed.append(entry)
 
     def is_component_copy(self, old: object, new: object) -> bool:
-        """True when both sides are resolved copies of a component schema.
+        """True when both sides are the same resolved component objects.
 
         Such a subtree is reported once, at ``components``, not once per use.
         """
-        if not (self.old_canons or self.new_canons):
-            return False
-        try:
-            return _canonical(old) in self.old_canons and _canonical(new) in self.new_canons
-        except ValueError:
-            return False
+        return id(old) in self.old_ids and id(new) in self.new_ids
 
 
 def _diff_components(
