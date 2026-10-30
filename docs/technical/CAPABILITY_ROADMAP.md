@@ -50,7 +50,9 @@ returns `certain` sites plus ambiguity groups with named reasons (`DYNAMIC_KWARG
 Known limits at this level: an SDK-shaped repo is assumed (a raw `requests`/`httpx` client yields
 `NO_SDK_IMPORT`); aliases resolve one hop past an assignment-created alias; operation-scoped field
 changes report only the resolved call's arguments; `AMBIGUOUS_CALL_SITE` is the aggregate cause T4
-will report, not a T2 output.
+will report, not a T2 output. Mocked-operation assertion keywords are located for
+`assert_called_with` / `assert_called_once_with`; `call_args.kwargs["field"]`, `call_args[1]["field"]`
+and `assert_has_calls` are not.
 
 ### T3 as built (2026-10-29)
 

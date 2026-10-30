@@ -15,6 +15,7 @@ from typing import Sequence
 from .result import SiteShape
 
 _SKIP_DIRECTORIES = frozenset({".venv", "node_modules", "build", "dist", "__pycache__"})
+_MOCK_ASSERTIONS = frozenset({"assert_called_with", "assert_called_once_with"})
 
 
 class DynamicKind(StrEnum):
@@ -546,6 +547,9 @@ class _Visitor(ast.NodeVisitor):
         rooted_call = rooted or (
             self._is_getattr(node.func) and self._rooted_expr(node.func.args[0])
         )
+        attributed = chain
+        if rooted_call and len(chain) > 1 and chain[-1] in _MOCK_ASSERTIONS:
+            attributed = chain[:-1]
         for keyword in node.keywords:
             if keyword.arg is None:
                 if rooted_call:
@@ -562,7 +566,7 @@ class _Visitor(ast.NodeVisitor):
                 keyword,
                 SiteShape.KEYWORD,
                 keyword.arg,
-                chain if rooted_call else (),
+                attributed if rooted_call else (),
                 rooted_call,
             )
         if rooted_call:

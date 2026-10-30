@@ -21,6 +21,7 @@ from tenon.locate import (
     ScanResult,
     Site,
     SiteShape,
+    locate,
     scan,
 )
 from tenon.locate.resolve import _build, resolve
@@ -32,6 +33,7 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
 SDK_BASIC = FIXTURES / "sdk-basic"
 SDK_DECOY = FIXTURES / "sdk-decoy"
 SDK_DYNAMIC = FIXTURES / "sdk-dynamic"
+SDK_MOCK_ASSERT = FIXTURES / "sdk-mock-assert"
 
 
 def a_change(
@@ -246,6 +248,33 @@ def test_must_exist_certainty_is_the_matching_rooted_keyword():
     assert result.certain == (
         Site("m.py", 5, 23, SiteShape.KEYWORD, "amount"),
     )
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+def test_a_mock_assertion_keyword_is_certain_for_an_operation_rename():
+    change = a_change(
+        ChangeKind.RENAMED,
+        before="payment_method_types",
+        after="allowed_payment_method_types",
+        pointer=(
+            "#/paths/~1v1~1checkout~1sessions/post/requestBody/content/"
+            "application~1x-www-form-urlencoded/schema/properties"
+        ),
+        method="post",
+        path="/v1/checkout/sessions",
+    )
+    config = LocateConfig(
+        sdk_package="stripe",
+        operations={"POST /v1/checkout/sessions": "checkout.Session.create"},
+    )
+
+    result = locate(change, SDK_MOCK_ASSERT, config)
+
+    assert [(site.path, site.symbol) for site in result.certain] == [
+        ("app.py", "payment_method_types"),
+        ("tests/test_app.py", "payment_method_types"),
+    ]
     assert result.ambiguous == ()
     assert result.reason is None
 
