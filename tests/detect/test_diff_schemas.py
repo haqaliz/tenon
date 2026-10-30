@@ -1,8 +1,6 @@
 from pathlib import Path
 
-import pytest
-
-from tenon.detect import ChangeKind, RefusalCode, SpecRefusal, diff
+from tenon.detect import ChangeKind, UnanalyzedReason, diff
 from tenon.detect.ingest import load
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "specs"
@@ -248,22 +246,30 @@ def cyclic_document(schema):
     }
 
 
-def test_cyclic_schema_structure_is_refused_not_silently_stopped():
+def test_an_identity_cycle_is_recorded_not_refused():
     schema = {"type": "object", "properties": {}}
     schema["properties"]["self"] = schema
 
-    with pytest.raises(SpecRefusal) as caught:
-        diff(cyclic_document(schema), cyclic_document(schema))
+    result = diff(cyclic_document(schema), cyclic_document(schema))
 
-    assert caught.value.code is RefusalCode.UNRESOLVED_REF
-    assert "cyclic" in caught.value.message
+    assert result.changes == ()
+    assert [(entry.pointer, entry.reason) for entry in result.unanalyzed] == [
+        (
+            "#/paths/~1x/get/responses/200/content/application~1json/schema/properties/self",
+            UnanalyzedReason.CYCLIC_REF,
+        )
+    ]
 
 
-def test_a_lingering_ref_is_refused():
+def test_a_lingering_ref_is_recorded_as_unanalyzed():
     document = cyclic_document({"$ref": "#/components/schemas/X"})
 
-    with pytest.raises(SpecRefusal) as caught:
-        diff(document, document)
+    result = diff(document, document)
 
-    assert caught.value.code is RefusalCode.UNRESOLVED_REF
-    assert caught.value.pointer.endswith("/schema/$ref")
+    assert result.changes == ()
+    assert [(entry.pointer, entry.reason) for entry in result.unanalyzed] == [
+        (
+            "#/paths/~1x/get/responses/200/content/application~1json/schema",
+            UnanalyzedReason.CYCLIC_REF,
+        )
+    ]

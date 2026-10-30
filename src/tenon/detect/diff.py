@@ -9,6 +9,8 @@ from .record import (
     Location,
     RefusalCode,
     SpecRefusal,
+    Unanalyzed,
+    UnanalyzedReason,
 )
 from .rename import infer_renames
 
@@ -31,7 +33,7 @@ def diff(old: dict, new: dict) -> DiffResult:
     context = _SchemaContext(old, new)
     _diff_paths(old.get("paths") or {}, new.get("paths") or {}, context, changes)
     _diff_components(old, new, context, changes)
-    return DiffResult(infer_renames(changes))
+    return DiffResult(infer_renames(changes), context.unanalyzed)
 
 
 def _methods(path_item: object) -> tuple[str, ...]:
@@ -206,20 +208,23 @@ _PLAIN_SCHEMA_KEYS = frozenset(
 )
 
 
-def _flatten(schema: object, pointer: str, active: set[int] | None = None) -> dict:
+def _flatten(
+    schema: object,
+    pointer: str,
+    context: "_SchemaContext",
+    active: set[int] | None = None,
+) -> dict | None:
     """Return the schema with any plain ``allOf`` merged into one object schema.
 
     ``oneOf``, ``anyOf``, ``discriminator`` and any non-plain ``allOf`` refuse at the
     pointer that carries them; a subtree we cannot analyze is never skipped.
+    A ``$ref`` marker records ``CYCLIC_REF`` at ``pointer`` and returns ``None``.
     """
     if not isinstance(schema, dict):
         return {}
     if "$ref" in schema:
-        raise SpecRefusal(
-            RefusalCode.UNRESOLVED_REF,
-            f"{pointer}/$ref",
-            message="unresolved $ref in a resolved document",
-        )
+        context.record(pointer, UnanalyzedReason.CYCLIC_REF)
+        return None
     for keyword in ("oneOf", "anyOf", "discriminator"):
         if keyword in schema:
             raise SpecRefusal(
@@ -233,9 +238,8 @@ def _flatten(schema: object, pointer: str, active: set[int] | None = None) -> di
     if active is None:
         active = set()
     if id(schema) in active:
-        raise SpecRefusal(
-            RefusalCode.UNRESOLVED_REF, pointer, message="cyclic schema structure"
-        )
+        context.record(pointer, UnanalyzedReason.CYCLIC_REF)
+        return None
     active.add(id(schema))
     try:
         members = schema["allOf"]
@@ -277,7 +281,9 @@ def _flatten(schema: object, pointer: str, active: set[int] | None = None) -> di
 
         for index, member in enumerate(members):
             member_pointer = f"{pointer}/allOf/{index}"
-            flattened = _flatten(member, member_pointer, active)
+            flattened = _flatten(member, member_pointer, context, active)
+            if flattened is None:
+                continue
             extra = set(flattened) - _PLAIN_SCHEMA_KEYS
             if extra:
                 raise SpecRefusal(
@@ -389,11 +395,13 @@ def _diff_parameters(
             continue
 
         old_schema = _flatten(
-            old_param.get("schema"), f"{old_pointer}/{old_index}/schema"
+            old_param.get("schema"), f"{old_pointer}/{old_index}/schema", context
         )
         new_schema = _flatten(
-            param.get("schema"), f"{pointer}/{new_index}/schema"
+            param.get("schema"), f"{pointer}/{new_index}/schema", context
         )
+        if old_schema is None or new_schema is None:
+            continue
         old_basis = _type_basis(old_schema)
         new_basis = _type_basis(new_schema)
         if old_basis != new_basis:
@@ -499,9 +507,8 @@ def _diff_schema(
 ) -> None:
     pair = (id(old), id(new))
     if pair in context.active:
-        raise SpecRefusal(
-            RefusalCode.UNRESOLVED_REF, pointer, message="cyclic schema structure"
-        )
+        context.record(pointer, UnanalyzedReason.CYCLIC_REF)
+        return
     context.active.add(pair)
     try:
         _diff_schema_node(
@@ -534,19 +541,13 @@ def _diff_schema_node(
     old_schema = old if isinstance(old, dict) else {}
     new_schema = new if isinstance(new, dict) else {}
 
-    for schema in (old_schema, new_schema):
-        if "$ref" in schema:
-            raise SpecRefusal(
-                RefusalCode.UNRESOLVED_REF,
-                f"{pointer}/$ref",
-                message="unresolved $ref in a resolved document",
-            )
-
     if not root and context.is_component_copy(old_schema, new_schema):
         return
 
-    old_schema = _flatten(old_schema, pointer)
-    new_schema = _flatten(new_schema, pointer)
+    old_schema = _flatten(old_schema, pointer, context)
+    new_schema = _flatten(new_schema, pointer, context)
+    if old_schema is None or new_schema is None:
+        return
 
     record_pointer = enclosing or pointer
     old_basis = _type_basis(old_schema)
@@ -693,6 +694,13 @@ class _SchemaContext:
         self.old_canons = _component_canons(old_document)
         self.new_canons = _component_canons(new_document)
         self.active: set[tuple[int, int]] = set()
+        self.unanalyzed: list[Unanalyzed] = []
+
+    def record(self, pointer: str, reason: UnanalyzedReason) -> None:
+        """Remember a skipped subtree once per ``(pointer, reason)``."""
+        entry = Unanalyzed(pointer, reason)
+        if entry not in self.unanalyzed:
+            self.unanalyzed.append(entry)
 
     def is_component_copy(self, old: object, new: object) -> bool:
         """True when both sides are resolved copies of a component schema.
