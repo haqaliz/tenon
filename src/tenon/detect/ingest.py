@@ -12,6 +12,11 @@ _LOCAL_REF = re.compile(r"#(?:/(?:[^~]|~[01])*)*")
 
 
 def parse(text: str, source: str) -> dict:
+    """Return the resolved document for ``text``, or refuse it by name.
+
+    The document may share subtrees (it is a DAG); do not ``json.dumps`` it,
+    because that expands the shared nodes exponentially.
+    """
     if not text.strip():
         raise SpecRefusal(RefusalCode.UNPARSEABLE, message=f"{source}: empty document")
     try:
@@ -57,11 +62,17 @@ def _escape(token: str) -> str:
 
 
 def resolve_refs(document: dict) -> dict:
-    """Return a fresh document with every local ``$ref`` replaced by its target.
+    """Return the document with every local ``$ref`` replaced by its target.
+
+    Every raw dict/list resolves once and is shared, so the result is a DAG:
+    two refs to the same node return the same object. Do not serialise it;
+    ``json.dumps`` expands the shared subtrees exponentially.
 
     A back-edge is left as ``{"$ref": ref}``: inlining it again would add no
     depth, and the marker is what the differ reports as unanalyzed.
     """
+    cache: dict[int, object] = {}
+    active: set[int] = set()  # raw node ids on the current resolution path
 
     def lookup(ref: str):
         node = document
@@ -75,26 +86,7 @@ def resolve_refs(document: dict) -> dict:
                 ) from None
         return node
 
-    def walk(node, pointer: str, chain: tuple[str, ...]):
-        if isinstance(node, dict):
-            if "$ref" in node:
-                return deref(node["$ref"], f"{pointer}/$ref", chain)
-            # The current node is part of the document being expanded, so a ref
-            # back to it closes a cycle here, at its first nested occurrence.
-            nested = (*chain, pointer)
-            return {
-                key: walk(value, f"{pointer}/{_escape(str(key))}", nested)
-                for key, value in node.items()
-            }
-        if isinstance(node, list):
-            nested = (*chain, pointer)
-            return [
-                walk(item, f"{pointer}/{index}", nested)
-                for index, item in enumerate(node)
-            ]
-        return node
-
-    def deref(ref, where: str, chain: tuple[str, ...]):
+    def target_of(ref, where: str):
         if not isinstance(ref, str):
             raise SpecRefusal(
                 RefusalCode.UNRESOLVED_REF,
@@ -113,14 +105,60 @@ def resolve_refs(document: dict) -> dict:
                 where,
                 message=f"not a JSON pointer: {ref!r}",
             )
-        if ref in chain:
-            return {"$ref": ref}
-        return walk(lookup(ref), ref, (*chain, ref))
+        return lookup(ref)
 
-    return walk(document, "#", ())
+    def walk(node, pointer: str):
+        if not isinstance(node, (dict, list)):
+            return node
+        key = id(node)
+        if key in cache:
+            return cache[key]
+        if isinstance(node, dict) and "$ref" in node:
+            ref = node["$ref"]
+            target = target_of(ref, f"{pointer}/$ref")
+            if not isinstance(target, (dict, list)):
+                return target
+            target_key = id(target)
+            if target_key in cache:
+                return cache[target_key]
+            if target_key in active:
+                return {"$ref": ref}
+            active.add(target_key)
+            try:
+                resolved = walk(target, ref)
+            finally:
+                active.discard(target_key)
+            # A marker belongs to the back-edge that produced it; sharing it
+            # would give another back-edge the wrong ref string.
+            if isinstance(resolved, dict) and "$ref" in resolved:
+                return resolved
+            cache[key] = resolved
+            return resolved
+        active.add(key)
+        try:
+            if isinstance(node, dict):
+                resolved = {
+                    child: walk(value, f"{pointer}/{_escape(str(child))}")
+                    for child, value in node.items()
+                }
+            else:
+                resolved = [
+                    walk(item, f"{pointer}/{index}")
+                    for index, item in enumerate(node)
+                ]
+        finally:
+            active.discard(key)
+        cache[key] = resolved
+        return resolved
+
+    return walk(document, "#")
 
 
 def load(path: str | Path) -> dict:
+    """Read ``path`` and return the resolved document from :func:`parse`.
+
+    The document may share subtrees; do not ``json.dumps`` it.
+    """
     path = Path(path)
     try:
         text = path.read_text(encoding="utf-8")
