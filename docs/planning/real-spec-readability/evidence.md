@@ -54,6 +54,11 @@ This is an ingest/resolver issue, not a composition-readability one. The composi
 is exercised by the committed fixtures below. M0.3 stays blocked until ref resolution is bounded;
 that is a separate performance card, as the PRD anticipated.
 
+**Update 2026-10-31:** ref resolution is now bounded (memoised per raw node). The Stripe pair
+`v2500` -> `v2596` loads in 3.8/4.2 s and diffs in 0.23 s with one real rename; see
+`docs/planning/lazy-ref-resolution/evidence.md`. The measurements above remain the record of the
+eager resolver.
+
 ## 2. Composition fixture pair
 
 `composition-skip-old.yaml` -> `composition-skip-new.yaml` (`Payment` with a `oneOf` `method` and a
@@ -83,13 +88,17 @@ The `anyOf`, `discriminator` and non-plain `allOf` tests each record exactly one
 | unanalyzed | 0 (`()`) |
 | load + diff | 0.19 s |
 
-## 4. Remaining blockers for M0.3
+## 4. Blocker list for M0.3 (updated 2026-10-31)
 
-1. **Ref expansion (new, blocking).** `resolve_refs` materialises the shared-ref DAG; the Stripe
+1. ~~**Ref expansion (new, blocking).** `resolve_refs` materialises the shared-ref DAG; the Stripe
    document needs roughly 6.5e11 nodes. A lazy or memoised resolution that the differ can walk
-   without expanding each occurrence is required before the real run can produce numbers.
+   without expanding each occurrence is required before the real run can produce numbers.~~
+   **Fixed 2026-10-31.** `resolve_refs` memoises per raw node; the real `v2500` -> `v2596` run
+   produces 289 changes, 52 breaking and one rename. See
+   `docs/planning/lazy-ref-resolution/evidence.md`.
 2. **T3 rule coverage.** The readable Twilio pair still has zero renames over 2.3 years, so the
-   gate has nothing to act on even when a spec loads.
+   gate has nothing to act on even when a spec loads. The Stripe pair now supplies one rename, but
+   no rule or repo run has exercised it yet.
 3. **`format` false positives.** `int32 -> int64` is still reported as breaking; out of scope for
    this card.
 

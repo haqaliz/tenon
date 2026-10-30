@@ -194,16 +194,15 @@ def test_a_shared_component_reports_one_change_not_one_per_operation():
 
 def test_a_component_used_as_a_parameter_schema_reports_one_change():
     def document(kind):
+        schema = {"type": kind}
         operation = {
-            "parameters": [
-                {"name": "q", "in": "query", "schema": {"type": kind}}
-            ],
+            "parameters": [{"name": "q", "in": "query", "schema": schema}],
             "responses": {},
         }
         return {
             "openapi": "3.0.3",
             "paths": {"/a": {"get": operation}, "/b": {"get": operation}},
-            "components": {"schemas": {"Q": {"type": kind}}},
+            "components": {"schemas": {"Q": schema}},
         }
 
     result = diff(document("string"), document("integer"))

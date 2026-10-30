@@ -1,0 +1,161 @@
+openapi: 3.1.0
+info:
+  title: Thirty-level DAG
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    L0:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L1'}
+        b: {$ref: '#/components/schemas/L1'}
+    L1:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L2'}
+        b: {$ref: '#/components/schemas/L2'}
+    L2:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L3'}
+        b: {$ref: '#/components/schemas/L3'}
+    L3:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L4'}
+        b: {$ref: '#/components/schemas/L4'}
+    L4:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L5'}
+        b: {$ref: '#/components/schemas/L5'}
+    L5:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L6'}
+        b: {$ref: '#/components/schemas/L6'}
+    L6:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L7'}
+        b: {$ref: '#/components/schemas/L7'}
+    L7:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L8'}
+        b: {$ref: '#/components/schemas/L8'}
+    L8:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L9'}
+        b: {$ref: '#/components/schemas/L9'}
+    L9:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L10'}
+        b: {$ref: '#/components/schemas/L10'}
+    L10:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L11'}
+        b: {$ref: '#/components/schemas/L11'}
+    L11:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L12'}
+        b: {$ref: '#/components/schemas/L12'}
+    L12:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L13'}
+        b: {$ref: '#/components/schemas/L13'}
+    L13:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L14'}
+        b: {$ref: '#/components/schemas/L14'}
+    L14:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L15'}
+        b: {$ref: '#/components/schemas/L15'}
+    L15:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L16'}
+        b: {$ref: '#/components/schemas/L16'}
+    L16:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L17'}
+        b: {$ref: '#/components/schemas/L17'}
+    L17:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L18'}
+        b: {$ref: '#/components/schemas/L18'}
+    L18:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L19'}
+        b: {$ref: '#/components/schemas/L19'}
+    L19:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L20'}
+        b: {$ref: '#/components/schemas/L20'}
+    L20:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L21'}
+        b: {$ref: '#/components/schemas/L21'}
+    L21:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L22'}
+        b: {$ref: '#/components/schemas/L22'}
+    L22:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L23'}
+        b: {$ref: '#/components/schemas/L23'}
+    L23:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L24'}
+        b: {$ref: '#/components/schemas/L24'}
+    L24:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L25'}
+        b: {$ref: '#/components/schemas/L25'}
+    L25:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L26'}
+        b: {$ref: '#/components/schemas/L26'}
+    L26:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L27'}
+        b: {$ref: '#/components/schemas/L27'}
+    L27:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L28'}
+        b: {$ref: '#/components/schemas/L28'}
+    L28:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L29'}
+        b: {$ref: '#/components/schemas/L29'}
+    L29:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/L30'}
+        b: {$ref: '#/components/schemas/L30'}
+    L30:
+      type: object
+      properties:
+        value: {type: string}

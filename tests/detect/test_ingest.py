@@ -134,6 +134,23 @@ def test_cyclic_ref_chain_leaves_a_marker_at_the_back_edge():
     schemas = document["components"]["schemas"]
     assert schemas["A"] == {"$ref": "#/components/schemas/B"}
     assert schemas["B"] == {"$ref": "#/components/schemas/A"}
+    # A marker belongs to its own back-edge, so the two refs stay distinct.
+    assert schemas["A"] is not schemas["B"]
+
+
+def test_a_document_without_refs_is_unchanged():
+    document = parse(
+        "openapi: 3.1.0\n"
+        "info: {title: plain, version: '1'}\n"
+        "paths: {}\n",
+        "<inline>",
+    )
+
+    assert document == {
+        "openapi": "3.1.0",
+        "info": {"title": "plain", "version": "1"},
+        "paths": {},
+    }
 
 
 def test_self_referential_node_resolves_everything_but_the_back_edge():

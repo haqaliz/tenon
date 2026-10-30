@@ -26,9 +26,12 @@ pairs only unambiguous removed/added records. Bad input is a named refusal with 
 Known limits at this level: a subtree carrying an unsupported composition keyword, or a cyclic
 `$ref`, is skipped and recorded in `DiffResult.unanalyzed` rather than refusing the document; added
 optional *parameters* produce no record (no `parameter_added` kind); request-body/media-type/response
-add-remove and `additionalProperties` are not walked. A real Twilio pair is committed; a rich spec
-like Stripe still cannot load because eager `$ref` inlining expands its shared-ref DAG to ~6.5e11
-nodes (`docs/planning/real-spec-readability/evidence.md`).
+add-remove and `additionalProperties` are not walked. Resolution is memoised per raw node, so a
+shared-ref DAG stays linear: the real Stripe `v2500` -> `v2596` pair loads in 3.8/4.2 s and diffs in
+0.23 s into 289 changes, 52 breaking and one real rename
+(`docs/planning/lazy-ref-resolution/evidence.md`). Composition subtrees are still skipped and
+recorded: 1,867 of the run's 1,873 `unanalyzed` entries are `UNSUPPORTED_COMPOSITION`, the other 6
+are cycle markers. A real Twilio pair remains committed as the offline guard.
 
 ## Sequencing
 
