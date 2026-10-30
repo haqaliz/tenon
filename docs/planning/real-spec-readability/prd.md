@@ -30,7 +30,7 @@ who must know that a diff is partial.
    `CYCLIC_REF` at that subtree and continues.
 4. **Structural refusals stay.** Not-a-spec, unsupported version, unparseable input, external refs
    and unresolved pointers still raise `SpecRefusal`.
-5. **No regression.** 569 existing tests, updated only where the refusal contract intentionally
+5. **No regression.** 565 existing tests, updated only where the refusal contract intentionally
    changed; determinism and byte-stability preserved.
 
 Measured by fixtures in `tests/detect/` plus one manual run against the real Stripe document.
@@ -123,6 +123,13 @@ result.to_json()     # byte-stable; includes both lists
   time. If it is unusable, that is a separate performance card, not a readability one.
 - **Open question — should `unanalyzed` block a "verified" PR?** Product decision for T5/T7. This
   card provides the data; it does not decide the policy.
+
+## Outcome (2026-10-30)
+
+Composition skip and cycle tolerance shipped with the `unanalyzed` contract; 593 tests green. The
+real Stripe acceptance was **not** met: `load` aborts in `resolve_refs`, which eagerly inlines the
+shared-ref DAG to ~652 billion nodes. Composition was not the remaining blocker; ref resolution is.
+The evidence records the measurement and the next card is `lazy-ref-resolution`.
 
 ## Out of Scope
 

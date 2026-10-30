@@ -38,3 +38,12 @@ byte-stable.
 
 Not this card: semantic `oneOf`/`anyOf` comparison; the `format`-based type false positive; any T3
 rule; re-running M0.3 (the next card).
+
+## Outcome (2026-10-30)
+
+- **Shipped:** `DiffResult.unanalyzed`, cycle tolerance (`$ref` markers + `CYCLIC_REF`), and
+  per-subtree composition skip (`UNSUPPORTED_COMPOSITION`). 593 tests green.
+- **Not met:** the real Stripe document still cannot load. With cycles and composition handled,
+  `resolve_refs` remains the blocker: eager inlining of the shared-ref DAG expands to ~652 billion
+  nodes (evidence: `docs/planning/real-spec-readability/evidence.md`).
+- **Next:** `lazy-ref-resolution` (T1 resolver), then re-run M0.3. The gate stays blocked.

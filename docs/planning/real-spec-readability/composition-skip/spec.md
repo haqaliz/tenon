@@ -48,7 +48,7 @@ subtree, record why, and never manufacture a change from an unanalyzed pair.
 5. The real Stripe `v2590` document loads and diffs; `unanalyzed` is non-empty; the run is recorded
    with counts and time. No network in the test suite.
 6. `to_json()` is byte-stable across hash seeds with skips present.
-7. Full suite green (569 baseline, updated where the refusal contract changed).
+7. Full suite green (565 baseline, updated where the refusal contract changed).
 
 ## Dependencies & sequencing
 
