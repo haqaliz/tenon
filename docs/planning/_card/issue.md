@@ -1,52 +1,40 @@
-# Card: feat/stripe-real-case
+# Card: feat/real-spec-readability
 
 - **Source:** FALLBACK — no GitHub issue.
 - **Owner:** aliz
 - **Type:** feat
-- **Milestone:** **M0.3 — one end-to-end case** (`docs/ROADMAP.md`, the Phase 0 gate)
-- **Capabilities exercised:** T1-T4 (all shipped)
-- **Branch:** `feat/stripe-real-case/aliz`
-- **Worktree:** `.claude/worktrees/feat-stripe-real-case`
+- **Capability:** **T1 follow-on slice** — real-spec readability (`docs/technical/CAPABILITY_ROADMAP.md`)
+- **Milestone:** unblocks M0.3 (`docs/ROADMAP.md`)
+- **Branch:** `feat/real-spec-readability/aliz`
+- **Worktree:** `.claude/worktrees/feat-real-spec-readability`
 
-## Brief (from the `tenon-next` handoff)
+## Brief
 
-Vendor two dated Stripe OpenAPI snapshots and diff them with T1; pick a real OSS Python repo at a
-pinned commit that uses the Stripe SDK and has a green test command. Run the whole pipeline through
-the Python API and write an evidence record stating the repo, commit, spec versions, exact command,
-proof level, cause, and every skipped site. If the outcome is `UNVERIFIED`, end with a scoped
-follow-on slice and do not claim the gate.
+T1 currently refuses an entire document when it meets a cyclic `$ref` or a composition keyword it
+cannot analyze. The M0.3 dig (`docs/planning/stripe-real-case/evidence.md`) proved this makes every
+rich real vendor spec unusable: Stripe has a `file -> file_link -> file` cycle and 2,124 `anyOf` /
+354 `oneOf`.
 
-## Dig result (2026-10-30)
+Change the policy: tolerate cycles by leaving a `$ref` marker, skip only the subtree that carries an
+unsupported construct, and record every skipped subtree in a new `DiffResult.unanalyzed` list so
+nothing is silent. Keep refusing input that is not a spec, an unsupported version, unparseable YAML,
+external refs, and unresolved pointers.
 
-**The gate is blocked before the repo choice, by T1's real-spec policy.** Details and exact counts
-are in `docs/planning/stripe-real-case/evidence.md`.
-
-1. **Stripe refuses at load.** Both the v1-only and the v1+v2 spec at tag `v2590` raise
-   `UNRESOLVED_REF` on a cyclic `$ref` (`file -> file_link -> file`). Even if cycles were resolved,
-   the same document carries 2,124 `anyOf` and 354 `oneOf`, which T1 refuses wholesale by policy.
-2. **Twilio is readable but yields nothing T3 can fix.** `twilio_lookups_v2`, `twilio_verify_v2`
-   and `twilio_api_v2010` load and diff cleanly between tags `2.0.0` (2024-06-18) and `2.10.0`
-   (2026-10-12). Across 113 changes in `api_v2010` there are **no `renamed`, no endpoint removals
-   and no parameter removals**; the breaking records are `int -> int64` format noise, ten removed
-   enum schemas, one format change, and seven response pagination properties.
-3. **No repo was chosen.** Picking one would not change the outcome: the change classes above are
-   either not locatable as certain sites (response attributes) or have no rule in T3.
-
-## Committed evidence
-
-- `tests/fixtures/specs/twilio-lookups-2.0.0.json` and `-2.10.0.json` — the first real vendor spec
-  pair in the repository, offline.
-- `tests/detect/test_real_twilio_specs.py` — pins the real diff: 37 changes, three breaking schema
-  removals, zero renames.
+Acceptance: the real Stripe v2590 spec loads and diffs with a non-empty `unanalyzed` list; the
+committed Twilio pair still yields 37 changes and an empty list; a cycle fixture and a composition
+fixture each produce their change plus their recorded skip; the full suite is green; output stays
+byte-stable.
 
 ## Constraints carried in from the repo
 
-- `CLAUDE.md` §2: the gate is not met on an `UNVERIFIED` outcome; do not dress this up as a pass.
-- `CLAUDE.md` §3: machine-readable sources only; no changelog parsing.
-- `ARCHITECTURE.md`: T1 refuses rather than silently skipping a subtree. The refusal is doing its
-  job; the policy is the question.
+- `CLAUDE.md` §3: machine-readable sources first. This card widens what counts as readable, not what
+  counts as trusted.
+- `ARCHITECTURE.md`: "never silently skip a subtree". A recorded `unanalyzed` list is the price of
+  skipping; the alternative (refuse everything) is what this card removes.
+- `VISION.md`: honest labels. A diff with skipped subtrees must say so.
+- Risk `R3` (machine-readable changes are rare): this card is the precondition for measuring it.
 
 ## Scope fence
 
-Not this card: implementing composition or cycle support in T1 (a follow-on), choosing a different
-vendor to force a green run, or weakening the gate's definition.
+Not this card: semantic `oneOf`/`anyOf` comparison; the `format`-based type false positive; any T3
+rule; re-running M0.3 (the next card).
