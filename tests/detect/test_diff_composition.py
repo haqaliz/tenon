@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from tenon.detect import ChangeKind, RefusalCode, SpecRefusal, diff
+from tenon.detect import ChangeKind, UnanalyzedReason, diff
 from tenon.detect.ingest import load
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "specs"
@@ -11,21 +11,12 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "specs"
 def name_of(payload):
     return payload.get("name") if isinstance(payload, dict) else payload
 
+
+def unanalyzed(result):
+    return [(entry.pointer, entry.reason) for entry in result.unanalyzed]
+
+
 BODY = "#/paths/~1pets/post/requestBody/content/application~1json/schema"
-
-
-def one_of_parameter_document(schema):
-    return {
-        "openapi": "3.0.3",
-        "paths": {
-            "/search": {
-                "get": {
-                    "parameters": [{"name": "q", "in": "query", "schema": schema}],
-                    "responses": {"200": {"description": "OK"}},
-                }
-            }
-        },
-    }
 
 
 def body_document(schema):
@@ -44,50 +35,89 @@ def body_document(schema):
     }
 
 
-def test_one_of_in_a_parameter_schema_refuses_at_the_exact_pointer():
-    with pytest.raises(SpecRefusal) as caught:
-        diff(
-            load(FIXTURES / "composition-oneof-old.yaml"),
-            load(FIXTURES / "composition-oneof-new.yaml"),
-        )
+def test_the_composition_pair_reports_the_sibling_change_and_the_skip():
+    result = diff(
+        load(FIXTURES / "composition-skip-old.yaml"),
+        load(FIXTURES / "composition-skip-new.yaml"),
+    )
 
-    assert caught.value.code is RefusalCode.UNSUPPORTED_COMPOSITION
-    assert caught.value.pointer == "#/paths/~1search/get/parameters/0/schema"
+    assert [
+        (change.kind, change.location.pointer, change.before, change.after)
+        for change in result.changes
+    ] == [
+        (
+            ChangeKind.PROPERTY_TYPE_CHANGED,
+            "#/components/schemas/Payment/properties",
+            {"name": "amount", "type": "integer", "format": None},
+            {"name": "amount", "type": "string", "format": None},
+        )
+    ]
+    assert unanalyzed(result) == [
+        (
+            "#/components/schemas/Payment/properties/method",
+            UnanalyzedReason.UNSUPPORTED_COMPOSITION,
+        )
+    ]
+
+
+def test_no_change_is_invented_from_the_skipped_one_of():
+    result = diff(
+        load(FIXTURES / "composition-skip-old.yaml"),
+        load(FIXTURES / "composition-skip-new.yaml"),
+    )
+
+    assert ChangeKind.PROPERTY_REMOVED not in {change.kind for change in result.changes}
+    assert "#/components/schemas/Payment/properties/method" not in {
+        change.location.pointer for change in result.changes
+    }
+
+
+def test_one_of_in_a_parameter_schema_is_skipped_at_the_exact_pointer():
+    result = diff(
+        load(FIXTURES / "composition-oneof-old.yaml"),
+        load(FIXTURES / "composition-oneof-new.yaml"),
+    )
+
+    assert result.changes == ()
+    assert unanalyzed(result) == [
+        ("#/paths/~1search/get/parameters/0/schema", UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+    ]
 
 
 @pytest.mark.parametrize("keyword", ["oneOf", "anyOf"])
-def test_union_keywords_refuse_at_the_schema_pointer(keyword):
-    schema = {keyword: [{"type": "string"}, {"type": "integer"}]}
+def test_union_keywords_are_skipped_at_the_schema_pointer(keyword):
+    old = body_document({keyword: [{"type": "string"}, {"type": "integer"}]})
+    new = body_document({"type": "string"})
 
-    with pytest.raises(SpecRefusal) as caught:
-        diff(body_document(schema), body_document({"type": "string"}))
+    result = diff(old, new)
 
-    assert caught.value.code is RefusalCode.UNSUPPORTED_COMPOSITION
-    assert caught.value.pointer == BODY
-    assert keyword in caught.value.message
+    assert result.changes == ()
+    assert unanalyzed(result) == [(BODY, UnanalyzedReason.UNSUPPORTED_COMPOSITION)]
 
 
-def test_discriminator_inside_all_of_refuses_at_the_member_pointer():
+def test_discriminator_inside_all_of_is_skipped_at_the_member_pointer():
     document = load(FIXTURES / "composition-discriminator.yaml")
 
-    with pytest.raises(SpecRefusal) as caught:
-        diff(document, document)
+    result = diff(document, document)
 
-    assert caught.value.code is RefusalCode.UNSUPPORTED_COMPOSITION
-    assert caught.value.pointer == f"{BODY}/allOf/1"
+    assert result.changes == ()
+    assert unanalyzed(result) == [
+        (f"{BODY}/allOf/1", UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+    ]
 
 
-def test_all_of_that_is_not_a_plain_merge_refuses():
+def test_all_of_that_is_not_a_plain_merge_is_skipped():
     schema = {"allOf": [{"type": "object"}, {"type": "array", "items": {"type": "string"}}]}
 
-    with pytest.raises(SpecRefusal) as caught:
-        diff(body_document(schema), body_document({"type": "object"}))
+    result = diff(body_document(schema), body_document({"type": "object"}))
 
-    assert caught.value.code is RefusalCode.UNSUPPORTED_COMPOSITION
-    assert caught.value.pointer == f"{BODY}/allOf/1"
+    assert result.changes == ()
+    assert unanalyzed(result) == [
+        (f"{BODY}/allOf/1", UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+    ]
 
 
-def test_conflicting_all_of_properties_refuse():
+def test_conflicting_all_of_properties_are_skipped():
     schema = {
         "allOf": [
             {"type": "object", "properties": {"id": {"type": "string"}}},
@@ -95,11 +125,39 @@ def test_conflicting_all_of_properties_refuse():
         ]
     }
 
-    with pytest.raises(SpecRefusal) as caught:
-        diff(body_document(schema), body_document({"type": "object"}))
+    result = diff(body_document(schema), body_document({"type": "object"}))
 
-    assert caught.value.code is RefusalCode.UNSUPPORTED_COMPOSITION
-    assert caught.value.pointer == f"{BODY}/allOf/1"
+    assert result.changes == ()
+    assert unanalyzed(result) == [
+        (f"{BODY}/allOf/1", UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+    ]
+
+
+def test_all_of_with_a_ref_member_skips_the_whole_merge():
+    old = body_document(
+        {
+            "allOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "name": {"type": "string"},
+                    },
+                },
+                {"$ref": "#/components/schemas/Node"},
+            ]
+        }
+    )
+    new = body_document(
+        {"type": "object", "properties": {"id": {"type": "string"}}}
+    )
+
+    result = diff(old, new)
+
+    assert result.changes == ()
+    assert unanalyzed(result) == [
+        (f"{BODY}/allOf/1", UnanalyzedReason.CYCLIC_REF)
+    ]
 
 
 def test_a_plain_all_of_merge_is_traversed():

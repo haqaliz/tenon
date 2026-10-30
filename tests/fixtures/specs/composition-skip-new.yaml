@@ -1,0 +1,19 @@
+openapi: 3.0.3
+info:
+  title: Composition skip new
+  version: 1.0.0
+paths: {}
+components:
+  schemas:
+    Payment:
+      type: object
+      properties:
+        amount:
+          type: string
+        method:
+          oneOf:
+            - type: string
+            - type: object
+              properties:
+                token:
+                  type: string

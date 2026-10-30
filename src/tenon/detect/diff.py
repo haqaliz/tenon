@@ -188,7 +188,7 @@ def _required(schema: dict) -> set[str]:
 
 
 # Keywords a plain allOf merge can carry; anything else is a composition we cannot
-# merge faithfully, so it is refused rather than guessed at.
+# merge faithfully, so it is skipped rather than guessed at.
 _PLAIN_SCHEMA_KEYS = frozenset(
     {
         "type",
@@ -216,9 +216,9 @@ def _flatten(
 ) -> dict | None:
     """Return the schema with any plain ``allOf`` merged into one object schema.
 
-    ``oneOf``, ``anyOf``, ``discriminator`` and any non-plain ``allOf`` refuse at the
-    pointer that carries them; a subtree we cannot analyze is never skipped.
-    A ``$ref`` marker records ``CYCLIC_REF`` at ``pointer`` and returns ``None``.
+    ``oneOf``, ``anyOf``, ``discriminator`` and any non-plain ``allOf`` record
+    ``UNSUPPORTED_COMPOSITION`` at ``pointer`` and return ``None``; the caller skips the
+    pair. A ``$ref`` marker records ``CYCLIC_REF`` and returns ``None``.
     """
     if not isinstance(schema, dict):
         return {}
@@ -227,11 +227,8 @@ def _flatten(
         return None
     for keyword in ("oneOf", "anyOf", "discriminator"):
         if keyword in schema:
-            raise SpecRefusal(
-                RefusalCode.UNSUPPORTED_COMPOSITION,
-                pointer,
-                message=f"{keyword} is not supported",
-            )
+            context.record(pointer, UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+            return None
     if "allOf" not in schema:
         return schema
 
@@ -248,33 +245,21 @@ def _flatten(
             or not members
             or not all(isinstance(member, dict) for member in members)
         ):
-            raise SpecRefusal(
-                RefusalCode.UNSUPPORTED_COMPOSITION,
-                pointer,
-                message="allOf is not a plain list of object schemas",
-            )
+            context.record(pointer, UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+            return None
 
         container = {key: value for key, value in schema.items() if key != "allOf"}
         extra = set(container) - _PLAIN_SCHEMA_KEYS
         if extra:
-            raise SpecRefusal(
-                RefusalCode.UNSUPPORTED_COMPOSITION,
-                pointer,
-                message=f"allOf is not a plain object merge: {sorted(extra)}",
-            )
+            context.record(pointer, UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+            return None
         if container.get("type") not in (None, "object"):
-            raise SpecRefusal(
-                RefusalCode.UNSUPPORTED_COMPOSITION,
-                pointer,
-                message="allOf is not a plain object merge: container type",
-            )
+            context.record(pointer, UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+            return None
         properties = container.get("properties") or {}
         if not isinstance(properties, dict):
-            raise SpecRefusal(
-                RefusalCode.UNSUPPORTED_COMPOSITION,
-                pointer,
-                message="allOf is not a plain object merge: container properties",
-            )
+            context.record(pointer, UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+            return None
         properties = dict(properties)
         required = _required(container)
         nullable = container.get("nullable") is True
@@ -283,34 +268,24 @@ def _flatten(
             member_pointer = f"{pointer}/allOf/{index}"
             flattened = _flatten(member, member_pointer, context, active)
             if flattened is None:
-                continue
+                return None
             extra = set(flattened) - _PLAIN_SCHEMA_KEYS
             if extra:
-                raise SpecRefusal(
-                    RefusalCode.UNSUPPORTED_COMPOSITION,
-                    member_pointer,
-                    message=f"allOf member is not a plain object merge: {sorted(extra)}",
-                )
+                context.record(member_pointer, UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+                return None
             if flattened.get("type") not in (None, "object"):
-                raise SpecRefusal(
-                    RefusalCode.UNSUPPORTED_COMPOSITION,
-                    member_pointer,
-                    message="allOf member is not a plain object merge: type",
-                )
+                context.record(member_pointer, UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+                return None
             member_properties = flattened.get("properties") or {}
             if not isinstance(member_properties, dict):
-                raise SpecRefusal(
-                    RefusalCode.UNSUPPORTED_COMPOSITION,
-                    member_pointer,
-                    message="allOf member is not a plain object merge: properties",
-                )
+                context.record(member_pointer, UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+                return None
             for prop, prop_schema in member_properties.items():
                 if prop in properties and properties[prop] != prop_schema:
-                    raise SpecRefusal(
-                        RefusalCode.UNSUPPORTED_COMPOSITION,
-                        member_pointer,
-                        message=f"allOf members declare {prop!r} differently",
+                    context.record(
+                        member_pointer, UnanalyzedReason.UNSUPPORTED_COMPOSITION
                     )
+                    return None
                 properties[prop] = prop_schema
             required |= _required(flattened)
             nullable = nullable or flattened.get("nullable") is True
