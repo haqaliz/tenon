@@ -1,0 +1,13 @@
+openapi: 3.0.3
+info: {title: two cycles, version: '1'}
+paths: {}
+components:
+  schemas:
+    A:
+      type: object
+      properties:
+        next: {$ref: '#/components/schemas/A'}
+    B:
+      type: object
+      properties:
+        next: {$ref: '#/components/schemas/B'}

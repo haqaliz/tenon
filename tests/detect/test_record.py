@@ -12,6 +12,8 @@ from tenon.detect import (
     Location,
     RefusalCode,
     SpecRefusal,
+    Unanalyzed,
+    UnanalyzedReason,
 )
 
 KINDS = [
@@ -175,7 +177,63 @@ def test_to_json_holds_only_json_primitives():
 
 
 def test_empty_result_serialises():
-    assert DiffResult([]).to_json() == '{"changes":[]}'
+    assert DiffResult([]).to_json() == '{"changes":[],"unanalyzed":[]}'
+
+
+def an_unanalyzed(
+    pointer="#/components/schemas/Node", reason=UnanalyzedReason.CYCLIC_REF
+):
+    return Unanalyzed(pointer=pointer, reason=reason)
+
+
+def test_diff_result_defaults_to_no_unanalyzed_subtrees():
+    result = DiffResult(some_changes())
+    assert result.unanalyzed == ()
+
+
+def test_diff_result_carries_unanalyzed_subtrees_as_a_tuple():
+    entry = an_unanalyzed()
+    result = DiffResult([], [entry])
+    assert isinstance(result.unanalyzed, tuple)
+    assert result.unanalyzed == (entry,)
+
+
+def test_unanalyzed_dedupes_by_pointer_and_reason():
+    entry = an_unanalyzed()
+    same_pointer_other_reason = an_unanalyzed(reason=UnanalyzedReason.UNRESOLVED_REF)
+    result = DiffResult([], [entry, entry, same_pointer_other_reason])
+    assert result.unanalyzed == (entry, same_pointer_other_reason)
+
+
+def test_unanalyzed_orders_canonically_from_any_insertion_order():
+    entries = [
+        an_unanalyzed("#/components/schemas/Zed"),
+        an_unanalyzed("#/components/schemas/Alpha", UnanalyzedReason.UNRESOLVED_REF),
+        an_unanalyzed("#/components/schemas/Alpha"),
+    ]
+    expected = DiffResult([], entries).unanalyzed
+    assert DiffResult([], list(reversed(entries))).unanalyzed == expected
+    assert [(entry.pointer, entry.reason) for entry in expected] == [
+        ("#/components/schemas/Alpha", UnanalyzedReason.CYCLIC_REF),
+        ("#/components/schemas/Alpha", UnanalyzedReason.UNRESOLVED_REF),
+        ("#/components/schemas/Zed", UnanalyzedReason.CYCLIC_REF),
+    ]
+
+
+def test_unanalyzed_does_not_perturb_change_ordering():
+    changes = some_changes()
+    with_skips = DiffResult(changes, [an_unanalyzed()])
+    assert with_skips.changes == DiffResult(changes).changes
+
+
+def test_unanalyzed_is_in_the_json():
+    parsed = json.loads(DiffResult([], [an_unanalyzed()]).to_json())
+    assert parsed == {
+        "changes": [],
+        "unanalyzed": [
+            {"pointer": "#/components/schemas/Node", "reason": "CYCLIC_REF"}
+        ],
+    }
 
 
 def test_to_json_ignores_dict_insertion_order_inside_values():
@@ -201,7 +259,14 @@ def test_to_json_ignores_dict_insertion_order_inside_values():
 
 
 SUBPROCESS_SCRIPT = """
-from tenon.detect import Change, ChangeKind, DiffResult, Location
+from tenon.detect import (
+    Change,
+    ChangeKind,
+    DiffResult,
+    Location,
+    Unanalyzed,
+    UnanalyzedReason,
+)
 
 before = {key: key for key in {"type", "format", "title", "description", "default"}}
 changes = [
@@ -216,7 +281,15 @@ changes = [
         after=before,
     ),
 ]
-print(DiffResult(changes).to_json(), end="")
+unanalyzed = [
+    Unanalyzed(pointer=pointer, reason=reason)
+    for pointer, reason in {
+        ("#/components/schemas/Zed", UnanalyzedReason.CYCLIC_REF),
+        ("#/components/schemas/Alpha", UnanalyzedReason.UNSUPPORTED_COMPOSITION),
+        ("#/components/schemas/Alpha", UnanalyzedReason.UNRESOLVED_REF),
+    }
+]
+print(DiffResult(changes, unanalyzed).to_json(), end="")
 """
 
 

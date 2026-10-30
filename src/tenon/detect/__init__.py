@@ -7,6 +7,8 @@ from .record import (
     Location,
     RefusalCode,
     SpecRefusal,
+    Unanalyzed,
+    UnanalyzedReason,
 )
 
 __all__ = [
@@ -16,6 +18,8 @@ __all__ = [
     "Location",
     "RefusalCode",
     "SpecRefusal",
+    "Unanalyzed",
+    "UnanalyzedReason",
     "diff",
     "load",
     "parse",

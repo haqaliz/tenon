@@ -1,0 +1,10 @@
+openapi: 3.0.3
+info: {title: cycle, version: '1'}
+paths: {}
+components:
+  schemas:
+    Node:
+      type: object
+      properties:
+        name: {type: integer}
+        child: {$ref: '#/components/schemas/Node'}

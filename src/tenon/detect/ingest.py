@@ -59,8 +59,8 @@ def _escape(token: str) -> str:
 def resolve_refs(document: dict) -> dict:
     """Return a fresh document with every local ``$ref`` replaced by its target.
 
-    Cycles are refused rather than resolved by identity: a partial document would
-    violate "no partial results" (spec open question).
+    A back-edge is left as ``{"$ref": ref}``: inlining it again would add no
+    depth, and the marker is what the differ reports as unanalyzed.
     """
 
     def lookup(ref: str):
@@ -79,13 +79,17 @@ def resolve_refs(document: dict) -> dict:
         if isinstance(node, dict):
             if "$ref" in node:
                 return deref(node["$ref"], f"{pointer}/$ref", chain)
+            # The current node is part of the document being expanded, so a ref
+            # back to it closes a cycle here, at its first nested occurrence.
+            nested = (*chain, pointer)
             return {
-                key: walk(value, f"{pointer}/{_escape(str(key))}", chain)
+                key: walk(value, f"{pointer}/{_escape(str(key))}", nested)
                 for key, value in node.items()
             }
         if isinstance(node, list):
+            nested = (*chain, pointer)
             return [
-                walk(item, f"{pointer}/{index}", chain)
+                walk(item, f"{pointer}/{index}", nested)
                 for index, item in enumerate(node)
             ]
         return node
@@ -110,10 +114,7 @@ def resolve_refs(document: dict) -> dict:
                 message=f"not a JSON pointer: {ref!r}",
             )
         if ref in chain:
-            trail = " -> ".join((*chain, ref))
-            raise SpecRefusal(
-                RefusalCode.UNRESOLVED_REF, ref, message=f"cyclic $ref: {trail}"
-            )
+            return {"$ref": ref}
         return walk(lookup(ref), ref, (*chain, ref))
 
     return walk(document, "#", ())

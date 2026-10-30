@@ -91,6 +91,37 @@ class Change:
         )
 
 
+class UnanalyzedReason(StrEnum):
+    """Why a subtree was skipped. The closed vocabulary from PRD M1."""
+
+    CYCLIC_REF = "CYCLIC_REF"
+    UNSUPPORTED_COMPOSITION = "UNSUPPORTED_COMPOSITION"
+    UNRESOLVED_REF = "UNRESOLVED_REF"
+
+
+@dataclass(frozen=True, slots=True)
+class Unanalyzed:
+    """A subtree the differ could not analyze, and why. Never silent."""
+
+    pointer: str
+    reason: UnanalyzedReason
+
+    def __post_init__(self) -> None:
+        if not _POINTER.fullmatch(self.pointer):
+            raise ValueError(f"not an RFC 6901 fragment pointer: {self.pointer!r}")
+        if not isinstance(self.reason, UnanalyzedReason):
+            object.__setattr__(self, "reason", UnanalyzedReason(self.reason))
+
+    def to_dict(self) -> dict[str, object]:
+        return {"pointer": self.pointer, "reason": self.reason.value}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> "Unanalyzed":
+        return cls(
+            pointer=str(data["pointer"]), reason=UnanalyzedReason(data["reason"])
+        )
+
+
 class RefusalCode(StrEnum):
     """The closed refusal vocabulary from PRD M7."""
 
@@ -132,9 +163,10 @@ def _canonical(value: Any) -> str:
 
 @dataclass(frozen=True, slots=True)
 class DiffResult:
-    """Canonically ordered changes, serialisable byte-stably."""
+    """Canonically ordered changes and skipped subtrees, serialisable byte-stably."""
 
     changes: Sequence[Change]
+    unanalyzed: Sequence[Unanalyzed] = ()
 
     def __post_init__(self) -> None:
         ordered = sorted(
@@ -147,9 +179,17 @@ class DiffResult:
             ),
         )
         object.__setattr__(self, "changes", tuple(ordered))
+        unanalyzed = sorted(
+            set(self.unanalyzed),
+            key=lambda entry: (entry.pointer, entry.reason.value),
+        )
+        object.__setattr__(self, "unanalyzed", tuple(unanalyzed))
 
     def to_dict(self) -> dict[str, object]:
-        return {"changes": [change.to_dict() for change in self.changes]}
+        return {
+            "changes": [change.to_dict() for change in self.changes],
+            "unanalyzed": [entry.to_dict() for entry in self.unanalyzed],
+        }
 
     def to_json(self) -> str:
         return json.dumps(

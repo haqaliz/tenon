@@ -128,29 +128,24 @@ def test_every_external_ref_shape_is_refused(ref):
     assert ref in caught.value.message
 
 
-def test_cyclic_ref_chain_is_refused():
-    with pytest.raises(SpecRefusal) as caught:
-        load(FIXTURES / "ref-cycle.yaml")
+def test_cyclic_ref_chain_leaves_a_marker_at_the_back_edge():
+    document = load(FIXTURES / "ref-cycle.yaml")
 
-    assert caught.value.code is RefusalCode.UNRESOLVED_REF
-    assert "cyclic" in caught.value.message
+    schemas = document["components"]["schemas"]
+    assert schemas["A"] == {"$ref": "#/components/schemas/B"}
+    assert schemas["B"] == {"$ref": "#/components/schemas/A"}
 
 
-def test_self_referential_ref_is_refused():
-    text = (
-        "openapi: 3.0.3\n"
-        "paths: {}\n"
-        "components:\n"
-        "  schemas:\n"
-        "    A:\n"
-        "      $ref: '#/components/schemas/A'\n"
-    )
+def test_self_referential_node_resolves_everything_but_the_back_edge():
+    document = load(FIXTURES / "cycle-old.yaml")
 
-    with pytest.raises(SpecRefusal) as caught:
-        parse(text, "<inline>")
-
-    assert caught.value.code is RefusalCode.UNRESOLVED_REF
-    assert caught.value.pointer == "#/components/schemas/A"
+    assert document["components"]["schemas"]["Node"] == {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "child": {"$ref": "#/components/schemas/Node"},
+        },
+    }
 
 
 def test_pointer_tokens_are_unescaped():

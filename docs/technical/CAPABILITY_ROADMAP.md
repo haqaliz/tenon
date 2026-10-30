@@ -23,9 +23,12 @@ Engine capabilities in build order. Each lands test-first.
 pairs only unambiguous removed/added records. Bad input is a named refusal with a JSON pointer.
 136 tests, offline and deterministic.
 
-Known limits at this level: recursive schemas are refused (fail-closed); added optional *parameters*
-produce no record (no `parameter_added` kind); request-body/media-type/response add-remove and
-`additionalProperties` are not walked; no real vendor spec pair is committed yet.
+Known limits at this level: a subtree carrying an unsupported composition keyword, or a cyclic
+`$ref`, is skipped and recorded in `DiffResult.unanalyzed` rather than refusing the document; added
+optional *parameters* produce no record (no `parameter_added` kind); request-body/media-type/response
+add-remove and `additionalProperties` are not walked. A real Twilio pair is committed; a rich spec
+like Stripe still cannot load because eager `$ref` inlining expands its shared-ref DAG to ~6.5e11
+nodes (`docs/planning/real-spec-readability/evidence.md`).
 
 ## Sequencing
 

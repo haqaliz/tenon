@@ -20,7 +20,13 @@ def changes():
 
 
 def test_a_real_vendor_pair_diffs_without_refusal():
-    assert len(changes()) == 37
+    result = diff(
+        load(FIXTURES / "twilio-lookups-2.0.0.json"),
+        load(FIXTURES / "twilio-lookups-2.10.0.json"),
+    )
+
+    assert len(result.changes) == 37
+    assert result.unanalyzed == ()
 
 
 def test_the_real_pair_reports_three_breaking_schema_removals():
