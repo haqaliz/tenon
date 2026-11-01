@@ -3,7 +3,8 @@
 - **Slug:** `stripe-real-case`
 - **Milestone:** M0.3 in `docs/ROADMAP.md` — the Phase 0 gate
 - **Capabilities exercised:** T1-T4 (shipped)
-- **Status:** evidence complete; **gate not met**; decision required on the follow-on
+- **Status:** historical; the gate was met after `real-spec-readability` and `lazy-ref-resolution`
+  (see `docs/planning/m0-3-first-real-case/evidence.md`)
 - **Card:** `docs/planning/_card/issue.md`
 - **Evidence:** `docs/planning/stripe-real-case/evidence.md`
 
