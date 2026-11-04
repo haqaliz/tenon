@@ -7,7 +7,8 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from tenon.pr import PrRefusal, PrStatus
-from tenon.pr.result import PrDraft
+from tenon.pr.result import PrDraft, PrResult
+from tenon.prove import ProofLevel
 
 
 # Spec AC1: the status vocabulary is exactly two values, in order.
@@ -136,3 +137,181 @@ def draft_to_json_with_hash_seed(seed):
 # Spec AC5: byte-identical output across hash seeds.
 def test_pr_draft_to_json_is_byte_stable_across_hash_seeds():
     assert draft_to_json_with_hash_seed("0") == draft_to_json_with_hash_seed("1")
+
+
+def an_opened(**overrides):
+    values = {
+        "status": PrStatus.OPENED,
+        "level": ProofLevel.TESTS_PASSED,
+        "draft": a_draft(),
+        "url": "https://github.com/example/repo/pull/42",
+        "refusal": None,
+        "detail": "",
+    }
+    values.update(overrides)
+    return PrResult(**values)
+
+
+def a_refused(refusal=PrRefusal.DIRTY_CHECKOUT, **overrides):
+    values = {
+        "status": PrStatus.REFUSED,
+        "level": ProofLevel.TESTS_PASSED,
+        "draft": a_draft(),
+        "url": None,
+        "refusal": refusal,
+        "detail": "",
+    }
+    values.update(overrides)
+    return PrResult(**values)
+
+
+# Spec AC3: an opened PR carries a URL and no refusal.
+def test_opened_with_a_url_and_no_refusal_is_valid():
+    result = an_opened()
+    assert result.status is PrStatus.OPENED
+    assert result.url == "https://github.com/example/repo/pull/42"
+    assert result.refusal is None
+
+
+# Spec AC3: an opened PR without a URL says nothing about where it went.
+@pytest.mark.parametrize("url", [None, ""])
+def test_opened_without_a_url_raises(url):
+    with pytest.raises(ValueError):
+        an_opened(url=url)
+
+
+# Spec AC3: an opened PR cannot also claim it was refused.
+def test_opened_with_a_refusal_raises():
+    with pytest.raises(ValueError):
+        an_opened(refusal=PrRefusal.DIRTY_CHECKOUT)
+
+
+# Spec: detail is only for a refusal's command output.
+def test_opened_with_detail_raises():
+    with pytest.raises(ValueError):
+        an_opened(detail="fatal: something")
+
+
+# Spec AC3: a refusal names its reason and has no URL.
+def test_refused_with_a_refusal_and_no_url_is_valid():
+    result = a_refused()
+    assert result.status is PrStatus.REFUSED
+    assert result.refusal is PrRefusal.DIRTY_CHECKOUT
+    assert result.url is None
+
+
+# Spec AC3: a refusal without a refusal would hide why nothing was opened.
+def test_refused_without_a_refusal_raises():
+    with pytest.raises(ValueError):
+        a_refused(refusal=None)
+
+
+# Spec AC3: a refusal cannot also claim a URL.
+def test_refused_with_a_url_raises():
+    with pytest.raises(ValueError):
+        a_refused(url="https://github.com/example/repo/pull/42")
+
+
+# Spec AC4: strings coerce to enums, so a JSON round-trip is easy.
+def test_pr_result_coerces_string_status_level_and_refusal():
+    result = PrResult(
+        status="REFUSED",
+        level="UNVERIFIED",
+        draft=a_draft(),
+        url=None,
+        refusal="DIRTY_CHECKOUT",
+        detail="",
+    )
+    assert result.status is PrStatus.REFUSED
+    assert result.level is ProofLevel.UNVERIFIED
+    assert result.refusal is PrRefusal.DIRTY_CHECKOUT
+
+
+# Plan edge case: an unknown string fails loudly in the enum constructor.
+def test_pr_result_rejects_an_unknown_refusal_string():
+    with pytest.raises(ValueError):
+        a_refused(refusal="SOMETHING_ELSE")
+
+
+# Spec AC6: detail defaults to the empty string.
+def test_pr_result_detail_defaults_to_empty():
+    result = PrResult(
+        status=PrStatus.REFUSED,
+        level=ProofLevel.TESTS_PASSED,
+        draft=a_draft(),
+        refusal=PrRefusal.PUSH_FAILED,
+    )
+    assert result.detail == ""
+
+
+# Spec AC6: a refusal keeps the command tail it was given.
+def test_refused_keeps_a_command_tail():
+    tail_text = "fatal: unable to access the remote\nTo github.com:example/repo.git"
+    result = a_refused(refusal=PrRefusal.PUSH_FAILED, detail=tail_text)
+    assert result.detail == tail_text
+
+
+# Spec: a result cannot be mutated after construction.
+def test_pr_result_is_frozen():
+    with pytest.raises(FrozenInstanceError):
+        an_opened().status = PrStatus.REFUSED
+
+
+# Spec AC5: the result payload has exactly six keys, in a fixed order.
+def test_pr_result_to_dict_has_the_contract_keys():
+    parsed = a_refused(refusal=PrRefusal.PUSH_FAILED, detail="fatal: rejected").to_dict()
+    assert list(parsed) == ["status", "level", "draft", "url", "refusal", "detail"]
+    assert parsed == {
+        "status": "REFUSED",
+        "level": "TESTS_PASSED",
+        "draft": a_draft().to_dict(),
+        "url": None,
+        "refusal": "PUSH_FAILED",
+        "detail": "fatal: rejected",
+    }
+    assert list(parsed["draft"]) == ["title", "body", "branch", "commit_message"]
+
+
+# Spec AC5: enums become plain strings, never enum or dataclass reprs.
+def test_pr_result_to_json_holds_only_json_primitives():
+    text = an_opened(level=ProofLevel.UNVERIFIED).to_json()
+    assert json.loads(text) == an_opened(level=ProofLevel.UNVERIFIED).to_dict()
+    for leak in ("PrStatus.", "PrRefusal.", "ProofLevel.", "PrDraft(", "PrResult("):
+        assert leak not in text
+
+
+RESULT_SUBPROCESS_SCRIPT = """
+from tenon.pr.result import PrDraft, PrResult
+
+draft = PrDraft(
+    title="[UNVERIFIED] tenon: rename payment method types",
+    body="## Proof\\n\\nThe check did not pass.",
+    branch="tenon/renamed-payment-method-types-a1b2c3d4",
+    commit_message="tenon: rename payment method types",
+)
+result = PrResult(
+    status="REFUSED",
+    level="UNVERIFIED",
+    draft=draft,
+    url=None,
+    refusal="PUSH_FAILED",
+    detail="fatal: rejected",
+)
+print(result.to_json(), end="")
+"""
+
+
+def result_to_json_with_hash_seed(seed):
+    result = subprocess.run(
+        [sys.executable, "-c", RESULT_SUBPROCESS_SCRIPT],
+        env={**os.environ, "PYTHONHASHSEED": seed},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+# Spec AC5: byte-identical output across hash seeds.
+def test_pr_result_to_json_is_byte_stable_across_hash_seeds():
+    assert result_to_json_with_hash_seed("0") == result_to_json_with_hash_seed("1")
