@@ -1,5 +1,7 @@
 """The PR result contract: what was opened, or exactly why nothing was opened."""
 
+import json
+from dataclasses import dataclass
 from enum import StrEnum
 
 
@@ -26,3 +28,33 @@ class PrRefusal(StrEnum):
     COMMIT_FAILED = "COMMIT_FAILED"
     PUSH_FAILED = "PUSH_FAILED"
     PR_FAILED = "PR_FAILED"
+
+
+@dataclass(frozen=True, slots=True)
+class PrDraft:
+    """The deterministic text a PR write would ship."""
+
+    title: str
+    body: str
+    branch: str
+    commit_message: str
+
+    def __post_init__(self) -> None:
+        for name in ("title", "body", "branch", "commit_message"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{name} must be a non-empty string: {value!r}")
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "title": self.title,
+            "body": self.body,
+            "branch": self.branch,
+            "commit_message": self.commit_message,
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(
+            self.to_dict(), sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
+
