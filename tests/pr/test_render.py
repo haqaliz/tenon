@@ -2,16 +2,27 @@
 
 import hashlib
 import json
+import os
 import re
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from tenon.detect import Change, ChangeKind, Location
+from tenon.detect import (
+    Change,
+    ChangeKind,
+    Location,
+    Unanalyzed,
+    UnanalyzedReason,
+)
 from tenon.locate import Site, SiteShape
 from tenon.pr import render_pr
 from tenon.pr.render import (
+    TESTS_PASSED_PROOF,
+    TESTS_PASSED_SENTENCE,
     _branch,
     _commit_message,
     _slug,
@@ -20,7 +31,6 @@ from tenon.pr.render import (
 )
 from tenon.propose import SkipReason, Skipped
 from tenon.prove import CheckResult, ProofCause
-from tenon.pr.render import TESTS_PASSED_PROOF, TESTS_PASSED_SENTENCE
 
 CHARGE_POINTER = "#/components/schemas/Charge/properties"
 PROOF_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "proof-basic"
@@ -454,3 +464,187 @@ def test_unverified_body_caps_the_failure_tail(
     assert "line 1\n" not in body
     assert "line 6\n" in body
     assert "line 25\n" in body
+
+
+# Spec AC7: every supplied unanalyzed subtree keeps its pointer and reason.
+def test_unanalyzed_subtrees_are_listed(a_rename_proposal, a_passed_proof):
+    entries = (
+        Unanalyzed(
+            pointer="#/components/schemas/Order",
+            reason=UnanalyzedReason.UNRESOLVED_REF,
+        ),
+        Unanalyzed(
+            pointer="#/components/schemas/Charge",
+            reason=UnanalyzedReason.CYCLIC_REF,
+        ),
+    )
+
+    body = render_pr(
+        a_rename_proposal, a_passed_proof, unanalyzed=entries
+    ).body
+
+    assert "### Not analyzed" in body
+    assert "- `#/components/schemas/Charge`: CYCLIC_REF" in body
+    assert "- `#/components/schemas/Order`: UNRESOLVED_REF" in body
+    assert body.index("### Skipped sites") < body.index("### Not analyzed")
+    assert body.index("### Not analyzed") < body.index("### What this proves")
+
+
+# Spec AC7: no supplied entries means no section at all.
+def test_unanalyzed_section_is_omitted_when_empty(
+    a_rename_proposal, a_passed_proof
+):
+    body = render_pr(
+        a_rename_proposal, a_passed_proof, unanalyzed=()
+    ).body
+
+    assert "### Not analyzed" not in body
+
+
+# Spec AC8: a backtick or newline cannot break out of an inline code span.
+def test_inline_spans_escape_backticks_and_newlines(
+    a_rename_proposal, a_passed_proof
+):
+    proposal = replace(
+        a_rename_proposal,
+        change=replace(a_rename_proposal.change, before="a`b\nc"),
+        skipped=(
+            Skipped(
+                site=Site(
+                    path="acme/weird`path.py",
+                    line=3,
+                    column=1,
+                    shape=SiteShape.KEYWORD,
+                    symbol="x`y\nz",
+                ),
+                reason=SkipReason.DYNAMIC_KWARGS,
+            ),
+        ),
+    )
+
+    body = render_pr(proposal, a_passed_proof).body
+
+    assert "`a'b c`" in body
+    assert "`x'y z`" in body
+    assert "`acme/weird'path.py:3`" in body
+    assert "a`b" not in body
+    assert "x`y" not in body
+
+
+# Spec AC8/M11: the same inputs render the same bytes twice.
+def test_render_pr_is_deterministic_for_the_same_inputs(
+    a_rename_proposal, a_passed_proof
+):
+    first = render_pr(a_rename_proposal, a_passed_proof)
+    second = render_pr(a_rename_proposal, a_passed_proof)
+
+    assert first.to_json() == second.to_json()
+
+
+DETERMINISM_SCRIPT = """
+from tenon.detect import (
+    Change,
+    ChangeKind,
+    Location,
+    Unanalyzed,
+    UnanalyzedReason,
+)
+from tenon.locate import Site, SiteShape
+from tenon.pr import render_pr
+from tenon.propose import Edit, Proposal, SkipReason, Skipped
+from tenon.prove import CheckResult, ProofCause, ProofLevel, ProofResult
+
+change = Change(
+    kind=ChangeKind.RENAMED,
+    location=Location(
+        pointer="#/components/schemas/Charge/properties",
+        method="post",
+        path="/v1/checkout/sessions",
+    ),
+    before={"b": 2, "a": 1},
+    after=["z", {"d": 4, "c": 3}],
+)
+edit = Edit(
+    path="acme/billing.py",
+    line=7,
+    column=30,
+    shape=SiteShape.KEYWORD,
+    old="amount",
+    new="amount_cents",
+)
+proposal = Proposal(
+    change=change,
+    edits=(edit,),
+    skipped=(
+        Skipped(
+            site=Site(
+                path="acme/billing.py",
+                line=7,
+                column=30,
+                shape=SiteShape.KEYWORD,
+                symbol="amount",
+            ),
+            reason=SkipReason.DYNAMIC_KWARGS,
+        ),
+    ),
+    diff="--- a/acme/billing.py\\n+++ b/acme/billing.py\\n",
+)
+proof = ProofResult(
+    level=ProofLevel.UNVERIFIED,
+    cause=ProofCause.NO_TESTS_FOUND,
+    baseline=None,
+    after=None,
+    patch_applied=False,
+)
+unanalyzed = (
+    Unanalyzed(
+        pointer="#/components/schemas/Charge",
+        reason=UnanalyzedReason.CYCLIC_REF,
+    ),
+)
+print(render_pr(proposal, proof, unanalyzed=unanalyzed).to_json(), end="")
+"""
+
+
+def render_json_with_hash_seed(seed):
+    result = subprocess.run(
+        [sys.executable, "-c", DETERMINISM_SCRIPT],
+        env={**os.environ, "PYTHONHASHSEED": seed},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+# Spec AC8/M11: byte-identical across hash seeds.
+def test_draft_json_is_byte_stable_across_hash_seeds():
+    assert render_json_with_hash_seed("0") == render_json_with_hash_seed("1")
+
+
+# Spec AC9: no absolute path, timestamp, dataclass repr or enum repr leaks.
+def test_draft_has_no_environment_leaks(a_rename_proposal, a_passed_proof):
+    draft = render_pr(a_rename_proposal, a_passed_proof)
+
+    for leak in (
+        str(PROOF_BASIC),
+        "2026-",
+        "ProofResult(",
+        "ProofLevel.",
+        "ProofCause.",
+        "ChangeKind.",
+        "--- a/",
+        a_rename_proposal.diff,
+    ):
+        assert leak not in draft.body
+    assert "ChangeKind." not in draft.title
+
+
+# Spec AC9: an unverified draft names no passing sentence.
+def test_unverified_draft_has_no_environment_leaks(
+    a_rename_proposal, an_unverified_proof
+):
+    draft = render_pr(a_rename_proposal, an_unverified_proof())
+
+    for leak in (str(PROOF_BASIC), "2026-", "ProofResult(", "ProofLevel."):
+        assert leak not in draft.body

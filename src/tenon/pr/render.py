@@ -169,6 +169,17 @@ def _skipped_section(skipped: Sequence[Skipped]) -> str:
     return "\n".join(lines)
 
 
+def _not_analyzed_section(unanalyzed: Sequence[Unanalyzed]) -> str:
+    entries = sorted(
+        unanalyzed, key=lambda entry: (entry.pointer, entry.reason.value)
+    )
+    lines = ["### Not analyzed", ""]
+    lines.extend(
+        f"- {_code(entry.pointer)}: {entry.reason.value}" for entry in entries
+    )
+    return "\n".join(lines)
+
+
 def _what_this_proves(proof: ProofResult) -> str:
     return f"### What this proves\n\n{_PROOF_PARAGRAPHS[proof.level]}"
 
@@ -185,9 +196,15 @@ def _body(
         _check_section(proof),
         _files_section(proposal.files),
         _skipped_section(proposal.skipped),
-        _what_this_proves(proof),
-        FOOTER,
     ]
+    if unanalyzed:
+        sections.append(_not_analyzed_section(unanalyzed))
+    sections.extend(
+        [
+            _what_this_proves(proof),
+            FOOTER,
+        ]
+    )
     return "\n\n".join(sections) + "\n"
 
 
