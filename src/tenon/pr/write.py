@@ -1,9 +1,12 @@
 """Write one proven proposal as a branch and PR, without touching the user's tree."""
 
 import os
+import shutil
 import subprocess
-from pathlib import Path
-from typing import Sequence
+import tempfile
+from contextlib import contextmanager
+from pathlib import Path, PurePosixPath
+from typing import Iterator, Sequence
 
 from tenon.detect import Unanalyzed
 from tenon.propose import Proposal
@@ -65,6 +68,38 @@ def _refused(
     )
 
 
+def _safe_path(path: str) -> None:
+    """Reject a path that could escape the clone, like T3 rejects one."""
+    candidate = PurePosixPath(path)
+    if candidate.is_absolute() or ".." in candidate.parts or "\\" in path:
+        raise ValueError(f"unsafe repository path: {path!r}")
+
+
+@contextmanager
+def _clone(root: Path, origin_url: str) -> Iterator[Path]:
+    """Clone ``root`` into a temp dir and point the clone at the real remote.
+
+    A local clone's ``origin`` is the source path; leaving it there would push
+    the branch into the user's checkout instead of their host.
+    """
+    try:
+        tmp = tempfile.mkdtemp(prefix="tenon-pr-")
+    except OSError as exc:
+        raise _GitError(f"could not create a temporary directory: {exc}") from exc
+    try:
+        cloned = _git(
+            ["git", "clone", "--no-hardlinks", "--", root, tmp], cwd=root
+        )
+        if cloned.returncode != 0:
+            raise _GitError(_detail(cloned))
+        pointed = _git(["git", "remote", "set-url", "origin", origin_url], cwd=tmp)
+        if pointed.returncode != 0:
+            raise _GitError(_detail(pointed))
+        yield Path(tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def write_pr(
     proposal: Proposal,
     proof: ProofResult,
@@ -124,4 +159,51 @@ def write_pr(
     if remote.branch_exists(root, draft.branch):
         return _refused(proof, draft, PrRefusal.BRANCH_EXISTS)
 
-    raise NotImplementedError("clone, apply, commit, push and PR land in phase 2")
+    for path in proposal.files:
+        _safe_path(path)
+
+    try:
+        with _clone(root, origin.stdout.strip()) as copy:
+            try:
+                applied = _git(
+                    ["git", "apply", "-p1", "-"], cwd=copy, input=proposal.diff
+                )
+            except _GitError as exc:
+                return _refused(
+                    proof, draft, PrRefusal.PATCH_DID_NOT_APPLY, exc.detail
+                )
+            if applied.returncode != 0:
+                return _refused(
+                    proof, draft, PrRefusal.PATCH_DID_NOT_APPLY, _detail(applied)
+                )
+
+            try:
+                added = _git(["git", "add", "--", *proposal.files], cwd=copy)
+                committed = (
+                    added
+                    if added.returncode != 0
+                    else _git(
+                        ["git", "commit", "-m", draft.commit_message], cwd=copy
+                    )
+                )
+            except _GitError as exc:
+                return _refused(proof, draft, PrRefusal.COMMIT_FAILED, exc.detail)
+            if committed.returncode != 0:
+                return _refused(
+                    proof, draft, PrRefusal.COMMIT_FAILED, _detail(committed)
+                )
+
+            remote.push(copy, draft.branch)
+            url = remote.create_pr(
+                copy,
+                branch=draft.branch,
+                base=base,
+                title=draft.title,
+                body=draft.body,
+                draft=proof.level is ProofLevel.UNVERIFIED,
+            )
+            return PrResult(
+                status=PrStatus.OPENED, level=proof.level, draft=draft, url=url
+            )
+    except _GitError as exc:
+        return _refused(proof, draft, PrRefusal.COPY_FAILED, exc.detail)

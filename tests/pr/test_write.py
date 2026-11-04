@@ -11,7 +11,7 @@ import pytest
 
 from tenon.pr import render_pr
 from tenon.pr.write import write_pr
-from tenon.propose import ProposalReason
+from tenon.propose import Edit, ProposalReason
 from tenon.pr.result import PrRefusal, PrStatus
 from tenon.prove import ProofLevel
 
@@ -25,6 +25,24 @@ def git(root, *args):
         text=True,
         check=True,
     ).stdout
+
+
+class InspectingRemote(FakeRemote):
+    """Reads the commit in the disposable clone at the moment it is pushed."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.push_repo = None
+        self.commit_subject = None
+        self.commit_files = ()
+
+    def push(self, repo, branch):
+        self.push_repo = Path(repo)
+        self.commit_subject = git(repo, "log", "-1", "--pretty=%s").strip()
+        self.commit_files = tuple(
+            git(repo, "show", "--pretty=", "--name-only", "HEAD").split()
+        )
+        super().push(repo, branch)
 
 
 def tree_hashes(root):
@@ -258,3 +276,89 @@ def test_an_existing_branch_is_refused_before_cloning(
         ("branch_exists", repo_with_remote.work, draft.branch),
     ]
     assert tree_hashes(repo_with_remote.work) == before
+
+
+# Spec AC4/AC5: a successful run is isolated, clean and commits exactly the files.
+def test_a_successful_run_commits_exactly_the_proposal_files(
+    repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    draft = render_pr(a_rename_proposal, a_passed_proof)
+    before = tree_hashes(repo_with_remote.work)
+    remote = InspectingRemote()
+
+    result = write_pr(
+        a_rename_proposal, a_passed_proof, repo_with_remote.work, remote=remote
+    )
+
+    assert result.status is PrStatus.OPENED
+    assert result.refusal is None
+    assert result.url == remote.url
+    assert tree_hashes(repo_with_remote.work) == before
+    assert git(repo_with_remote.work, "status", "--porcelain") == ""
+    assert git(repo_with_remote.work, "branch", "--list", "tenon/*") == ""
+    assert remote.push_repo != repo_with_remote.work
+    assert remote.commit_subject == draft.commit_message
+    assert remote.commit_files == a_rename_proposal.files
+
+
+# Spec AC5: a garbage diff is PATCH_DID_NOT_APPLY and no commit is pushed.
+def test_a_garbage_diff_is_patch_did_not_apply(
+    repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    garbage = replace(a_rename_proposal, diff="this is not a diff\n")
+    before = tree_hashes(repo_with_remote.work)
+    remote = a_fake_remote()
+
+    result = write_pr(garbage, a_passed_proof, repo_with_remote.work, remote=remote)
+
+    assert result.refusal is PrRefusal.PATCH_DID_NOT_APPLY
+    assert remote.calls[-1][0] == "branch_exists"
+    assert tree_hashes(repo_with_remote.work) == before
+    assert git(repo_with_remote.work, "branch", "--list", "tenon/*") == ""
+
+
+# Spec AC5: a file path that could escape the clone is a caller error.
+@pytest.mark.parametrize("path", ["../x.py", "/tmp/x.py", "acme\\billing.py"])
+def test_an_unsafe_file_path_raises_value_error(
+    path, repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    edit = replace(a_rename_proposal.edits[0], path=path)
+    unsafe = replace(a_rename_proposal, edits=(edit,))
+
+    with pytest.raises(ValueError):
+        write_pr(unsafe, a_passed_proof, repo_with_remote.work, remote=a_fake_remote())
+
+
+# Plan edge case: the clone has no identity, so git refuses the commit.
+def test_a_missing_git_identity_is_commit_failed(
+    repo_with_remote, a_rename_proposal, a_passed_proof, monkeypatch, tmp_path
+):
+    config = tmp_path / "no-identity"
+    config.write_text("[user]\n\tuseConfigOnly = true\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    remote = a_fake_remote()
+
+    result = write_pr(
+        a_rename_proposal, a_passed_proof, repo_with_remote.work, remote=remote
+    )
+
+    assert result.refusal is PrRefusal.COMMIT_FAILED
+    assert result.detail
+    assert remote.calls[-1][0] == "branch_exists"
+
+
+# Spec AC4/plan edge case: a temp-dir failure is COPY_FAILED, never a traceback.
+def test_a_temp_directory_failure_is_copy_failed(
+    repo_with_remote, a_rename_proposal, a_passed_proof, monkeypatch
+):
+    def failing(*args, **kwargs):
+        raise OSError("no temp space")
+
+    monkeypatch.setattr(tempfile, "mkdtemp", failing)
+
+    result = write_pr(
+        a_rename_proposal, a_passed_proof, repo_with_remote.work, remote=a_fake_remote()
+    )
+
+    assert result.refusal is PrRefusal.COPY_FAILED
+    assert "no temp space" in result.detail
