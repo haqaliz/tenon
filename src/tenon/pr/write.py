@@ -81,6 +81,19 @@ def _pr_detail(detail: str, branch: str) -> str:
     return f"{detail}\n{pushed}" if detail else pushed
 
 
+def _commit(
+    copy: Path, proposal: Proposal, draft: PrDraft
+) -> subprocess.CompletedProcess:
+    """Create the branch, stage exactly the proposed files and commit them."""
+    checked_out = _git(["git", "checkout", "-b", draft.branch], cwd=copy)
+    if checked_out.returncode != 0:
+        return checked_out
+    added = _git(["git", "add", "--", *proposal.files], cwd=copy)
+    if added.returncode != 0:
+        return added
+    return _git(["git", "commit", "-m", draft.commit_message], cwd=copy)
+
+
 @contextmanager
 def _clone(root: Path, origin_url: str) -> Iterator[Path]:
     """Clone ``root`` into a temp dir and point the clone at the real remote.
@@ -184,14 +197,7 @@ def write_pr(
                 )
 
             try:
-                added = _git(["git", "add", "--", *proposal.files], cwd=copy)
-                committed = (
-                    added
-                    if added.returncode != 0
-                    else _git(
-                        ["git", "commit", "-m", draft.commit_message], cwd=copy
-                    )
-                )
+                committed = _commit(copy, proposal, draft)
             except _GitError as exc:
                 return _refused(proof, draft, PrRefusal.COMMIT_FAILED, exc.detail)
             if committed.returncode != 0:

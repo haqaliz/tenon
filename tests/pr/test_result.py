@@ -329,11 +329,15 @@ def test_package_exports_the_public_contract():
     )
 
     assert __all__ == [
+        "GitGhRemote",
         "PrDraft",
         "PrRefusal",
         "PrResult",
         "PrStatus",
+        "Remote",
+        "RemoteError",
         "render_pr",
+        "write_pr",
     ]
     assert PrStatus.OPENED.value == "OPENED"
     assert PrRefusal.PR_FAILED.value == "PR_FAILED"

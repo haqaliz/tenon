@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from tenon.pr import render_pr
-from tenon.pr.remote import RemoteError
+from tenon.pr.remote import GitGhRemote, RemoteError
 from tenon.pr.write import write_pr
 from tenon.propose import Edit, ProposalReason
 from tenon.pr.result import PrRefusal, PrStatus
@@ -479,3 +479,101 @@ def test_a_failed_pr_is_pr_failed_and_reports_the_pushed_branch(
     assert "already pushed" in result.detail.lower()
     assert draft.branch in result.detail
     assert [call[0] for call in remote.calls][-1] == "create_pr"
+
+
+class LocalRemote(GitGhRemote):
+    """The real adapter against local git; only gh is replaced."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pr = None
+
+    def create_pr(self, repo, *, branch, base, title, body, draft):
+        self.pr = {"repo": repo, "base": base, "title": title, "body": body}
+        return "https://example.test/tenon/pull/1"
+
+
+# Spec AC10/AC11: real git, local bare remote, no gh and no network.
+def test_offline_end_to_end_with_the_real_git_adapter(
+    repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    draft = render_pr(a_rename_proposal, a_passed_proof)
+    before = tree_hashes(repo_with_remote.work)
+    remote = LocalRemote()
+
+    result = write_pr(
+        a_rename_proposal, a_passed_proof, repo_with_remote.work, remote=remote
+    )
+
+    assert result.status is PrStatus.OPENED
+    assert result.url == "https://example.test/tenon/pull/1"
+    assert remote.pr["base"] == "main"
+    assert remote.pr["title"] == draft.title
+    assert remote.pr["body"] == draft.body
+
+    heads = subprocess.run(
+        [
+            "git",
+            "ls-remote",
+            "--heads",
+            str(repo_with_remote.bare),
+            draft.branch,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert draft.branch in heads
+    assert (
+        git(repo_with_remote.bare, "log", "-1", "--pretty=%s", draft.branch).strip()
+        == draft.commit_message
+    )
+    assert (
+        git(
+            repo_with_remote.bare,
+            "show",
+            "--pretty=",
+            "--name-only",
+            draft.branch,
+        ).split()
+        == list(a_rename_proposal.files)
+    )
+    assert git(repo_with_remote.work, "branch", "--list", "tenon/*") == ""
+    assert tree_hashes(repo_with_remote.work) == before
+
+
+# Plan phase 4: `tenon.pr` is the full public surface for the writer.
+def test_package_exports_the_full_public_surface():
+    from tenon.pr import (
+        GitGhRemote,
+        PrDraft,
+        PrRefusal,
+        PrResult,
+        PrStatus,
+        Remote,
+        RemoteError,
+        __all__,
+        render_pr,
+        write_pr,
+    )
+
+    assert __all__ == [
+        "GitGhRemote",
+        "PrDraft",
+        "PrRefusal",
+        "PrResult",
+        "PrStatus",
+        "Remote",
+        "RemoteError",
+        "render_pr",
+        "write_pr",
+    ]
+    assert Remote.__name__ == "Remote"
+    assert GitGhRemote.__name__ == "GitGhRemote"
+    assert RemoteError.__name__ == "RemoteError"
+    assert PrDraft.__name__ == "PrDraft"
+    assert PrResult.__name__ == "PrResult"
+    assert PrStatus.OPENED.value == "OPENED"
+    assert PrRefusal.PR_FAILED.value == "PR_FAILED"
+    assert callable(render_pr)
+    assert callable(write_pr)
