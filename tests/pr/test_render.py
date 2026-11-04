@@ -19,9 +19,23 @@ from tenon.pr.render import (
     _title,
 )
 from tenon.propose import SkipReason, Skipped
+from tenon.prove import CheckResult, ProofCause
+from tenon.pr.render import TESTS_PASSED_PROOF, TESTS_PASSED_SENTENCE
 
 CHARGE_POINTER = "#/components/schemas/Charge/properties"
 PROOF_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "proof-basic"
+COMMAND = ("python", "-m", "pytest", "-q")
+
+
+def a_check(**overrides):
+    values = {
+        "kind": "baseline",
+        "command": COMMAND,
+        "returncode": 0,
+        "timed_out": False,
+    }
+    values.update(overrides)
+    return CheckResult(**values)
 
 
 def a_change(**overrides):
@@ -318,3 +332,125 @@ def test_passed_body_ends_with_the_footer_and_one_newline(
     assert body.endswith("Opened by Tenon. No merge was performed.\n")
     assert body.count("Opened by Tenon. No merge was performed.") == 1
     assert not body.endswith("\n\n")
+
+
+UNVERIFIED_BODY = """\
+## Tenon proof: UNVERIFIED
+
+Nothing proved the patch.
+Cause: NO_TESTS_FOUND
+
+### Change
+
+- Kind: `renamed`
+- Location: `#/components/schemas/Charge/properties`
+- Before: `amount`
+- After: `amount_cents`
+- Breaking: `True`
+- Confidence: `inferred`
+
+### Check
+
+- Command: `not run`
+- Baseline exit: `not run`
+- After exit: `not run`
+
+### Files
+
+- `acme/billing.py`
+
+### Skipped sites
+
+None.
+
+### What this proves
+
+Nothing was proven. This is a flagged suggestion: review the change and run the check before merging.
+
+Opened by Tenon. No merge was performed.
+"""
+
+
+# Spec AC5: a flagged suggestion names the level, the exact cause and the refusal.
+def test_unverified_body_is_the_golden_text(
+    a_rename_proposal, an_unverified_proof
+):
+    body = render_pr(
+        a_rename_proposal, an_unverified_proof()
+    ).body
+
+    assert body == UNVERIFIED_BODY
+
+
+# Spec AC5: the body never claims the patch passed.
+def test_unverified_body_never_claims_a_pass(a_rename_proposal, an_unverified_proof):
+    body = render_pr(a_rename_proposal, an_unverified_proof()).body
+
+    assert TESTS_PASSED_SENTENCE not in body
+    assert TESTS_PASSED_PROOF not in body
+    assert "ran green" not in body
+
+
+# Spec AC6: a missing baseline and a missing after check render as not run.
+def test_unverified_body_renders_missing_checks_as_not_run(
+    a_rename_proposal, an_unverified_proof
+):
+    body = render_pr(a_rename_proposal, an_unverified_proof()).body
+
+    assert "- Command: `not run`" in body
+    assert "- Baseline exit: `not run`" in body
+    assert "- After exit: `not run`" in body
+
+
+# Spec AC6: a killed check renders as timed out, not as an exit code.
+def test_unverified_body_renders_a_timeout_as_timed_out(
+    a_rename_proposal, an_unverified_proof
+):
+    proof = an_unverified_proof(
+        cause=ProofCause.CHECK_TIMED_OUT,
+        baseline=a_check(returncode=None, timed_out=True),
+    )
+
+    body = render_pr(a_rename_proposal, proof).body
+
+    assert "- Baseline exit: `timed out`" in body
+    assert "- After exit: `not run`" in body
+
+
+# Spec AC6: a non-empty failure tail is fenced.
+def test_unverified_body_fences_the_failure_tail(
+    a_rename_proposal, an_unverified_proof
+):
+    proof = an_unverified_proof(
+        cause=ProofCause.TESTS_FAILED_AFTER,
+        baseline=a_check(kind="baseline"),
+        after=a_check(
+            kind="after",
+            returncode=1,
+            stdout_tail="1 failed\nassert 0",
+        ),
+        patch_applied=True,
+    )
+
+    body = render_pr(a_rename_proposal, proof).body
+
+    assert "After output:" in body
+    assert "```\n1 failed\nassert 0\n```" in body
+
+
+# Spec AC6: the tail is capped like T4 before it is fenced.
+def test_unverified_body_caps_the_failure_tail(
+    a_rename_proposal, an_unverified_proof
+):
+    tail = "\n".join(f"line {number}" for number in range(1, 26))
+    proof = an_unverified_proof(
+        cause=ProofCause.TESTS_FAILED_AFTER,
+        after=a_check(kind="after", returncode=1, stdout_tail=tail),
+        patch_applied=True,
+    )
+
+    body = render_pr(a_rename_proposal, proof).body
+
+    assert "line 1\n" not in body
+    assert "line 6\n" in body
+    assert "line 25\n" in body

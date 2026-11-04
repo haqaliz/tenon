@@ -7,7 +7,7 @@ from typing import Any, Sequence
 
 from tenon.detect import Change, Unanalyzed
 from tenon.propose import Proposal, Skipped
-from tenon.prove import ProofLevel, ProofResult
+from tenon.prove import CheckResult, ProofLevel, ProofResult, tail
 
 from .result import PrDraft
 
@@ -22,9 +22,20 @@ TESTS_PASSED_PROOF = (
     "The check ran green before and after the patch, so the change did not break "
     "the command Tenon ran. It does not prove the change is correct."
 )
+UNVERIFIED_SENTENCE = "Nothing proved the patch."
+UNVERIFIED_PROOF = (
+    "Nothing was proven. This is a flagged suggestion: review the change and run "
+    "the check before merging."
+)
 
-_LEVEL_SENTENCES = {ProofLevel.TESTS_PASSED: TESTS_PASSED_SENTENCE}
-_PROOF_PARAGRAPHS = {ProofLevel.TESTS_PASSED: TESTS_PASSED_PROOF}
+_LEVEL_SENTENCES = {
+    ProofLevel.TESTS_PASSED: TESTS_PASSED_SENTENCE,
+    ProofLevel.UNVERIFIED: UNVERIFIED_SENTENCE,
+}
+_PROOF_PARAGRAPHS = {
+    ProofLevel.TESTS_PASSED: TESTS_PASSED_PROOF,
+    ProofLevel.UNVERIFIED: UNVERIFIED_PROOF,
+}
 
 
 def _scalar(value: Any) -> str:
@@ -82,7 +93,10 @@ def _code(text: str) -> str:
 
 
 def _level_sentence(proof: ProofResult) -> str:
-    return _LEVEL_SENTENCES[proof.level]
+    sentence = _LEVEL_SENTENCES[proof.level]
+    if proof.level is ProofLevel.UNVERIFIED:
+        return f"{sentence}\nCause: {proof.cause.value}"
+    return sentence
 
 
 def _change_section(change: Change) -> str:
@@ -100,15 +114,37 @@ def _change_section(change: Change) -> str:
     )
 
 
+def _exit(check: CheckResult | None) -> str:
+    if check is None:
+        return "not run"
+    if check.timed_out:
+        return "timed out"
+    if check.returncode is None:
+        return "not run"
+    return str(check.returncode)
+
+
+def _output(check: CheckResult | None) -> str:
+    if check is None:
+        return ""
+    parts = [tail(text) for text in (check.stdout_tail, check.stderr_tail) if text]
+    return "\n".join(parts)
+
+
 def _check_section(proof: ProofResult) -> str:
     check = proof.baseline if proof.baseline is not None else proof.after
+    command = " ".join(check.command) if check is not None else ""
     lines = [
         "### Check",
         "",
-        f"- Command: {_code(' '.join(check.command))}",
-        f"- Baseline exit: {_code(str(proof.baseline.returncode))}",
-        f"- After exit: {_code(str(proof.after.returncode))}",
+        f"- Command: {_code(command or 'not run')}",
+        f"- Baseline exit: {_code(_exit(proof.baseline))}",
+        f"- After exit: {_code(_exit(proof.after))}",
     ]
+    for label, current in (("Baseline", proof.baseline), ("After", proof.after)):
+        output = _output(current)
+        if output:
+            lines += ["", f"{label} output:", "", "```", output, "```"]
     return "\n".join(lines)
 
 
