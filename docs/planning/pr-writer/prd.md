@@ -3,7 +3,7 @@
 - **Slug:** `pr-writer`
 - **Capability:** T5 in `docs/technical/CAPABILITY_ROADMAP.md`
 - **Milestone:** M1.3 in `docs/ROADMAP.md` (Phase 1)
-- **Status:** draft for review
+- **Status:** implemented 2026-11-05 (`src/tenon/pr/`, 745 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement
@@ -243,6 +243,10 @@ No CLI, no exit codes, no merge.
 - **Dirty trees are common.** A strict refusal may block a user mid-work. This is deliberate: the
   proof was against the working tree, and the PR ships a commit. A later card may offer a stashing or
   commit-first flow; not this one.
+- **Feature-branch checkout.** The clone starts from the checkout's HEAD while the PR base is the
+  remote default. Running from a feature branch would put its extra commits in the PR. The contract
+  asks the user to run from the branch the PR should be based on (normally the default); a
+  HEAD-is-an-ancestor-of-base guard is a later card.
 - **`gh` availability and version.** A missing or unauthenticated `gh` becomes `PR_FAILED` with the
   tail. The adapter requires `git` in all cases.
 - **Open question — PR body escaping.** Paths and symbols are wrapped in backticks; a symbol containing

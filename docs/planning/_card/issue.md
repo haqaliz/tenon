@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T5 PR writer** (`docs/technical/CAPABILITY_ROADMAP.md:11`)
 - **Milestone:** M1.3 (`docs/ROADMAP.md:27`)
+- **State:** shipped 2026-11-05 (`src/tenon/pr/`, 745 tests)
 - **Branch:** `feat/pr-writer/aliz`
 - **Worktree:** `.claude/worktrees/feat-pr-writer`
 
