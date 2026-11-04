@@ -10,10 +10,11 @@ from pathlib import Path
 import pytest
 
 from tenon.pr import render_pr
+from tenon.pr.remote import RemoteError
 from tenon.pr.write import write_pr
 from tenon.propose import Edit, ProposalReason
 from tenon.pr.result import PrRefusal, PrStatus
-from tenon.prove import ProofLevel
+from tenon.prove import ProofCause, ProofLevel
 
 from .conftest import FakeRemote
 
@@ -362,3 +363,119 @@ def test_a_temp_directory_failure_is_copy_failed(
 
     assert result.refusal is PrRefusal.COPY_FAILED
     assert "no temp space" in result.detail
+
+
+class FailingPushRemote(FakeRemote):
+    def push(self, repo, branch):
+        super().push(repo, branch)
+        raise RemoteError("rejected by remote")
+
+
+class FailingPrRemote(FakeRemote):
+    def create_pr(self, repo, **kwargs):
+        super().create_pr(repo, **kwargs)
+        raise RemoteError("gh: boom")
+
+
+# Spec AC7: push and create_pr receive the rendered fields and the resolved base.
+def test_push_then_pr_uses_the_rendered_fields(
+    repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    draft = render_pr(a_rename_proposal, a_passed_proof)
+    remote = a_fake_remote(default="main")
+
+    result = write_pr(
+        a_rename_proposal, a_passed_proof, repo_with_remote.work, remote=remote
+    )
+
+    assert result.status is PrStatus.OPENED
+    assert result.url == remote.url
+    assert [call[0] for call in remote.calls] == [
+        "default_branch",
+        "branch_exists",
+        "push",
+        "create_pr",
+    ]
+    push = remote.calls[2]
+    pr = remote.calls[3]
+    assert push[2] == draft.branch
+    assert pr[1] == push[1]
+    assert pr[1] != repo_with_remote.work
+    assert pr[2:] == (draft.branch, "main", draft.title, draft.body, False)
+
+
+# Spec AC8: an explicit base wins and is never replaced by the remote default.
+def test_an_explicit_base_reaches_the_pr(
+    repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    remote = a_fake_remote(default="ignored")
+
+    result = write_pr(
+        a_rename_proposal,
+        a_passed_proof,
+        repo_with_remote.work,
+        remote=remote,
+        base="develop",
+    )
+
+    assert result.status is PrStatus.OPENED
+    assert [call[0] for call in remote.calls] == [
+        "branch_exists",
+        "push",
+        "create_pr",
+    ]
+    assert remote.calls[-1][3] == "develop"
+
+
+# Spec AC2: opting in opens a draft PR whose body names the cause.
+def test_allow_unverified_opens_a_draft_pr_naming_the_cause(
+    repo_with_remote, a_rename_proposal, an_unverified_proof
+):
+    remote = a_fake_remote()
+
+    result = write_pr(
+        a_rename_proposal,
+        an_unverified_proof(cause=ProofCause.NO_TESTS_FOUND),
+        repo_with_remote.work,
+        remote=remote,
+        allow_unverified=True,
+    )
+
+    assert result.status is PrStatus.OPENED
+    pr = remote.calls[-1]
+    assert pr[0] == "create_pr"
+    assert pr[-1] is True
+    assert "Cause: NO_TESTS_FOUND" in pr[5]
+    assert "## Tenon proof: UNVERIFIED" in pr[5]
+
+
+# Spec AC7: a rejected push is PUSH_FAILED and create_pr is never called.
+def test_a_rejected_push_is_push_failed(
+    repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    remote = FailingPushRemote()
+
+    result = write_pr(
+        a_rename_proposal, a_passed_proof, repo_with_remote.work, remote=remote
+    )
+
+    assert result.refusal is PrRefusal.PUSH_FAILED
+    assert "rejected by remote" in result.detail
+    assert [call[0] for call in remote.calls][-1] == "push"
+
+
+# Spec AC7: a failed PR says the branch was already pushed and cleans the clone.
+def test_a_failed_pr_is_pr_failed_and_reports_the_pushed_branch(
+    repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    draft = render_pr(a_rename_proposal, a_passed_proof)
+    remote = FailingPrRemote()
+
+    result = write_pr(
+        a_rename_proposal, a_passed_proof, repo_with_remote.work, remote=remote
+    )
+
+    assert result.refusal is PrRefusal.PR_FAILED
+    assert "already pushed" in result.detail.lower()
+    assert draft.branch in result.detail
+    assert [call[0] for call in remote.calls][-1] == "create_pr"

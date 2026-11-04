@@ -12,7 +12,7 @@ from tenon.detect import Unanalyzed
 from tenon.propose import Proposal
 from tenon.prove import ProofLevel, ProofResult, tail
 
-from .remote import Remote
+from .remote import Remote, RemoteError
 from .render import render_pr
 from .result import PrDraft, PrRefusal, PrResult, PrStatus
 
@@ -73,6 +73,12 @@ def _safe_path(path: str) -> None:
     candidate = PurePosixPath(path)
     if candidate.is_absolute() or ".." in candidate.parts or "\\" in path:
         raise ValueError(f"unsafe repository path: {path!r}")
+
+
+def _pr_detail(detail: str, branch: str) -> str:
+    """Say that the branch is on the remote when only the PR call failed."""
+    pushed = f"The branch {branch} was already pushed; the PR was not created."
+    return f"{detail}\n{pushed}" if detail else pushed
 
 
 @contextmanager
@@ -193,15 +199,27 @@ def write_pr(
                     proof, draft, PrRefusal.COMMIT_FAILED, _detail(committed)
                 )
 
-            remote.push(copy, draft.branch)
-            url = remote.create_pr(
-                copy,
-                branch=draft.branch,
-                base=base,
-                title=draft.title,
-                body=draft.body,
-                draft=proof.level is ProofLevel.UNVERIFIED,
-            )
+            try:
+                remote.push(copy, draft.branch)
+            except RemoteError as exc:
+                return _refused(proof, draft, PrRefusal.PUSH_FAILED, exc.detail)
+
+            try:
+                url = remote.create_pr(
+                    copy,
+                    branch=draft.branch,
+                    base=base,
+                    title=draft.title,
+                    body=draft.body,
+                    draft=proof.level is ProofLevel.UNVERIFIED,
+                )
+            except RemoteError as exc:
+                return _refused(
+                    proof,
+                    draft,
+                    PrRefusal.PR_FAILED,
+                    _pr_detail(exc.detail, draft.branch),
+                )
             return PrResult(
                 status=PrStatus.OPENED, level=proof.level, draft=draft, url=url
             )
