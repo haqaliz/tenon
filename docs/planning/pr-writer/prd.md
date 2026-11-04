@@ -68,7 +68,8 @@ with the proof section at the top.
   (`NOT_A_GIT_REPO`); `git status --porcelain` is non-empty, including untracked non-ignored files
   (`DIRTY_CHECKOUT`); the repository has no `origin` remote (`NO_REMOTE`); the default branch cannot
   be determined and no `base` was supplied (`UNKNOWN_DEFAULT_BRANCH`); the proposal has no edits
-  (`NO_PATCH`). Refusals carry the command output that justified them.
+  (`NO_PATCH`). Refusals carry the command output that justified them. A remote that exists but
+  cannot be queried for the branch is `REMOTE_CHECK_FAILED`, not a traceback.
 - **M3 — Default branch guard.** Determine the base from `base` if supplied, otherwise from
   `origin/HEAD` (falling back to `git ls-remote --symref origin HEAD`). If the branch to push equals
   the base, refuse `DEFAULT_BRANCH` and make no commit, push or PR call.
@@ -78,8 +79,9 @@ with the proof section at the top.
 - **M5 — Isolated clone.** Clone the clean checkout to a temporary directory (`git clone
   --no-hardlinks`), apply `proposal.diff` with `git apply -p1 -`, commit exactly `proposal.files`, and
   delete the clone on every path. The user's checkout is never written.
-- **M6 — Commit.** Subject `tenon: <summary>` (the title without the level prefix). Use the
-  repository's configured git identity; do not invent a bot identity. A patch that does not apply
+- **M6 — Commit.** Subject `tenon: <summary>` (the title without the level prefix). Read the source
+  repository's effective git identity and pass it to the commit in the clone; do not rely on the
+  clone inheriting local config, and do not invent a bot identity. A patch that does not apply
   in the clone is `PATCH_DID_NOT_APPLY`, regardless of `allow_unverified`.
 - **M7 — Push.** Push only the new branch with `--set-upstream`; never `--force`, never the base
   branch. A refused push is `PUSH_FAILED` with the tail. An existing local or remote branch is
@@ -125,8 +127,8 @@ with the proof section at the top.
 ```
 PrRefusal
   NOT_A_GIT_REPO | DIRTY_CHECKOUT | NO_REMOTE | UNKNOWN_DEFAULT_BRANCH | NO_PATCH
-  DEFAULT_BRANCH | BRANCH_EXISTS | UNVERIFIED_NOT_ALLOWED | PATCH_DID_NOT_APPLY
-  PUSH_FAILED | PR_FAILED
+  DEFAULT_BRANCH | BRANCH_EXISTS | REMOTE_CHECK_FAILED | UNVERIFIED_NOT_ALLOWED
+  PATCH_DID_NOT_APPLY | COPY_FAILED | COMMIT_FAILED | PUSH_FAILED | PR_FAILED
 
 PrDraft
   title: str                 # "[<LEVEL>] tenon: <summary>"

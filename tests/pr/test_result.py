@@ -16,8 +16,8 @@ def test_pr_status_values_are_the_closed_two():
     assert [status.value for status in PrStatus] == ["OPENED", "REFUSED"]
 
 
-# Spec AC1: the refusal vocabulary is exactly thirteen values, in order.
-def test_pr_refusal_values_are_the_closed_thirteen():
+# Spec AC1: the refusal vocabulary is exactly fourteen values, in order.
+def test_pr_refusal_values_are_the_closed_fourteen():
     assert [refusal.value for refusal in PrRefusal] == [
         "NOT_A_GIT_REPO",
         "DIRTY_CHECKOUT",
@@ -26,6 +26,7 @@ def test_pr_refusal_values_are_the_closed_thirteen():
         "NO_PATCH",
         "DEFAULT_BRANCH",
         "BRANCH_EXISTS",
+        "REMOTE_CHECK_FAILED",
         "UNVERIFIED_NOT_ALLOWED",
         "PATCH_DID_NOT_APPLY",
         "COPY_FAILED",

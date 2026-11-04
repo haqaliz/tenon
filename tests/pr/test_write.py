@@ -279,6 +279,27 @@ def test_an_existing_branch_is_refused_before_cloning(
     assert tree_hashes(repo_with_remote.work) == before
 
 
+class FailingCheckRemote(FakeRemote):
+    def branch_exists(self, repo, branch):
+        super().branch_exists(repo, branch)
+        raise RemoteError("could not reach origin")
+
+
+# Spec AC1: a remote that cannot be queried is a named refusal, not a traceback.
+def test_a_failed_branch_check_is_remote_check_failed(
+    repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    remote = FailingCheckRemote()
+
+    result = write_pr(
+        a_rename_proposal, a_passed_proof, repo_with_remote.work, remote=remote
+    )
+
+    assert result.refusal is PrRefusal.REMOTE_CHECK_FAILED
+    assert "could not reach origin" in result.detail
+    assert [call[0] for call in remote.calls] == ["default_branch", "branch_exists"]
+
+
 # Spec AC4/AC5: a successful run is isolated, clean and commits exactly the files.
 def test_a_successful_run_commits_exactly_the_proposal_files(
     repo_with_remote, a_rename_proposal, a_passed_proof
@@ -300,6 +321,29 @@ def test_a_successful_run_commits_exactly_the_proposal_files(
     assert remote.push_repo != repo_with_remote.work
     assert remote.commit_subject == draft.commit_message
     assert remote.commit_files == a_rename_proposal.files
+
+
+# Spec M6: the commit uses the source repository's configured identity, not the
+# global one that a fresh clone would otherwise inherit.
+def test_the_commit_uses_the_source_repository_identity(
+    repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    git(repo_with_remote.work, "config", "user.name", "Local Only")
+    git(repo_with_remote.work, "config", "user.email", "local@example.test")
+    draft = render_pr(a_rename_proposal, a_passed_proof)
+
+    result = write_pr(
+        a_rename_proposal,
+        a_passed_proof,
+        repo_with_remote.work,
+        remote=LocalRemote(),
+    )
+
+    assert result.status is PrStatus.OPENED
+    author = git(
+        repo_with_remote.bare, "log", "-1", "--pretty=%an <%ae>", draft.branch
+    ).strip()
+    assert author == "Local Only <local@example.test>"
 
 
 # Spec AC5: a garbage diff is PATCH_DID_NOT_APPLY and no commit is pushed.
@@ -330,10 +374,12 @@ def test_an_unsafe_file_path_raises_value_error(
         write_pr(unsafe, a_passed_proof, repo_with_remote.work, remote=a_fake_remote())
 
 
-# Plan edge case: the clone has no identity, so git refuses the commit.
+# Plan edge case: neither the source nor the clone has an identity, so git refuses.
 def test_a_missing_git_identity_is_commit_failed(
     repo_with_remote, a_rename_proposal, a_passed_proof, monkeypatch, tmp_path
 ):
+    git(repo_with_remote.work, "config", "--unset", "user.name")
+    git(repo_with_remote.work, "config", "--unset", "user.email")
     config = tmp_path / "no-identity"
     config.write_text("[user]\n\tuseConfigOnly = true\n", encoding="utf-8")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))

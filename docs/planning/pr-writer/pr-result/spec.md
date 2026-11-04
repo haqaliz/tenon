@@ -15,8 +15,8 @@ codes without parsing prose.
 
 - `PrStatus`: `OPENED`, `REFUSED`.
 - `PrRefusal`: `NOT_A_GIT_REPO`, `DIRTY_CHECKOUT`, `NO_REMOTE`, `UNKNOWN_DEFAULT_BRANCH`, `NO_PATCH`,
-  `DEFAULT_BRANCH`, `BRANCH_EXISTS`, `UNVERIFIED_NOT_ALLOWED`, `PATCH_DID_NOT_APPLY`,
-  `COPY_FAILED`, `COMMIT_FAILED`, `PUSH_FAILED`, `PR_FAILED`.
+  `DEFAULT_BRANCH`, `BRANCH_EXISTS`, `REMOTE_CHECK_FAILED`, `UNVERIFIED_NOT_ALLOWED`,
+  `PATCH_DID_NOT_APPLY`, `COPY_FAILED`, `COMMIT_FAILED`, `PUSH_FAILED`, `PR_FAILED`.
 - `PrDraft`: `title`, `body`, `branch`, `commit_message`; frozen; non-empty.
 - `PrResult`: `status`, `level`, `draft`, `url`, `refusal`, `detail`; frozen.
 - Invariants: `OPENED` → `url` is a non-empty string and `refusal is None`; `REFUSED` → `refusal` is
@@ -34,7 +34,7 @@ codes without parsing prose.
 
 ## Acceptance criteria
 
-- **AC1 — Closed vocabularies.** `PrStatus` has exactly two values and `PrRefusal` exactly thirteen,
+- **AC1 — Closed vocabularies.** `PrStatus` has exactly two values and `PrRefusal` exactly fourteen,
   in the order above. Every value constructs from its string and appears as a plain string in JSON.
 - **AC2 — Draft invariants.** A `PrDraft` with an empty title, body, branch or commit message raises
   `ValueError`; a valid draft is frozen and its sequence-free fields are unchanged on access.

@@ -25,13 +25,15 @@ where the guardrails stop being prose.
   6. `UNKNOWN_DEFAULT_BRANCH` — `base` is absent and the remote reports no default.
   7. `DEFAULT_BRANCH` — the rendered branch equals the base.
   8. `BRANCH_EXISTS` — the remote already has the branch.
+  9. `REMOTE_CHECK_FAILED` — the remote branch query itself fails; no clone or push follows.
 - **Clone.** `tempfile.mkdtemp(prefix="tenon-pr-")`, then `git clone --no-hardlinks -- <repo> <copy>`.
   A clone or temp failure is `COPY_FAILED`. Delete the copy in `finally` on every path.
 - **Apply.** `git apply -p1 -` with `proposal.diff` as stdin, `cwd=copy`, `shell=False`, timeout.
   Failure or timeout is `PATCH_DID_NOT_APPLY`. Validate every `proposal.files` path: relative, no
   `..`, no backslash, no absolute path; a violation is `ValueError` (a caller error, like T3).
-- **Commit.** `git add -- <proposal.files>` then `git commit -m <draft.commit_message>`. A failure is
-  `COMMIT_FAILED`. Use the repository's configured identity; do not set or invent one.
+- **Commit.** `git add -- <proposal.files>` then `git commit -m <draft.commit_message>`, passing the
+  source repository's effective `user.name`/`user.email` with `-c` so a local-only identity is not
+  replaced by the clone's global config. A failure is `COMMIT_FAILED`. Do not invent an identity.
 - **Push.** `remote.push(copy, branch)`. The real adapter runs
   `git push --set-upstream origin <branch>` with `GIT_TERMINAL_PROMPT=0`; never `--force`, never the
   base branch. Failure is `PUSH_FAILED`.

@@ -81,8 +81,18 @@ def _pr_detail(detail: str, branch: str) -> str:
     return f"{detail}\n{pushed}" if detail else pushed
 
 
+def _identity(root: Path) -> tuple[str, str]:
+    """The source's effective git identity, so a fresh clone does not fall back to global."""
+
+    def read(key: str) -> str:
+        completed = _git(["git", "config", "--get", key], cwd=root)
+        return completed.stdout.strip() if completed.returncode == 0 else ""
+
+    return read("user.name"), read("user.email")
+
+
 def _commit(
-    copy: Path, proposal: Proposal, draft: PrDraft
+    copy: Path, proposal: Proposal, draft: PrDraft, identity: tuple[str, str]
 ) -> subprocess.CompletedProcess:
     """Create the branch, stage exactly the proposed files and commit them."""
     checked_out = _git(["git", "checkout", "-b", draft.branch], cwd=copy)
@@ -91,7 +101,14 @@ def _commit(
     added = _git(["git", "add", "--", *proposal.files], cwd=copy)
     if added.returncode != 0:
         return added
-    return _git(["git", "commit", "-m", draft.commit_message], cwd=copy)
+    name, email = identity
+    argv = ["git"]
+    if name:
+        argv += ["-c", f"user.name={name}"]
+    if email:
+        argv += ["-c", f"user.email={email}"]
+    argv += ["commit", "-m", draft.commit_message]
+    return _git(argv, cwd=copy)
 
 
 @contextmanager
@@ -148,6 +165,9 @@ def write_pr(
     if not proposal.edits or not proposal.diff:
         return _refused(proof, draft, PrRefusal.NO_PATCH)
 
+    for path in proposal.files:
+        _safe_path(path)
+
     try:
         status = _git(["git", "status", "--porcelain"], cwd=root)
     except _GitError as exc:
@@ -164,6 +184,11 @@ def write_pr(
     if origin.returncode != 0:
         return _refused(proof, draft, PrRefusal.NO_REMOTE, _detail(origin))
 
+    try:
+        identity = _identity(root)
+    except _GitError as exc:
+        return _refused(proof, draft, PrRefusal.COMMIT_FAILED, exc.detail)
+
     if proof.level is ProofLevel.UNVERIFIED and not allow_unverified:
         return _refused(proof, draft, PrRefusal.UNVERIFIED_NOT_ALLOWED)
 
@@ -175,11 +200,12 @@ def write_pr(
     if draft.branch == base:
         return _refused(proof, draft, PrRefusal.DEFAULT_BRANCH)
 
-    if remote.branch_exists(root, draft.branch):
+    try:
+        exists = remote.branch_exists(root, draft.branch)
+    except RemoteError as exc:
+        return _refused(proof, draft, PrRefusal.REMOTE_CHECK_FAILED, exc.detail)
+    if exists:
         return _refused(proof, draft, PrRefusal.BRANCH_EXISTS)
-
-    for path in proposal.files:
-        _safe_path(path)
 
     try:
         with _clone(root, origin.stdout.strip()) as copy:
@@ -197,7 +223,7 @@ def write_pr(
                 )
 
             try:
-                committed = _commit(copy, proposal, draft)
+                committed = _commit(copy, proposal, draft, identity)
             except _GitError as exc:
                 return _refused(proof, draft, PrRefusal.COMMIT_FAILED, exc.detail)
             if committed.returncode != 0:
