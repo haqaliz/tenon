@@ -1,54 +1,73 @@
-# Card: feat/m0-3-first-real-case
+# Card: feat/m0-3-real-case
 
 - **Source:** FALLBACK — no GitHub issue.
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **M0.3** — the Phase 0 gate (`docs/ROADMAP.md`), exercising T1-T4 end to end.
-- **Milestone:** M0.3 (`docs/ROADMAP.md`), Phase 0.
-- **Branch:** `feat/m0-3-first-real-case/aliz`
-- **Worktree:** `.claude/worktrees/feat-m0-3-first-real-case`
+- **Capability:** Phase 0 gate **M0.3** (`docs/ROADMAP.md`) plus the smallest T2 follow-on it needs
+- **Milestone:** closes the Phase 0 gate: one real API change, one real repo, one patch that passes a
+  real check
+- **Branch:** `feat/m0-3-real-case/aliz`
+- **Worktree:** `.claude/worktrees/feat-m0-3-real-case`
 
 ## Brief
 
-Run the Phase 0 gate on real input: take the one real rename from the Stripe `v2500` -> `v2596`
-diff (`payment_method_types` -> `allowed_payment_method_types` on `POST /v1/checkout/sessions`),
-apply it to a real public repo, and prove the result with that repo's own check. Record the proof
-level honestly. The gate is met when the patch applies and the chosen check passes after the patch,
-with the evidence naming what the check did and did not establish.
+Run T1 → T2 → T3 → T4 on the one analyzable Stripe rename and a real public repo, and record the
+proof level honestly. The change is T1's record
+`payment_method_types` → `allowed_payment_method_types` on `POST /v1/checkout/sessions`
+(`docs/planning/lazy-ref-resolution/evidence.md` §4).
 
-## Dig result
+The deep dig found the gate is blocked by a smaller capability gap than expected. In every
+offline-runnable repo inspected, the test that exercises the Stripe call **encodes the old field
+name in a mock assertion**:
 
-- **Target:** `fighthealthinsurance/fighthealthinsurance` @
-  `56e69cfa4440aea0a42d016f84e6af336c5e0d3c` (default branch `main`, pushed 2026-10-31).
-- **Detect:** 289 changes, 52 breaking, 1 rename.
-- **Locate:** 3 certain keyword sites, 0 ambiguous. Required the explicit mapping
-  `POST /v1/checkout/sessions` = `checkout.Session.create`; inference yields
-  `checkout.sessions.create` and matches nothing.
-- **Propose:** 3 edits; the diff applies cleanly.
-- **Prove:** `TESTS_PASSED`; `tests/sync/test_pwyw_checkout.py` 12 passed before and after; total
-  229.5 s, timeout 900 s.
-- **Environment:** Python 3.13.15; external venv `.cache/venv-fhi`;
-  `uv pip install -r requirements.txt`; `TESTING=True`; stripe 12.2.0, Django 5.2.18,
-  pytest 9.2.0, setuptools 79.0.1.
-- **Nuance:** the check exercises the PWYW call through a mocked `Session.create` and reads
-  `call_args[1]`, but it does not assert `payment_method_types`; it passes before and after. The
-  other two patched sites are not covered by this check.
+```python
+stripe.checkout.Session.create.assert_called_with(payment_method_types=..., ...)
+```
+
+T2 does not see that line: the keyword's chain is
+`checkout.Session.create.assert_called_with`, not `checkout.Session.create`. So T3 proposes only the
+production edit, and the repo's own test then fails. Verified on `yezz123/stripe-template` at
+`9d9178c`: the proposed one-line patch makes `tests/test_payment.py::test_session_url` fail with
+`AssertionError: expected call`.
+
+The smallest complete fix is a T2 scan rule: when a rooted call's final segment is a mock assertion
+(`assert_called_with`, `assert_called_once_with`), attribute its keyword arguments to the operation
+chain without that segment. T3 needs no change; it already edits any certain site carrying the old
+symbol.
+
+## Target repo (proposed)
+
+`https://github.com/yezz123/stripe-template` at `9d9178c47a191112b86a6ce6edd71962faee80d1`
+(MIT, 25 KB, Python, FastAPI). Call site:
+`app/router/v1/payment.py:41`, `checkout.Session.create(payment_method_types=...)`.
+Test: `tests/test_payment.py::test_session_url`, which mocks the call and asserts its kwargs.
+
+Known limits of this repo as a proof target:
+
+- Two tests (`test_setup_new_method_by_email`, `..._by_id`) call the live Stripe API with a fake key
+  and fail before any patch. The check command must deselect them and the evidence must say so.
+- The repo is a 2024 template, not a production service.
+- The rename changes semantics: the new field is a filter on the dynamically computed set, not an
+  explicit list (Stripe spec `v2596` description). The mocked test cannot see that difference.
+
+Alternative target: `MoigeMatino/flask-stripe-one-time-payments` at `9dd24e4` (MIT). Direct
+keyword, one site, its test does not pin the call kwargs, so no T2 change is needed — but its
+TestingConfig requires PostgreSQL (`docker compose`, as its own CI does), and its test is
+insensitive to the rename.
 
 ## Constraints carried in from the repo
 
-- `CLAUDE.md` §1: execution decides. The label is whatever the check produced, not what the diff
-  looks like.
-- `CLAUDE.md` §2: honest proof levels. `TESTS_PASSED` with the coverage nuance stated in the
-  evidence.
-- `CLAUDE.md` §3: machine-readable source first. The Stripe OpenAPI pair is the source.
-- `CLAUDE.md` §5: never touch the default branch. This card does not open a PR against the target
-  repo.
-- `VISION.md`: no model proposer, no code egress; the rule proposer is deterministic.
-- `ROADMAP.md`: the gate is one real change, one real repo, one patch that passes a real check; do
-  not weaken it to a fixture.
+- `CLAUDE.md` §1: execution decides. The patch is labelled only by what T4 ran.
+- `CLAUDE.md` §2: honest levels. If the check is a subset, the evidence says subset and names the
+  deselected tests.
+- `CLAUDE.md` §5: no branch or merge; T5 does not exist yet.
+- `docs/ROADMAP.md` R1: a mocked suite makes `TESTS_PASSED` weak; say so in the evidence.
+- `docs/technical/ARCHITECTURE.md`: change record is the unit; no new change source.
+- Determinism: no network in `tests/`; the real clone and the Stripe snapshots stay in `.cache`.
 
 ## Scope fence
 
-Not this card: T2 inference (plural/PascalCase resource names), composition semantics, T3 rule
-coverage, T5 PR writer, CLI/pipeline glue, committing the target repo or the Stripe specs, and any
-model proposer.
+Not this card: T5 PR writer, T3 rules beyond rename, semantic analysis of the new field, test-double
+shapes other than `assert_called_with` / `assert_called_once_with` (notably
+`call_args.kwargs["field"]` and `call_args[1]["field"]`), CLI (`src/tenon/cli`), and any change to
+the T4 proof contract.

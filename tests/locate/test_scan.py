@@ -21,6 +21,7 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
 SDK_BASIC = FIXTURES / "sdk-basic"
 SDK_DECOY = FIXTURES / "sdk-decoy"
 SDK_DYNAMIC = FIXTURES / "sdk-dynamic"
+SDK_MOCK_ASSERT = FIXTURES / "sdk-mock-assert"
 SDK_MULTIPLE = FIXTURES / "sdk-multiple"
 SDK_SRC_LAYOUT = FIXTURES / "sdk-src-layout"
 SDK_UNICODE = FIXTURES / "sdk-unicode"
@@ -250,6 +251,50 @@ def test_decoy_keyword_is_unrooted_and_never_rooted():
         (10, False),
         (11, True),
     ]
+
+
+def test_mock_assertion_keywords_are_attributed_to_the_operation():
+    result = scan(SDK_MOCK_ASSERT, "stripe")
+
+    assert result.hits == (
+        hit(SDK_MOCK_ASSERT, "app.py", 5, 36, SiteShape.CALL, "create", ("checkout", "Session", "create"), True),
+        hit(SDK_MOCK_ASSERT, "app.py", 5, 43, SiteShape.KEYWORD, "payment_method_types", ("checkout", "Session", "create"), True),
+        hit(SDK_MOCK_ASSERT, "tests/test_app.py", 5, 36, SiteShape.CALL, "assert_called_once_with", ("checkout", "Session", "create", "assert_called_once_with"), True),
+        hit(SDK_MOCK_ASSERT, "tests/test_app.py", 6, 9, SiteShape.KEYWORD, "payment_method_types", ("checkout", "Session", "create"), True),
+    )
+
+
+def test_mock_assertion_keeps_one_operation_call():
+    result = scan(SDK_MOCK_ASSERT, "stripe")
+
+    calls = [
+        h
+        for h in result.hits
+        if h.shape is SiteShape.CALL and h.chain == ("checkout", "Session", "create")
+    ]
+
+    assert len(calls) == 1
+    assert calls[0].path == "app.py"
+
+
+def test_unrooted_mock_assertion_keyword_is_not_attributed():
+    text = 'create.assert_called_with(payment_method_types="card")\n'
+    visitor = _Visitor(source(text), "stripe", {}, set())
+
+    visitor.visit(parse(text))
+
+    [keyword] = [h for h in visitor.hits if h.symbol == "payment_method_types"]
+    assert (keyword.chain, keyword.rooted) == ((), False)
+
+
+def test_assert_has_calls_is_not_an_operation_chain():
+    text = "stripe.checkout.Session.create.assert_has_calls([calls])\n"
+    visitor = _Visitor(source(text), "stripe", {"stripe": ("stripe",)}, set())
+
+    visitor.visit(parse(text))
+
+    [call] = [h for h in visitor.hits if h.shape is SiteShape.CALL]
+    assert call.chain == ("checkout", "Session", "create", "assert_has_calls")
 
 
 def test_dict_keys_and_unrooted_attributes_are_reported():
