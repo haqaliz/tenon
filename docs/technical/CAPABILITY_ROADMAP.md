@@ -8,7 +8,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T2** | **Call-site location (Python).** Find usages of a changed symbol or endpoint with file and line. | T1 | Ambiguity reported, never guessed | **Shipped 2026-10-29** |
 | **T3** | **Patch proposer seam.** Rule-based proposer for mechanical changes; optional BYOK model proposer. | T1, T2 | A model proposes only | **Shipped 2026-10-29** |
 | **T4** | **Proof runner.** Apply the patch in an isolated working copy, run the user's tests, record the proof level. | T3 | Execution decides the label | **Shipped 2026-10-29** |
-| **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging | Not started |
+| **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging | **Shipped 2026-11-05** |
 | **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | | Not started |
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | Not started |
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | Not started |
@@ -78,6 +78,27 @@ Known limits at this level: only `TESTS_PASSED` and `UNVERIFIED` exist (`CHARACT
 and `TYPES_BUILD_ONLY` are T7); one command, no retries, no dependency installation; the copy is not
 a sandbox and the user's command is arbitrary code the user chose to run; a repo that depends on a
 venv or generated state inside the tree may not be runnable in the copy.
+
+### T5 as built (2026-11-05)
+
+`src/tenon/pr/`: a deterministic `PrDraft` (title, body, branch, commit message), `PrResult` with a
+closed refusal set, `render_pr` (the level in the title; change, check command and exit codes, files,
+skipped sites and optional unanalyzed subtrees in the body; no duplicated diff), and `write_pr`
+(clean checkout and origin required; an isolated `git clone`; `git apply` of the exact proven diff;
+commit with the source repository's identity; `git push --set-upstream`; `gh pr create`). The
+`Remote` protocol is the host seam; `GitGhRemote` is the real `git`+`gh` adapter, replaced by a fake
+in tests. `UNVERIFIED` refuses by default and opens a draft only with `allow_unverified=True`. The
+writer never force-pushes, never pushes the base branch and has no merge path. 131 tests in
+`tests/pr/`; 745 total, offline.
+
+Known limits at this level: the clone starts from the checkout's HEAD, so run from the branch the
+PR should be based on (normally the default branch); a feature-branch HEAD would put its extra
+commits in the PR. One PR per proposal; a dirty checkout is refused, not stashed; same-repository
+branches only (no forks); an existing branch is `BRANCH_EXISTS`, never updated or forced; a push that
+succeeds followed by a failed PR leaves the branch on the remote; the real `gh` call is not exercised
+in CI (the adapter argv and URL parsing are unit-tested; the offline end-to-end uses a local bare
+remote with `create_pr` replaced); submodules and LFS content are not fetched into the clone; the
+caller chooses the check command, so T5 cannot know it was a subset.
 
 
 

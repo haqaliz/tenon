@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20shipped-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20shipped-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -12,18 +12,21 @@ affected calls, and proves the fix against your own checks before it opens a pul
 
 ## Status
 
-**T1 (change detection), T2 (Python call-site location), T3 (patch proposal) and T4 (proof
-runner) are shipped.** `src/tenon/detect/` diffs two OpenAPI 3.x documents into typed `Change`
-records; `src/tenon/locate/` turns one of those records into call sites with file, line and column,
-and keeps anything it cannot prove in a separate ambiguity list; `src/tenon/propose/` turns the
-certain sites into a candidate diff and never applies it; `src/tenon/prove/` applies that diff to a
-copy and runs your check before and after, recording `TESTS_PASSED` or `UNVERIFIED` with a reason.
-All four run fully offline. PR creation does not exist yet. Read `CLAUDE.md` before writing any code
-here.
+**T1 (change detection), T2 (Python call-site location), T3 (patch proposal), T4 (proof runner)
+and T5 (PR writer) are shipped.** `src/tenon/detect/` diffs two OpenAPI 3.x documents into typed
+`Change` records; `src/tenon/locate/` turns one of those records into call sites with file, line and
+column, and keeps anything it cannot prove in a separate ambiguity list; `src/tenon/propose/` turns
+the certain sites into a candidate diff and never applies it; `src/tenon/prove/` applies that diff to
+a copy and runs your check before and after, recording `TESTS_PASSED` or `UNVERIFIED` with a reason;
+`src/tenon/pr/` renders a deterministic PR whose title and body state that level, then clones a clean
+checkout, commits the exact diff to a new branch and opens the PR through your own `git` and `gh`.
+The analysis and proof run fully offline; only the final push and PR call touch a remote. Read
+`CLAUDE.md` before writing any code here.
 
 ```python
 from tenon.detect import diff, load
 from tenon.locate import LocateConfig, locate
+from tenon.pr import GitGhRemote, write_pr
 from tenon.propose import propose
 from tenon.prove import prove
 
@@ -34,6 +37,9 @@ for change in changes:
     result = prove(proposal, "path/to/repo", ["python", "-m", "pytest", "-q"])
     result.level      # TESTS_PASSED, or UNVERIFIED with a cause
     proposal.skipped  # what Tenon refused to touch, and why
+    pr = write_pr(proposal, result, "path/to/repo", remote=GitGhRemote())
+    pr.url            # the PR, when OPENED
+    pr.refusal        # DIRTY_CHECKOUT, DEFAULT_BRANCH, ... when REFUSED
 ```
 
 `uv run pytest` — no network, no model calls.

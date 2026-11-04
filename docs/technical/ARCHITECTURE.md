@@ -1,8 +1,8 @@
 # Tenon: Architecture
 
-Design intent. **T1 (detect), T2 (locate, Python), T3 (propose) and T4 (prove) are implemented**
-under `src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/` and `src/tenon/prove/`; T5 is
-not.
+Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove) and T5 (PR) are
+implemented** under `src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`,
+`src/tenon/prove/` and `src/tenon/pr/`. The CLI and the later stages are not.
 
 ## Pipeline
 
@@ -33,7 +33,7 @@ src/tenon/
   locate/     T2: per-language call-site finders            <- built (Python)
   propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
   prove/      T4/T7: working-copy runner, proof levels     <- built (TESTS_PASSED)
-  pr/         T5: branch and PR writer
+  pr/         T5: branch and PR writer                     <- built (git + gh seam)
   probe/      T8: agent run against an API or MCP server
   corpus/     T9: benchmark records
   cli/        tenon check | fix | probe
@@ -46,14 +46,19 @@ tests/        offline; fixture repos and specs; no network, no model calls
   source (MCP, SDK metadata) does not touch locate or prove.
 - **Proof is a ladder, chosen by the user.** `--require TESTS_PASSED|CHARACTERIZED|REPLAYED|TYPES_BUILD_ONLY`.
   If the required level cannot be reached, the result is a flagged suggestion, not a verified PR.
-- **Isolated working copy.** Patches apply to a copy; the user's checkout is never modified.
+- **Isolated working copy and clone.** T4 patches a copy; T5 clones the clean checkout to a temporary
+  directory and commits there. The user's checkout is never modified or given a Tenon branch.
+- **The PR is a seam, not a merge.** T5 renders a deterministic draft, pushes only the new branch and
+  opens the PR through `GitGhRemote` (`git` + `gh`). It never force-pushes, never pushes the base
+  branch and has no merge path. `UNVERIFIED` refuses by default; `allow_unverified=True` opens a
+  draft that names the cause.
 - **Determinism.** Detection, location and PR text are deterministic for the same inputs. The
   model proposer is the only non-deterministic piece, behind an injectable seam; tests use
   recorded proposals.
 - **BYOK / local only** for any model use. Keys come from the environment and are never committed.
-- **UNVERIFIED causes** (draft): `NO_MACHINE_READABLE_CHANGE`, `AMBIGUOUS_CALL_SITE`,
-  `NO_TESTS_FOUND`, `TESTS_FAILED_BEFORE` (baseline already red), `PATCH_DID_NOT_APPLY`,
-  `REQUIRED_LEVEL_UNREACHED`.
+- **UNVERIFIED causes** (shipped): `NO_PATCH_PROPOSED`, `PATCH_DID_NOT_APPLY`, `NO_TESTS_FOUND`,
+  `TESTS_FAILED_BEFORE` (baseline already red), `TESTS_FAILED_AFTER`, `CHECK_TIMED_OUT`,
+  `COPY_FAILED`. T7 adds the weaker levels and their causes.
 - **Baseline first.** Run the user's checks before patching, so a red baseline is reported as such
   and not blamed on the patch.
 
@@ -70,3 +75,5 @@ Exit 0 when the required proof level was reached, 1 otherwise, 2 on usage. Never
 - Language-server or tree-sitter for TypeScript location; decide at T6.
 - Where TypeScript analysis lives if the core stays Python (subprocess helper vs. separate package).
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
+- T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
+  content in the clone. The current writer refuses a dirty tree and never force-pushes.
