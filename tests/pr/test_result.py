@@ -315,3 +315,14 @@ def result_to_json_with_hash_seed(seed):
 # Spec AC5: byte-identical output across hash seeds.
 def test_pr_result_to_json_is_byte_stable_across_hash_seeds():
     assert result_to_json_with_hash_seed("0") == result_to_json_with_hash_seed("1")
+
+
+# Plan phase 4: `tenon.pr` is the public surface for the four contract types.
+def test_package_exports_the_public_contract():
+    from tenon.pr import PrDraft, PrRefusal, PrResult, PrStatus, __all__
+
+    assert __all__ == ["PrDraft", "PrRefusal", "PrResult", "PrStatus"]
+    assert PrStatus.OPENED.value == "OPENED"
+    assert PrRefusal.PR_FAILED.value == "PR_FAILED"
+    assert PrDraft.__name__ == "PrDraft"
+    assert PrResult.__name__ == "PrResult"
