@@ -1,41 +1,39 @@
-# Card: feat/cli
+# Card: feat/typescript-locator
 
-- **Source:** FALLBACK — no GitHub issue (`gh issue view cli` is not an issue id; `gh issue list` is empty).
+- **Source:** FALLBACK — no GitHub issue (`gh issue view typescript-locator` is not an issue id; `gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** M1.4 in `docs/ROADMAP.md` (no T-id; exposes T1–T5)
-- **Milestone:** M1.4 — `tenon check` / `tenon fix`
-- **State:** shipped 2026-11-05 (`src/tenon/cli/`, 870 tests)
-- **Branch:** `feat/cli/aliz`
-- **Worktree:** `.claude/worktrees/feat-cli`
+- **Capability:** **T6 TypeScript/JavaScript locator** (`docs/technical/CAPABILITY_ROADMAP.md:12`)
+- **Milestone:** M2.1 (`docs/ROADMAP.md`)
+- **Branch:** `feat/typescript-locator/aliz`
+- **Worktree:** `.claude/worktrees/feat-typescript-locator`
 
 ## Brief
 
-T1–T5 are a library with no entry point. Add `src/tenon/cli/` and a `tenon` console script with two
-commands:
+T2 locates Python call sites. T6 must do the same for TypeScript/JavaScript: given a T1 `Change` and
+a repository root, return the same `LocateResult` — certain sites with file/line/column, ambiguity
+groups with named reasons, and a named non-result — rooted in imports of the configured npm SDK
+package.
 
-- `tenon check <repo> --old SPEC --new SPEC` runs detect -> locate and reports the affected call
-  sites, certain and ambiguous, with file and line.
-- `tenon fix <repo> --old SPEC --new SPEC` runs detect -> locate -> propose -> prove, prints the
-  candidate diff and the `ProofResult`, and with `--open-pr` calls `write_pr`.
-
-Both accept `--json` for a byte-stable machine report. Exit codes reflect the result: `0` when the
-required proof was reached (or the check is clean), `1` when it was not, `2` on usage or bad input.
-No traceback ever reaches the terminal.
+The deep dig found a viable path: `tree-sitter` 0.26 with `tree-sitter-typescript` 0.23 and
+`tree-sitter-javascript` 0.25 installs as wheels and parses TS/TSX/JS without Node. T2's `Hit`,
+`Dynamic`, `ScanResult`, `Query`, `derive` and the entire `resolve` certainty policy are
+language-agnostic; T6 needs a TypeScript scanner that emits the same evidence plus a TS config and a
+`locate_ts` wrapper.
 
 ## Constraints carried in from the repo
 
-- `CLAUDE.md` §1–2: only what ran is labelled; `UNVERIFIED` is never presented as verified.
-- `CLAUDE.md` §5: `tenon fix` never writes the user's checkout by default and never merges;
-  `--open-pr` goes through T5, which refuses a dirty tree, the default branch and an existing branch.
-- `docs/technical/ARCHITECTURE.md` CLI shape: `tenon check`, `tenon fix [--require LEVEL]
-  [--proposer CMD] [--open-pr]`.
-- `docs/ROADMAP.md` M1.4: exit codes reflect proof; JSON output byte-stable.
-- `tenon.toml` `[locate]` already loads through `tenon.locate.load_config`; the CLI may extend the
-  file, but the in-memory API stays the real contract.
-- Offline: tests must not call `gh`, a model, or the network. The CLI is tested as a subprocess or
-  by calling `main(argv)`.
+- `CLAUDE.md` §1–2: execution decides; a location is certain only when the call chain is rooted in an
+  SDK import; ambiguity is reported, never guessed.
+- Same contract as T2 (`docs/technical/CAPABILITY_ROADMAP.md` T6): reuse `Site`, `SiteShape`,
+  `AmbiguousGroup`, `LocateResult`, `LocateReason` and the existing certainty policy.
+- `docs/technical/ARCHITECTURE.md` open question: "Language-server or tree-sitter for TypeScript
+  location; decide at T6." The dig recommends tree-sitter in Python.
+- Determinism: byte-stable JSON, ordered by `(path, line, column)`.
+- Offline: committed fixture repos; no network, no Node, no `tsc`, no type inference.
+- R8: each language behind its own fixtures.
 
 ## Scope fence
 
-Not this card: `tenon probe` (T8), T6/T7, new proposer rules, a hosted app, releases.
+Not this card: new proposer rules for TS (T3 still edits `keyword`/`dict_key`/`attribute` spans),
+T7 proof levels, MCP/probe (T8), the benchmark (T9), and raw-HTTP call sites with no SDK import.
