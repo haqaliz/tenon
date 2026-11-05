@@ -10,13 +10,19 @@ from typing import Sequence
 from tenon.detect import Change, DiffResult, SpecRefusal, diff, load
 from tenon.locate import LocateConfig, locate
 from tenon.pr import Remote
+from tenon.propose import propose
+from tenon.prove import prove
 
 from .config import CliConfig, load_cli_config, overrides, resolve_config_path
 from .report import (
+    FixResult,
     check_exit,
+    fix_exit,
     render_check_json,
     render_check_text,
     render_error,
+    render_fix_json,
+    render_fix_text,
 )
 
 # Spec AC1: the installed package version, with a stable fallback for a source run.
@@ -142,6 +148,30 @@ def _check(args: argparse.Namespace, config: CliConfig) -> int:
     return check_exit(located)
 
 
+# Spec AC4/AC5: locate, propose and prove each change; never write the checkout.
+def _fix(
+    args: argparse.Namespace, config: CliConfig, remote: Remote | None
+) -> int:
+    _result, changes = _diff_and_filter(args.old, args.new, config)
+    repo = Path(args.repo)
+    results: list[FixResult] = []
+    for change in changes:
+        located = locate(change, repo, config.locate)
+        proposal = propose(change, located, repo)
+        proof = prove(proposal, repo, config.command)
+        results.append(
+            FixResult(
+                change=change,
+                locate=located,
+                proposal=proposal,
+                proof=proof,
+            )
+        )
+    text = render_fix_json(results) if args.json else render_fix_text(results)
+    print(text, end="")
+    return fix_exit(len(changes), results, config.require)
+
+
 def _fail(
     kind: str,
     message: str,
@@ -174,7 +204,7 @@ def main(argv: Sequence[str] | None = None, *, remote: Remote | None = None) -> 
         config = _config(args)
         if args.command == "check":
             return _check(args, config)
-        raise NotImplementedError("fix lands in the next phase")
+        return _fix(args, config, remote)
     except SpecRefusal as refusal:
         return _fail(
             "spec",

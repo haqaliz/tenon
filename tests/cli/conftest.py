@@ -24,6 +24,18 @@ components:
 
 NEW_SPEC = OLD_SPEC.replace("amount:", "amount_cents:")
 
+# The rename is gone too: a property removal the rule cannot propose.
+REMOVED_SPEC = """\
+openapi: 3.1.0
+components:
+  schemas:
+    Charge:
+      type: object
+      properties:
+        currency:
+          type: string
+"""
+
 # One non-breaking addition and one breaking rename.
 MIXED_SPEC = """\
 openapi: 3.1.0
@@ -121,6 +133,11 @@ def a_mixed_specs(tmp_path):
 @pytest.fixture
 def a_endpoint_specs(tmp_path):
     return a_write_specs(tmp_path, ENDPOINT_OLD, ENDPOINT_NEW)
+
+
+@pytest.fixture
+def a_removed_specs(tmp_path):
+    return a_write_specs(tmp_path, OLD_SPEC, REMOVED_SPEC)
 
 
 @pytest.fixture

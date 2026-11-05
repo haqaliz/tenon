@@ -150,3 +150,96 @@ def test_missing_config_with_sdk_package_is_valid(a_repo_without_config, a_specs
 def test_missing_config_without_sdk_package_is_usage(a_repo_without_config, a_specs, capsys):
     assert a_check(a_repo_without_config, a_specs) == 2
     assert "sdk-package" in capsys.readouterr().err
+
+
+def a_fix(repo, specs, *extra):
+    old, new = specs
+    return main(["fix", str(repo), "--old", str(old), "--new", str(new), *extra])
+
+
+# Spec AC4: a green check prints the diff and the proof, and writes nothing.
+def test_fix_passing_check_prints_diff_and_proof(
+    a_repo, a_specs, a_snapshot, capsys
+):
+    before = a_snapshot(a_repo)
+
+    assert a_fix(a_repo, a_specs) == 0
+
+    out = capsys.readouterr().out
+    assert (
+        '+    return client.charges.create(amount_cents=amount, currency="usd")'
+        in out
+    )
+    assert "Proof: TESTS_PASSED" in out
+    assert "Baseline exit: 0" in out
+    assert "After exit: 0" in out
+    assert a_snapshot(a_repo) == before
+
+
+# Spec AC5: no check command is UNVERIFIED, not a passed proof.
+def test_fix_without_a_check_command_is_unverified(
+    a_repo, a_specs, a_no_command_config, capsys
+):
+    assert (
+        a_fix(a_repo, a_specs, "--config", str(a_no_command_config)) == 1
+    )
+    out = capsys.readouterr().out
+    assert "Proof: UNVERIFIED" in out
+    assert "Cause: NO_TESTS_FOUND" in out
+
+
+# Spec AC5: --require changes the exit code only; the label stays UNVERIFIED.
+def test_fix_require_unverified_exits_zero(
+    a_repo, a_specs, a_no_command_config, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--require",
+            "UNVERIFIED",
+        )
+        == 0
+    )
+    assert "Proof: UNVERIFIED" in capsys.readouterr().out
+
+
+# Spec AC5: the JSON proof carries the named cause.
+def test_fix_json_carries_the_unverified_cause(
+    a_repo, a_specs, a_no_command_config, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--json",
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert set(payload) == {"command", "results", "summary"}
+    assert payload["command"] == "fix"
+    assert payload["results"][0]["proof"]["level"] == "UNVERIFIED"
+    assert payload["results"][0]["proof"]["cause"] == "NO_TESTS_FOUND"
+    assert payload["results"][0]["pr"] is None
+    assert payload["summary"]["unverified"] == 1
+
+
+# Spec AC5: a change with no rule still names the proposal reason.
+def test_fix_no_rule_reports_the_proposal_reason(a_repo, a_removed_specs, capsys):
+    assert a_fix(a_repo, a_removed_specs) == 1
+    out = capsys.readouterr().out
+    assert "No patch: NO_RULE" in out
+    assert "Cause: NO_PATCH_PROPOSED" in out
+
+
+# Spec AC2/M5: zero changes after filtering is a clean 0.
+def test_fix_zero_changes_exits_zero(a_repo, a_same_specs, capsys):
+    assert a_fix(a_repo, a_same_specs) == 0
+    out = capsys.readouterr().out
+    assert "0 changes, 0 proposals" in out
