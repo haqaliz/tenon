@@ -14,7 +14,7 @@ from typing import Iterable, Sequence
 
 from tenon.detect import Change
 
-from .query import Query, derive
+from .query import Query, QueryConfig, derive
 from .result import (
     AmbiguityReason,
     AmbiguousGroup,
@@ -41,7 +41,7 @@ def resolve(
     change: Change,
     query: Query,
     scan_result: ScanResult,
-    config: LocateConfig,
+    config: QueryConfig,
 ) -> LocateResult:
     """Apply the rule table to one query and its scan evidence."""
     if query.reason is not None:

@@ -6,11 +6,11 @@ translation point, so it names what it cannot map instead of guessing.
 
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Mapping, Protocol
 
 from tenon.detect import Change, ChangeKind
 
-from .result import LocateConfig, LocateReason
+from .result import LocateReason
 
 Scope = Literal["operation", "component"]
 FieldPresence = Literal["must_exist", "must_be_added", "absent"]
@@ -41,6 +41,13 @@ _VERB_LEAVES: dict[str, tuple[str, ...]] = {
 }
 
 
+class QueryConfig(Protocol):
+    """The mapping surface ``derive`` needs from any language's config."""
+
+    operations: Mapping[str, str]
+    fields: Mapping[str, str]
+
+
 @dataclass(frozen=True, slots=True)
 class Query:
     """What a change asks the scanner to find. Candidates are ordered, never a set."""
@@ -57,7 +64,7 @@ class Query:
     reason: LocateReason | None = None
 
 
-def derive(change: Change, config: LocateConfig) -> Query:
+def derive(change: Change, config: QueryConfig) -> Query:
     """Derive the locate query for one change; unsupported shapes get a named reason."""
     location = change.location
     scope: Scope = (
@@ -141,7 +148,7 @@ def _path_like(value: object) -> bool:
 
 
 def _mapped_operation(
-    config: LocateConfig, method: str | None, path: str | None
+    config: QueryConfig, method: str | None, path: str | None
 ) -> str | None:
     """An exact ``METHOD /path`` key, with the method compared case-insensitively."""
     if not method or not path:
@@ -188,7 +195,7 @@ def _schema_name(pointer: str) -> str | None:
 
 
 def _mapped_field(
-    config: LocateConfig, pointer: str, spec_name: str | None
+    config: QueryConfig, pointer: str, spec_name: str | None
 ) -> str | None:
     """``Schema.field`` lookup; a mapping for another schema never applies."""
     if spec_name is None:
