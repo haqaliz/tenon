@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import os
 import subprocess
 import sys
 
@@ -402,3 +403,116 @@ def test_fix_open_pr_builds_the_default_remote(a_repo, a_specs, monkeypatch):
 
     assert a_fix(a_repo, a_specs, "--open-pr") == 0
     assert calls[0]["remote"] is marker
+
+
+# Spec AC8: a refused spec is exit 2, named, and never a traceback.
+def test_bad_spec_is_a_named_refusal(a_repo, a_specs, tmp_path, capsys):
+    _old, new = a_specs
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("openapi: 2.0\n")
+
+    assert a_check(a_repo, (bad, new)) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "tenon: spec:" in captured.err
+    assert "UNSUPPORTED_VERSION" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC8/M10: with --json the one error object is the only stdout.
+def test_bad_spec_json_is_one_error_object_on_stdout(a_repo, a_specs, tmp_path, capsys):
+    _old, new = a_specs
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("openapi: 2.0\n")
+
+    assert a_check(a_repo, (bad, new), "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "spec"
+    assert payload["error"]["code"] == "UNSUPPORTED_VERSION"
+    assert payload["error"]["pointer"] == "#/openapi"
+    assert payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC8: a malformed tenon.toml is a named config error.
+def test_bad_toml_is_a_config_error(a_repo, a_specs, capsys):
+    (a_repo / "tenon.toml").write_text("[locate\n")
+
+    assert a_check(a_repo, a_specs) == 2
+
+    err = capsys.readouterr().err
+    assert "tenon: config:" in err
+    assert "tenon.toml" in err
+    assert "Traceback" not in err
+
+
+# Spec AC8: a missing spec file is exit 2 and names the file.
+def test_missing_spec_exits_two(a_repo, a_specs, tmp_path, capsys):
+    _old, new = a_specs
+    missing = tmp_path / "missing.yaml"
+
+    assert a_check(a_repo, (missing, new)) == 2
+
+    err = capsys.readouterr().err
+    assert "missing.yaml" in err
+    assert "Traceback" not in err
+
+
+# Spec AC8/M6: only the shipped proof levels parse; the rest names T7.
+def test_unknown_require_names_t7(a_repo, a_specs, capsys):
+    assert a_fix(a_repo, a_specs, "--require", "BY_HAND") == 2
+
+    err = capsys.readouterr().err
+    assert "--require" in err
+    assert "T7" in err
+
+
+# Spec M10: an unexpected failure is an internal 1, not a traceback.
+def test_unexpected_failure_is_internal(a_repo, a_specs, monkeypatch, capsys):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli_main, "diff", boom)
+
+    assert a_check(a_repo, a_specs) == 1
+
+    captured = capsys.readouterr()
+    assert "tenon: internal: boom" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def a_run_module_check(repo, specs, seed):
+    old, new = specs
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tenon",
+            "check",
+            str(repo),
+            "--old",
+            str(old),
+            "--new",
+            str(new),
+            "--json",
+        ],
+        capture_output=True,
+        env={**os.environ, "PYTHONHASHSEED": seed},
+    )
+
+
+# Spec AC10/M12: the same inputs give byte-identical JSON across hash seeds.
+def test_check_json_is_byte_stable_across_hash_seeds(a_repo, a_specs):
+    first = a_run_module_check(a_repo, a_specs, "0")
+    second = a_run_module_check(a_repo, a_specs, "1")
+
+    assert first.returncode == 1
+    assert second.returncode == 1
+    assert first.stdout == second.stdout
+    assert b"acme/billing.py" in first.stdout
+    assert str(a_repo).encode() not in first.stdout
