@@ -3,8 +3,9 @@
 from pathlib import Path
 
 from tenon.locate import SiteShape
-from tenon.locate.scan import Dynamic, DynamicKind, Hit
+from tenon.locate.scan import Dynamic, DynamicKind, Hit, _Source
 from tenon.locate.ts_scan import (
+    _aliases,
     _bindings,
     _grammar,
     _parser,
@@ -45,6 +46,13 @@ def parse_ts(text, suffix=".ts"):
 
 def bindings(text, sdk_package="stripe"):
     return _bindings(parse_ts(text), sdk_package)
+
+
+def rooted(text, sdk_package="stripe"):
+    tree = parse_ts(text)
+    roots, classes = _bindings(tree, sdk_package)
+    source = _Source("m.ts", tuple(text.split("\n")))
+    return _aliases(tree, roots, classes, sdk_package, source)
 
 
 # Phase 1: discovery, grammar selection and skipped files.
@@ -264,3 +272,165 @@ def test_scan_ts_reaches_the_sdk_importer_but_not_an_unrelated_module():
     assert result.modules == ("src/sdk.ts",)
     assert "src/unrelated.ts" not in result.modules
     assert "src/format.ts" not in result.modules
+
+
+# Phase 3: one-hop aliases.
+def test_alias_from_a_new_expression_is_rooted():
+    aliases, class_aliases, dynamics = rooted(
+        'import Stripe from "stripe";\nconst client = new Stripe("sk");\n'
+    )
+
+    assert aliases == {"client": ("stripe",)}
+    assert class_aliases == {"client"}
+    assert dynamics == []
+
+
+def test_alias_from_a_constructor_call_is_rooted():
+    aliases, class_aliases, _ = rooted(
+        'import Stripe from "stripe";\nconst client = Stripe();\n'
+    )
+
+    assert aliases == {"client": ("stripe",)}
+    assert class_aliases == {"client"}
+
+
+def test_alias_of_the_namespace_is_rooted():
+    aliases, class_aliases, _ = rooted(
+        'import * as stripe from "stripe";\nconst s = stripe;\n'
+    )
+
+    assert aliases == {"s": ("stripe",)}
+    assert class_aliases == set()
+
+
+def test_alias_of_a_rooted_member_is_rooted():
+    aliases, class_aliases, _ = rooted(
+        'import * as stripe from "stripe";\nconst charges = stripe.charges;\n'
+    )
+
+    assert aliases == {"charges": ("stripe", "charges")}
+    assert class_aliases == set()
+
+
+def test_object_destructuring_binds_shorthand_and_renamed_members():
+    aliases, class_aliases, _ = rooted(
+        'import * as stripe from "stripe";\n'
+        "const { balance, charges: c } = stripe;\n"
+    )
+
+    assert aliases == {
+        "balance": ("stripe", "balance"),
+        "c": ("stripe", "charges"),
+    }
+    assert class_aliases == set()
+
+
+def test_alias_value_unwraps_parentheses_as_satisfies_and_non_null():
+    aliases, _, _ = rooted(
+        'import * as stripe from "stripe";\n'
+        "const a = (stripe);\n"
+        "const b = stripe as any;\n"
+        "const c = stripe!;\n"
+        "const d = stripe satisfies X;\n"
+    )
+
+    assert aliases == {
+        "a": ("stripe",),
+        "b": ("stripe",),
+        "c": ("stripe",),
+        "d": ("stripe",),
+    }
+
+
+def test_alias_of_a_class_import_keeps_class_certainty():
+    aliases, class_aliases, _ = rooted(
+        'import { Stripe } from "stripe";\nconst direct = Stripe;\n'
+    )
+
+    assert aliases == {"direct": ("stripe", "Stripe")}
+    assert class_aliases == {"direct"}
+
+
+def test_alias_inside_a_function_is_rooted():
+    aliases, _, _ = rooted(
+        'import Stripe from "stripe";\n'
+        "export function build() {\n"
+        "  const client = new Stripe();\n"
+        "  return client;\n"
+        "}\n"
+    )
+
+    assert aliases == {"client": ("stripe",)}
+
+
+def test_assignment_of_a_rooted_member_creates_an_alias():
+    aliases, _, _ = rooted(
+        'import * as stripe from "stripe";\nlet s;\ns = stripe.charges;\n'
+    )
+
+    assert aliases == {"s": ("stripe", "charges")}
+
+
+def test_redeclaration_drops_the_alias():
+    aliases, class_aliases, _ = rooted(
+        'import Stripe from "stripe";\n'
+        "let client = new Stripe();\n"
+        "client = other;\n"
+    )
+
+    assert aliases == {}
+    assert class_aliases == set()
+
+
+def test_one_hop_alias_of_an_alias_is_rooted():
+    aliases, class_aliases, dynamics = rooted(
+        'import Stripe from "stripe";\n'
+        "const client = new Stripe();\n"
+        "const c = client;\n"
+    )
+
+    assert aliases == {"client": ("stripe",), "c": ("stripe",)}
+    assert class_aliases == {"client", "c"}
+    assert dynamics == []
+
+
+def test_second_hop_alias_is_a_dynamic():
+    aliases, class_aliases, dynamics = rooted(
+        'import Stripe from "stripe";\n'
+        "const client = new Stripe();\n"
+        "const c = client;\n"
+        "const d = c;\n"
+    )
+
+    assert set(aliases) == {"client", "c"}
+    assert class_aliases == {"client", "c"}
+    assert dynamics == [Dynamic("m.ts", 4, 7, DynamicKind.ALIAS_CHAIN, "d")]
+
+
+def test_nested_destructuring_is_an_alias_chain():
+    aliases, _, dynamics = rooted(
+        'import * as stripe from "stripe";\n'
+        "const { charges: { create } } = stripe;\n"
+    )
+
+    assert aliases == {}
+    assert dynamics == [Dynamic("m.ts", 2, 20, DynamicKind.ALIAS_CHAIN, "create")]
+
+
+def test_alias_cycle_is_an_alias_chain():
+    aliases, _, dynamics = rooted(
+        'import * as stripe from "stripe";\nconst a = b;\nconst b = a;\n'
+    )
+
+    assert aliases == {}
+    assert dynamics == [Dynamic("m.ts", 3, 7, DynamicKind.ALIAS_CHAIN, "b")]
+
+
+def test_unrooted_call_and_member_are_not_aliases():
+    aliases, class_aliases, dynamics = rooted(
+        "const a = other();\nconst b = other.thing;\n"
+    )
+
+    assert aliases == {}
+    assert class_aliases == set()
+    assert dynamics == []

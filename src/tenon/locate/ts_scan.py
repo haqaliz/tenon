@@ -16,7 +16,7 @@ import tree_sitter_javascript as tsjs
 import tree_sitter_typescript as tsts
 from tree_sitter import Language, Node, Parser, Tree
 
-from .scan import Dynamic, Hit, ScanResult, _Source
+from .scan import Dynamic, DynamicKind, Hit, ScanResult, _Source, _column
 
 _EXTENSIONS = (".ts", ".mts", ".cts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 _SKIP_DIRECTORIES = frozenset(
@@ -271,6 +271,227 @@ def _bindings(
         roots.update(imported)
         classes.update(imported_classes)
     return roots, classes
+
+
+def _dynamic(
+    source: _Source,
+    node: Node,
+    kind: DynamicKind,
+    symbol: str | None = None,
+    chain: tuple[str, ...] = (),
+) -> Dynamic:
+    line = source.lines[node.start_point.row]
+    return Dynamic(
+        source.path,
+        node.start_point.row + 1,
+        _column(line, node.start_point.column),
+        kind,
+        symbol,
+        chain,
+    )
+
+
+def _unwrap(node: Node | None) -> Node | None:
+    while node is not None and node.type in {
+        "parenthesized_expression",
+        "as_expression",
+        "satisfies_expression",
+        "non_null_expression",
+    }:
+        node = node.named_children[0] if node.named_children else None
+    return node
+
+
+def _parts(node: Node | None) -> tuple[str | None, tuple[str, ...]]:
+    tail = []
+    while node is not None and node.type == "member_expression":
+        property_node = node.child_by_field_name("property")
+        if property_node is None:
+            break
+        tail.append(_text(property_node))
+        node = node.child_by_field_name("object")
+    node = _unwrap(node)
+    root = _text(node) if node is not None and node.type == "identifier" else None
+    tail.reverse()
+    return root, tuple(tail)
+
+
+def _full(
+    root: str | None,
+    tail: tuple[str, ...],
+    roots: dict[str, tuple[str, ...]],
+    sdk_parts: tuple[str, ...],
+) -> tuple[str, ...] | None:
+    if root is None or root not in roots:
+        return None
+    full = roots[root] + tail
+    return full if full[: len(sdk_parts)] == sdk_parts else None
+
+
+def _alias_cycle(pending: dict[str, str], target: str, rhs: str) -> bool:
+    if target == rhs:
+        return True
+    seen = {target}
+    name = rhs
+    while name in pending:
+        if name in seen:
+            return True
+        seen.add(name)
+        name = pending[name]
+    return name in seen
+
+
+def _pattern_names(pattern: Node) -> Iterator[Node]:
+    for node in _walk(pattern):
+        if node.type in {"shorthand_property_identifier_pattern", "identifier"}:
+            yield node
+
+
+def _aliases(
+    tree: Tree,
+    roots: dict[str, tuple[str, ...]],
+    classes: set[str],
+    sdk_package: str,
+    source: _Source,
+) -> tuple[dict[str, tuple[str, ...]], set[str], list[Dynamic]]:
+    """One-hop aliases in source order; a second Name hop is a dynamic."""
+    sdk_parts = tuple(sdk_package.split("/"))
+    aliases: dict[str, tuple[str, ...]] = {}
+    hops: dict[str, int] = {}
+    class_aliases: set[str] = set()
+    dynamics: list[Dynamic] = []
+    pending: dict[str, str] = {}
+    events: list[tuple[int, Node, Node | None]] = []
+
+    for node in _walk(tree.root_node):
+        if node.type == "variable_declarator":
+            name = node.child_by_field_name("name")
+            if name is not None:
+                events.append((node.start_byte, name, node.child_by_field_name("value")))
+        elif node.type == "assignment_expression":
+            left = node.child_by_field_name("left")
+            if left is not None and left.type == "identifier":
+                events.append(
+                    (node.start_byte, left, node.child_by_field_name("right"))
+                )
+    events.sort(key=lambda event: event[0])
+
+    def forget(name: str) -> None:
+        aliases.pop(name, None)
+        hops.pop(name, None)
+        class_aliases.discard(name)
+        pending.pop(name, None)
+
+    def bind(name: str, target: Node, value: Node | None) -> None:
+        value = _unwrap(value)
+        if value is None:
+            return
+        if value.type == "identifier":
+            rhs = _text(value)
+            if _alias_cycle(pending, name, rhs):
+                dynamics.append(
+                    _dynamic(source, target, DynamicKind.ALIAS_CHAIN, name)
+                )
+                return
+            if rhs in aliases:
+                if hops[rhs] >= 1:
+                    dynamics.append(
+                        _dynamic(source, target, DynamicKind.ALIAS_CHAIN, name)
+                    )
+                    return
+                full = aliases[rhs]
+                hop = 1
+                if rhs in class_aliases:
+                    class_aliases.add(name)
+            elif rhs in roots:
+                full = roots[rhs]
+                hop = 0
+                if rhs in classes:
+                    class_aliases.add(name)
+            else:
+                pending[name] = rhs
+                return
+        elif value.type in {"call_expression", "new_expression"}:
+            function = value.child_by_field_name(
+                "function" if value.type == "call_expression" else "constructor"
+            )
+            root, tail = _parts(function)
+            if _full(root, tail, roots, sdk_parts) is None:
+                return
+            full = sdk_parts
+            hop = 0
+            if function is not None and function.type == "identifier":
+                if _text(function) in classes:
+                    class_aliases.add(name)
+        elif value.type == "member_expression":
+            root, tail = _parts(value)
+            full = _full(root, tail, roots, sdk_parts)
+            if full is None:
+                return
+            hop = 0
+        else:
+            return
+        aliases[name] = full
+        hops[name] = hop
+
+    def destructure(pattern: Node, value: Node | None) -> None:
+        value = _unwrap(value)
+        if value is None:
+            return
+        root, tail = _parts(value)
+        full = _full(root, tail, roots, sdk_parts)
+        if full is None:
+            return
+        for child in pattern.named_children:
+            if child.type == "shorthand_property_identifier_pattern":
+                name = _text(child)
+                aliases[name] = full + (name,)
+                hops[name] = 0
+            elif child.type == "pair_pattern":
+                key = child.child_by_field_name("key")
+                member = child.child_by_field_name("value")
+                if key is None or member is None:
+                    continue
+                member_name = (
+                    _string_value(key) if key.type == "string" else _text(key)
+                )
+                if member_name is None:
+                    continue
+                if member.type == "identifier":
+                    aliases[_text(member)] = full + (member_name,)
+                    hops[_text(member)] = 0
+                else:
+                    for binding in _pattern_names(member):
+                        dynamics.append(
+                            _dynamic(
+                                source,
+                                binding,
+                                DynamicKind.ALIAS_CHAIN,
+                                _text(binding),
+                            )
+                        )
+            elif child.type in {"rest_pattern", "array_pattern"}:
+                for binding in _pattern_names(child):
+                    dynamics.append(
+                        _dynamic(
+                            source,
+                            binding,
+                            DynamicKind.ALIAS_CHAIN,
+                            _text(binding),
+                        )
+                    )
+
+    for _, target, value in events:
+        if target.type == "identifier":
+            name = _text(target)
+            forget(name)
+            bind(name, target, value)
+        elif target.type == "object_pattern":
+            for binding in _pattern_names(target):
+                forget(_text(binding))
+            destructure(target, value)
+
+    return aliases, class_aliases, dynamics
 
 
 def _resolve_relative(
