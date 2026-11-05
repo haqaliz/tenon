@@ -649,7 +649,14 @@ def a_recorder(make_result):
     calls = []
 
     def write_pr(
-        proposal, proof, repo, *, remote, allow_unverified=False, unanalyzed=()
+        proposal,
+        proof,
+        repo,
+        *,
+        remote,
+        required=ProofLevel.TESTS_PASSED,
+        allow_below_required=False,
+        unanalyzed=(),
     ):
         calls.append(
             {
@@ -657,7 +664,8 @@ def a_recorder(make_result):
                 "proof": proof,
                 "repo": repo,
                 "remote": remote,
-                "allow_unverified": allow_unverified,
+                "required": required,
+                "allow_below_required": allow_below_required,
                 "unanalyzed": unanalyzed,
             }
         )
@@ -682,19 +690,16 @@ def test_fix_open_pr_opens_one_pr(a_repo, a_specs, monkeypatch, capsys):
     assert call["proof"].level is ProofLevel.TESTS_PASSED
     assert call["repo"] == a_repo
     assert call["remote"] is remote
-    assert call["allow_unverified"] is False
+    assert call["required"] is ProofLevel.TESTS_PASSED
+    assert call["allow_below_required"] is False
     assert call["unanalyzed"] == expected_unanalyzed
 
 
-# Spec AC6: the CLI does not pre-gate UNVERIFIED; the writer refuses and says so.
-def test_fix_open_pr_unverified_is_refused_by_the_writer(
+# Spec AC5: below the requirement with no opt-in, the CLI never calls the writer.
+def test_fix_open_pr_below_required_makes_no_pr_call(
     a_repo, a_specs, a_no_command_config, monkeypatch, capsys
 ):
-    write_pr, calls = a_recorder(
-        lambda proof: a_pr(
-            proof, PrStatus.REFUSED, PrRefusal.UNVERIFIED_NOT_ALLOWED
-        )
-    )
+    write_pr, calls = a_recorder(a_pr)
     monkeypatch.setattr(cli_main, "write_pr", write_pr)
 
     assert (
@@ -709,11 +714,38 @@ def test_fix_open_pr_unverified_is_refused_by_the_writer(
         == 1
     )
 
-    assert "PR refused: UNVERIFIED_NOT_ALLOWED" in capsys.readouterr().out
-    assert calls[0]["allow_unverified"] is False
+    assert calls == []
+    assert "PR:" not in capsys.readouterr().out
 
 
-# Spec AC6: --allow-unverified reaches the writer; --require only moves the exit.
+# Spec AC5/AC6: either opt-in reaches the writer as allow_below_required.
+@pytest.mark.parametrize(
+    "flag", ["--allow-below-required", "--allow-unverified"]
+)
+def test_fix_open_pr_below_required_opt_in_reaches_the_writer(
+    flag, a_repo, a_specs, a_no_command_config, monkeypatch
+):
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--open-pr",
+            flag,
+            remote=object(),
+        )
+        == 1
+    )
+    (call,) = calls
+    assert call["required"] is ProofLevel.TESTS_PASSED
+    assert call["allow_below_required"] is True
+
+
+# Spec AC6: --allow-unverified still works at the requirement with --require.
 def test_fix_open_pr_allow_unverified_is_passed_through(
     a_repo, a_specs, a_no_command_config, monkeypatch
 ):
@@ -734,7 +766,7 @@ def test_fix_open_pr_allow_unverified_is_passed_through(
         )
         == 0
     )
-    assert calls[0]["allow_unverified"] is True
+    assert calls[0]["allow_below_required"] is True
 
 
 # Spec AC6: any refused writer result makes the run a 1 and is rendered.
@@ -841,6 +873,23 @@ def test_unknown_require_names_the_five_levels(a_repo, a_specs, capsys):
     assert "--require" in err
     assert "TYPES_BUILD_ONLY" in err
     assert "UNVERIFIED" in err
+
+
+# Spec AC2/AC7: a bad [tenon] require in --json mode is one error object.
+def test_bad_require_in_the_config_json_is_one_error(a_repo, a_specs, capsys):
+    (a_repo / "tenon.toml").write_text(
+        '[locate]\nsdk_package = "acme.client"\n\n[tenon]\nrequire = "BY_HAND"\n'
+    )
+
+    assert a_fix(a_repo, a_specs, "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "config"
+    assert "TYPES_BUILD_ONLY" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
 
 
 # Spec M10: an unexpected failure is an internal 1, not a traceback.

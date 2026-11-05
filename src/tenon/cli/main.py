@@ -11,7 +11,7 @@ from tenon.detect import Change, DiffResult, SpecRefusal, diff, load
 from tenon.locate import LocateConfig, TsLocateConfig, locate, locate_ts
 from tenon.pr import GitGhRemote, Remote, write_pr
 from tenon.propose import propose
-from tenon.prove import ProofPlan, prove_plan
+from tenon.prove import ProofPlan, proof_rank, prove_plan
 
 from .config import (
     CliConfig,
@@ -113,9 +113,11 @@ def _parser() -> argparse.ArgumentParser:
     fix.add_argument("--require", type=_require, default=None, help="proof level")
     fix.add_argument("--open-pr", action="store_true", help="open a pull request")
     fix.add_argument(
+        "--allow-below-required",
         "--allow-unverified",
+        dest="allow_below_required",
         action="store_true",
-        help="allow a draft PR without a passed check",
+        help="allow a draft PR below the required proof level",
     )
     return parser
 
@@ -198,14 +200,17 @@ def _fix(
         proof = prove_plan(proposal, repo, plan)
         pr = None
         if args.open_pr:
-            pr = write_pr(
-                proposal,
-                proof,
-                repo,
-                remote=remote or GitGhRemote(),
-                allow_unverified=args.allow_unverified,
-                unanalyzed=result.unanalyzed,
-            )
+            below = proof_rank(proof.level) < proof_rank(config.require)
+            if not below or args.allow_below_required:
+                pr = write_pr(
+                    proposal,
+                    proof,
+                    repo,
+                    remote=remote or GitGhRemote(),
+                    required=config.require,
+                    allow_below_required=args.allow_below_required,
+                    unanalyzed=result.unanalyzed,
+                )
         results.append(
             FixResult(
                 change=change,
