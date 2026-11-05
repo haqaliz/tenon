@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T6 TypeScript/JavaScript locator** (`docs/technical/CAPABILITY_ROADMAP.md:12`)
 - **Milestone:** M2.1 (`docs/ROADMAP.md`)
+- **State:** shipped 2026-11-05 (`src/tenon/locate/ts_*.py`, 1,006 tests)
 - **Branch:** `feat/typescript-locator/aliz`
 - **Worktree:** `.claude/worktrees/feat-typescript-locator`
 

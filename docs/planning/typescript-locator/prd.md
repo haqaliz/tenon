@@ -3,7 +3,7 @@
 - **Slug:** `typescript-locator`
 - **Capability:** T6 in `docs/technical/CAPABILITY_ROADMAP.md`
 - **Milestone:** M2.1 in `docs/ROADMAP.md` (Phase 2)
-- **Status:** draft for review
+- **Status:** implemented 2026-11-05 (`src/tenon/locate/ts_*.py`, 1,006 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

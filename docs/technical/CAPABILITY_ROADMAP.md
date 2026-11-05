@@ -9,7 +9,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T3** | **Patch proposer seam.** Rule-based proposer for mechanical changes; optional BYOK model proposer. | T1, T2 | A model proposes only | **Shipped 2026-10-29** |
 | **T4** | **Proof runner.** Apply the patch in an isolated working copy, run the user's tests, record the proof level. | T3 | Execution decides the label | **Shipped 2026-10-29** |
 | **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging | **Shipped 2026-11-05** |
-| **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | | Not started |
+| **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | | **Shipped 2026-11-05** |
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | Not started |
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | Not started |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | Not started |
@@ -99,6 +99,22 @@ succeeds followed by a failed PR leaves the branch on the remote; the real `gh` 
 in CI (the adapter argv and URL parsing are unit-tested; the offline end-to-end uses a local bare
 remote with `create_pr` replaced); submodules and LFS content are not fetched into the clone; the
 caller chooses the check command, so T5 cannot know it was a subset.
+
+### T6 as built (2026-11-05)
+
+`src/tenon/locate/`: `ts_scan.py` (tree-sitter 0.26, TypeScript 0.23, JavaScript 0.25) discovers
+`.ts/.mts/.cts/.tsx/.js/.jsx/.mjs/.cjs`, resolves ESM/CommonJS imports, relative-import reachability
+and one-hop aliases, and emits the shipped `Hit`/`Dynamic`/`ScanResult` evidence. `ts_config.py` is
+`TsLocateConfig` (npm package name); `ts_locate.py` is `locate_ts`, which reuses `query.derive` and
+the one `resolve` certainty policy. No new `SiteShape`, `AmbiguityReason` or `LocateReason` values;
+`keyword`/`dict_key`/`attribute`/`call` mean the same spans. The CLI accepts `--language ts` and
+`[locate] language = "ts"`. 1,006 tests, offline; no Node or `tsc` for analysis.
+
+Known limits at this level: relative imports only (`tsconfig` paths and workspace/package `exports`
+are not resolved); JSX attribute names are parsed but not sites; no type inference, so a
+factory-returned client is unrooted; a parse-error file is skipped; static string subscripts are
+`DYNAMIC_GETATTR`; T4's isolated copy still drops `node_modules`, so a real TS `npm test` may be
+`TESTS_FAILED_BEFORE` in the proof copy while `tenon check` works; the grammar versions are pinned.
 
 
 
