@@ -20,6 +20,7 @@ CHECK_SUMMARY = "{changes} changes, {certain} certain sites, {ambiguous} ambigui
 SITE_LINE = "{path}:{line}:{column}  {shape}  {symbol}"
 AMBIGUOUS_LINE = "ambiguous {reason}: {symbol} at {candidates}"
 NO_AFFECTED_SITES_LINE = "no affected sites ({reason})"
+NO_PATCH_LINE = "No patch: {reason}"
 FIX_SUMMARY = (
     "{changes} changes, {proposals} proposals, {passed} passed, "
     "{unverified} unverified, {prs_opened} PRs opened, {prs_refused} PRs refused"
@@ -191,6 +192,8 @@ def _fix_block(result: FixResult) -> str:
     diff = result.proposal.diff.rstrip("\n")
     if diff:
         lines.append(diff)
+    if result.proposal.reason is not None:
+        lines.append(NO_PATCH_LINE.format(reason=result.proposal.reason.value))
     proof = result.proof
     lines.append(PROOF_LINE.format(level=proof.level.value))
     if proof.level is ProofLevel.UNVERIFIED:

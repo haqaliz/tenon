@@ -31,9 +31,9 @@ deterministic shape a human and a machine can both read.
   - A final summary line: `N changes, M certain sites, K ambiguity groups`.
   - One trailing newline; no colour.
 - `render_fix_text(results) -> str`:
-  - Per change: the change line, then the diff (if any), then `Proof: <LEVEL>` with the cause, the
-    command, baseline/after exits, skipped sites, and `PR: <url>` or `PR refused: <CAUSE>` when a PR
-    result exists.
+  - Per change: the change line, then the diff (if any), then the proposal reason when there is no
+    diff, then `Proof: <LEVEL>` with the cause, the command, baseline/after exits, skipped sites, and
+    `PR: <url>` or `PR refused: <CAUSE>` when a PR result exists.
   - A final summary line with changes, proposals, passed, unverified, PRs opened, PRs refused.
   - One trailing newline.
 - `render_check_json(results) -> str` and `render_fix_json(results) -> str`:

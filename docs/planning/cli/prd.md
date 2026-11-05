@@ -95,9 +95,9 @@ branch. The CLI adds no new claim beyond what each stage returned.
   "pr": <PrResult.to_dict()|null>}...], "summary": {...}}`. Summaries carry counts only, no clock.
 - **M9 — Text output.** Deterministic plain text, no colour. `check`: the change summary, then one
   line per certain site (`path:line:column  shape  symbol`), ambiguity groups with their reason, or
-  the locate reason. `fix`: the change summary, the unified diff, `Proof: <LEVEL>` with the cause and
-  the command/exit codes, then skipped sites, then `PR: <url>` or `PR refused: <CAUSE>` when
-  requested. A final summary line per command.
+  the locate reason. `fix`: the change summary, the unified diff, the proposal reason when there is
+  no diff, `Proof: <LEVEL>` with the cause and the command/exit codes, then skipped sites, then
+  `PR: <url>` or `PR refused: <CAUSE>` when requested. A final summary line per command.
 - **M10 — Errors.** Catch `SpecRefusal` (code, pointer, message), config `ValueError`/`TOMLDecodeError`,
   `FileNotFoundError` and `OSError` at the top; no traceback. Exit 2 for bad input, 1 for an internal
   failure. With `--json`, the error is

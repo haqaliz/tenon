@@ -453,6 +453,7 @@ def test_fix_text_names_the_unverified_cause_and_missing_checks():
     assert text == (
         "renamed POST /v1/checkout/sessions: payment_method_types -> "
         "allowed_payment_method_types\n"
+        "No patch: NO_RULE\n"
         "Proof: UNVERIFIED\n"
         "Cause: NO_TESTS_FOUND\n"
         "Command: not run\n"

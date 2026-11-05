@@ -58,7 +58,8 @@ when `--open-pr` is asked for.
 - **AC5 — Fix unverified.** No check command: `UNVERIFIED (NO_TESTS_FOUND)` and exit 1;
   `--require UNVERIFIED` exits 0; `--json` carries the cause.
 - **AC6 — Fix open-pr.** A fake `write_pr` and remote are used; `TESTS_PASSED` → one `OPENED` result,
-  exit 0; an `UNVERIFIED` proof without `--allow-unverified` makes no `write_pr` call and exits 1;
+  exit 0; an `UNVERIFIED` proof without `--allow-unverified` calls `write_pr`, reports its
+  `UNVERIFIED_NOT_ALLOWED` refusal and exits 1 (the gate lives in T5; the CLI does not duplicate it);
   with `--allow-unverified` and `--require UNVERIFIED`, the fake sees `allow_unverified=True` (the
   draft flag itself is T5's tested contract, not the CLI's).
 - **AC7 — Config and overrides.** `[locate]`/`[tenon]` defaults apply; `--sdk-package`, `--operation`,
