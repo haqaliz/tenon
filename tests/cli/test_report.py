@@ -351,7 +351,7 @@ def test_check_text_renders_an_ambiguity_group():
         "ambiguous DYNAMIC_KWARGS: payment_method_types at "
         "acme/a.py:3:1, acme/b.py:9:4\n"
         "\n"
-        "1 changes, 0 certain sites, 1 ambiguity groups\n"
+        "1 change, 0 certain sites, 1 ambiguity group\n"
     )
 
 
@@ -366,7 +366,7 @@ def test_check_text_renders_a_reason_with_no_sites():
         "allowed_payment_method_types\n"
         "no affected sites (UNSUPPORTED_CHANGE_KIND)\n"
         "\n"
-        "1 changes, 0 certain sites, 0 ambiguity groups\n"
+        "1 change, 0 certain sites, 0 ambiguity groups\n"
     )
 
 
@@ -428,7 +428,7 @@ Baseline exit: 0
 After exit: 0
 Skipped: none
 
-1 changes, 1 proposals, 1 passed, 0 unverified, 0 PRs opened, 0 PRs refused
+1 change, 1 proposal, 1 passed, 0 unverified, 0 PRs opened, 0 PRs refused
 """
 
 
@@ -461,7 +461,7 @@ def test_fix_text_names_the_unverified_cause_and_missing_checks():
         "After exit: not run\n"
         "Skipped: none\n"
         "\n"
-        "1 changes, 0 proposals, 0 passed, 1 unverified, 0 PRs opened, "
+        "1 change, 0 proposals, 0 passed, 1 unverified, 0 PRs opened, "
         "0 PRs refused\n"
     )
 
@@ -533,8 +533,8 @@ def test_fix_text_summary_counts_results_and_prs():
     text = render_fix_text(results)
 
     assert text.endswith(
-        "2 changes, 2 proposals, 1 passed, 1 unverified, 1 PRs opened, "
-        "1 PRs refused\n"
+        "2 changes, 2 proposals, 1 passed, 1 unverified, 1 PR opened, "
+        "1 PR refused\n"
     )
 
 

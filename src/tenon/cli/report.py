@@ -16,15 +16,15 @@ _UNCLEAN_REASONS = frozenset(
 )
 _LEVEL_RANK = {ProofLevel.UNVERIFIED: 0, ProofLevel.TESTS_PASSED: 1}
 
-CHECK_SUMMARY = "{changes} changes, {certain} certain sites, {ambiguous} ambiguity groups"
 SITE_LINE = "{path}:{line}:{column}  {shape}  {symbol}"
 AMBIGUOUS_LINE = "ambiguous {reason}: {symbol} at {candidates}"
 NO_AFFECTED_SITES_LINE = "no affected sites ({reason})"
 NO_PATCH_LINE = "No patch: {reason}"
-FIX_SUMMARY = (
-    "{changes} changes, {proposals} proposals, {passed} passed, "
-    "{unverified} unverified, {prs_opened} PRs opened, {prs_refused} PRs refused"
-)
+
+
+def _count(value: int, singular: str, plural: str | None = None) -> str:
+    noun = singular if value == 1 else (plural or singular + "s")
+    return f"{value} {noun}"
 PROOF_LINE = "Proof: {level}"
 CAUSE_LINE = "Cause: {cause}"
 COMMAND_LINE = "Command: {command}"
@@ -117,6 +117,16 @@ def _check_counts(results: Sequence[LocateResult]) -> dict[str, int]:
     }
 
 
+def _check_summary(counts: dict[str, int]) -> str:
+    return ", ".join(
+        (
+            _count(counts["changes"], "change"),
+            _count(counts["certain"], "certain site"),
+            _count(counts["ambiguous"], "ambiguity group"),
+        )
+    )
+
+
 def _check_block(result: LocateResult) -> str:
     lines = [_change_line(result.change)]
     lines.extend(
@@ -145,7 +155,7 @@ def _check_block(result: LocateResult) -> str:
 def render_check_text(results: Sequence[LocateResult]) -> str:
     """One deterministic block per change, then the counts, one trailing newline."""
     blocks = [_check_block(result) for result in results]
-    summary = CHECK_SUMMARY.format(**_check_counts(results))
+    summary = _check_summary(_check_counts(results))
     return "\n\n".join([*blocks, summary]) + "\n"
 
 
@@ -185,6 +195,19 @@ def _fix_counts(results: Sequence[FixResult]) -> dict[str, int]:
             if result.pr is not None and result.pr.status is PrStatus.REFUSED
         ),
     }
+
+
+def _fix_summary(counts: dict[str, int]) -> str:
+    return ", ".join(
+        (
+            _count(counts["changes"], "change"),
+            _count(counts["proposals"], "proposal"),
+            f"{counts['passed']} passed",
+            f"{counts['unverified']} unverified",
+            _count(counts["prs_opened"], "PR opened", "PRs opened"),
+            _count(counts["prs_refused"], "PR refused", "PRs refused"),
+        )
+    )
 
 
 def _fix_block(result: FixResult) -> str:
@@ -237,7 +260,7 @@ def _fix_block(result: FixResult) -> str:
 def render_fix_text(results: Sequence[FixResult]) -> str:
     """One block with diff and proof per change, then the counts."""
     blocks = [_fix_block(result) for result in results]
-    summary = FIX_SUMMARY.format(**_fix_counts(results))
+    summary = _fix_summary(_fix_counts(results))
     return "\n\n".join([*blocks, summary]) + "\n"
 
 

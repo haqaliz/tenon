@@ -67,7 +67,7 @@ def test_check_finds_a_certain_site(a_repo, a_specs, capsys):
     assert "acme/billing.py:7:34" in out
     assert "keyword" in out
     assert "amount" in out
-    assert "1 changes, 1 certain sites, 0 ambiguity groups" in out
+    assert "1 change, 1 certain site, 0 ambiguity groups" in out
 
 
 # Spec AC2: --json is exactly one object with the three envelope keys.
