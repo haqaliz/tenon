@@ -13,6 +13,9 @@ def a_config(
     operations=None,
     fields=None,
     command=(),
+    build=(),
+    characterize=(),
+    replay=(),
     require=ProofLevel.TESTS_PASSED,
     breaking_only=False,
     language="python",
@@ -25,6 +28,9 @@ def a_config(
             fields=fields or {},
         ),
         command=command,
+        build=build,
+        characterize=characterize,
+        replay=replay,
         require=require,
         breaking_only=breaking_only,
         language=language,
@@ -140,6 +146,37 @@ def test_full_file_round_trips(tmp_path):
     )
 
 
+# Spec AC1: [tenon] carries one array per proof stage next to command.
+def test_file_loads_every_stage_command(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nsdk_package = "stripe"\n'
+        "\n[tenon]\n"
+        'command = ["pytest"]\n'
+        'build = ["python", "-c", "import acme"]\n'
+        'characterize = ["python", "-c", "characterize"]\n'
+        'replay = ["python", "-c", "replay"]\n',
+    )
+
+    config = load_cli_config(path)
+
+    assert config.command == ("pytest",)
+    assert config.build == ("python", "-c", "import acme")
+    assert config.characterize == ("python", "-c", "characterize")
+    assert config.replay == ("python", "-c", "replay")
+
+
+# Spec AC2: every ladder level is a valid [tenon] require.
+@pytest.mark.parametrize("level", list(ProofLevel))
+def test_file_accepts_every_proof_level(tmp_path, level):
+    path = a_file(
+        tmp_path,
+        f'[locate]\nsdk_package = "stripe"\n\n[tenon]\nrequire = "{level.value}"\n',
+    )
+
+    assert load_cli_config(path).require is level
+
+
 # Spec AC3: a malformed key is refused by name, not with a traceback.
 @pytest.mark.parametrize(
     ("text", "key"),
@@ -166,12 +203,24 @@ def test_full_file_round_trips(tmp_path):
             "command",
         ),
         (
+            '[locate]\nsdk_package = "stripe"\n\n[tenon]\nbuild = "python"\n',
+            "build",
+        ),
+        (
+            '[locate]\nsdk_package = "stripe"\n\n[tenon]\ncharacterize = [""]\n',
+            "characterize",
+        ),
+        (
+            '[locate]\nsdk_package = "stripe"\n\n[tenon]\nreplay = [1]\n',
+            "replay",
+        ),
+        (
             '[locate]\nsdk_package = "stripe"\n\n[tenon]\nbreaking_only = "yes"\n',
             "breaking_only",
         ),
         (
             '[locate]\nsdk_package = "stripe"\n\n[tenon]\nrequire = "BY_HAND"\n',
-            "T7",
+            "TYPES_BUILD_ONLY",
         ),
     ],
 )
@@ -324,6 +373,46 @@ def test_overrides_shlex_splits_the_check_command():
     assert result.command == ("python", "-m", "pytest", "-q")
 
 
+# Spec AC1: the stage flags are split with shlex and replace their stage.
+def test_overrides_shlex_splits_the_stage_commands():
+    result = overrides(
+        a_config(),
+        build="python -c 'import acme'",
+        characterize="python -c characterize",
+        replay="python -c replay",
+    )
+
+    assert result.build == ("python", "-c", "import acme")
+    assert result.characterize == ("python", "-c", "characterize")
+    assert result.replay == ("python", "-c", "replay")
+
+
+# Spec AC1: a missing stage flag falls back to the config, and an empty stage stays empty.
+def test_overrides_keeps_the_configured_stage_commands():
+    config = a_config(build=("b",), characterize=(), replay=("r",))
+
+    result = overrides(config, build="changed")
+
+    assert result.build == ("changed",)
+    assert result.characterize == ()
+    assert result.replay == ("r",)
+
+
+# Spec AC2: --require accepts every ladder level.
+@pytest.mark.parametrize("level", list(ProofLevel))
+def test_overrides_accepts_every_proof_level(level):
+    assert overrides(a_config(), require=level.value).require is level
+
+
+# Spec AC2: an unknown level names all five so the message teaches the ladder.
+def test_an_unknown_level_error_names_all_five():
+    with pytest.raises(ValueError) as raised:
+        overrides(a_config(), require="BY_HAND")
+
+    for level in ProofLevel:
+        assert level.value in str(raised.value)
+
+
 # Spec AC4: --require replaces the proof level.
 def test_overrides_replaces_the_require_level():
     result = overrides(a_config(), require="UNVERIFIED")
@@ -356,7 +445,10 @@ def test_overrides_replaces_breaking_only(config, flag, expected):
         ({"fields": ["=x"]}, "--field"),
         ({"command": ""}, "--check"),
         ({"command": "   "}, "--check"),
-        ({"require": "BY_HAND"}, "T7"),
+        ({"build": ""}, "--build"),
+        ({"characterize": "   "}, "--characterize"),
+        ({"replay": ""}, "--replay"),
+        ({"require": "BY_HAND"}, "TYPES_BUILD_ONLY"),
     ],
 )
 def test_overrides_rejects_bad_flags(kwargs, key):
