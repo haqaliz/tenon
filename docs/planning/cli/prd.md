@@ -3,7 +3,7 @@
 - **Slug:** `cli`
 - **Capability:** M1.4 in `docs/ROADMAP.md` (exposes T1–T5; no new T-id)
 - **Milestone:** M1.4 (Phase 1)
-- **Status:** draft for review
+- **Status:** implemented 2026-11-05 (`src/tenon/cli/`, 870 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

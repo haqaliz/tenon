@@ -25,7 +25,7 @@ Milestone order is my proposal; reorder freely.
 | M1.1 | Patch proposer seam (T3) | Pluggable proposer (rule-based first, BYOK model optional); output is a diff, never applied unverified | **Shipped 2026-10-29** (`src/tenon/propose/`, 114 tests) |
 | M1.2 | Proof runner (T4) | Runs tests in an isolated working copy; records `TESTS_PASSED` or `UNVERIFIED` with a cause | **Shipped 2026-10-29** (`src/tenon/prove/`, 105 tests) |
 | M1.3 | PR writer (T5) | Opens a branch and PR stating the proof level; never touches `master` | **Shipped 2026-11-05** (`src/tenon/pr/`, 745 tests; local bare-remote end-to-end, no live GitHub call) |
-| M1.4 | `tenon check` / `tenon fix` CLI | Exit codes reflect proof; JSON output byte-stable | Not started |
+| M1.4 | `tenon check` / `tenon fix` CLI | Exit codes reflect proof; JSON output byte-stable | **Shipped 2026-11-05** (`src/tenon/cli/`, 870 tests; text + byte-stable JSON) |
 
 ## Phase 2: Breadth and proof depth (weeks 8-12)
 

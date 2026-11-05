@@ -1,8 +1,9 @@
 # Tenon: Architecture
 
-Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove) and T5 (PR) are
-implemented** under `src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`,
-`src/tenon/prove/` and `src/tenon/pr/`. The CLI and the later stages are not.
+Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR) and the
+`tenon check` / `tenon fix` CLI are implemented** under `src/tenon/detect/`, `src/tenon/locate/`,
+`src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/` and `src/tenon/cli/`. The probe and the
+later stages are not.
 
 ## Pipeline
 
@@ -36,7 +37,7 @@ src/tenon/
   pr/         T5: branch and PR writer                     <- built (git + gh seam)
   probe/      T8: agent run against an API or MCP server
   corpus/     T9: benchmark records
-  cli/        tenon check | fix | probe
+  cli/        tenon check | fix                           <- built
 tests/        offline; fixture repos and specs; no network, no model calls
 ```
 
@@ -59,16 +60,23 @@ tests/        offline; fixture repos and specs; no network, no model calls
 - **UNVERIFIED causes** (shipped): `NO_PATCH_PROPOSED`, `PATCH_DID_NOT_APPLY`, `NO_TESTS_FOUND`,
   `TESTS_FAILED_BEFORE` (baseline already red), `TESTS_FAILED_AFTER`, `CHECK_TIMED_OUT`,
   `COPY_FAILED`. T7 adds the weaker levels and their causes.
+- **A thin CLI with honest exit codes.** `tenon check` and `tenon fix` parse, configure, compose and
+  render; they add no detection or proof logic. `check` exits 0 clean / 1 affected or unanalyzable /
+  2 usage; `fix` exits 0 required proof / 1 not / 2 usage. `--json` is one byte-stable object;
+  `fix` prints unless `--open-pr`, which delegates to T5. No traceback.
 - **Baseline first.** Run the user's checks before patching, so a red baseline is reported as such
   and not blamed on the patch.
 
-## CLI shape (target)
+## CLI
 
-`tenon check <repo> --old SPEC --new SPEC` lists affected call sites.
-`tenon fix <repo> --old SPEC --new SPEC [--require LEVEL] [--proposer CMD] [--open-pr]`
-`tenon probe <api-or-mcp-url> [--agent CMD]`
+`tenon check <repo> --old SPEC --new SPEC [--json]` lists affected call sites and exits 0 when clean,
+1 when a site or an unanalyzable repository is found.
+`tenon fix <repo> --old SPEC --new SPEC [--require LEVEL] [--check CMD] [--open-pr] [--json]`
+proposes, proves and prints the diff; `--open-pr` delegates to T5.
+`tenon probe <api-or-mcp-url> [--agent CMD]` (T8, not built).
 
-Exit 0 when the required proof level was reached, 1 otherwise, 2 on usage. Never a traceback.
+`tenon.toml` provides `[locate]` and `[tenon]` defaults; flags override. Exit 2 on usage or bad
+input. Never a traceback.
 
 ## Open questions
 

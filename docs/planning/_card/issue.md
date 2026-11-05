@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** M1.4 in `docs/ROADMAP.md` (no T-id; exposes T1–T5)
 - **Milestone:** M1.4 — `tenon check` / `tenon fix`
+- **State:** shipped 2026-11-05 (`src/tenon/cli/`, 870 tests)
 - **Branch:** `feat/cli/aliz`
 - **Worktree:** `.claude/worktrees/feat-cli`
 
