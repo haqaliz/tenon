@@ -11,7 +11,14 @@ import pytest
 from tenon.detect import Change, ChangeKind, Location, diff, parse
 from tenon.locate import LocateConfig, locate
 from tenon.propose import Edit, Proposal, ProposalReason, propose
-from tenon.prove import ProofCause, ProofLevel, ProofStage
+from tenon.propose.render import render
+from tenon.prove import (
+    ProofCause,
+    ProofLevel,
+    ProofStage,
+    apply_diff,
+    run_check,
+)
 from tenon.prove.plan import ProofPlan
 from tenon.prove.run import prove_plan
 
@@ -118,6 +125,43 @@ def an_empty_proposal(reason):
 
 def a_plan(**stages):
     return ProofPlan(**stages)
+
+
+def an_all_stage_plan():
+    return a_plan(
+        build=COMMAND,
+        characterize=COMMAND,
+        replay=COMMAND,
+        tests=COMMAND,
+    )
+
+
+def a_garbage_proposal():
+    proposal = a_rename_proposal()
+    return Proposal(
+        change=proposal.change,
+        edits=proposal.edits,
+        skipped=proposal.skipped,
+        diff="this is not a diff\n",
+    )
+
+
+def a_hanging_proposal():
+    proposal = a_rename_proposal()
+    old = (PROOF_BASIC / "acme/billing.py").read_text(encoding="utf-8")
+    new = old.replace(
+        "def create_charge", "while True:\n    pass\n\n\ndef create_charge"
+    )
+    return Proposal(
+        change=proposal.change,
+        edits=proposal.edits,
+        skipped=proposal.skipped,
+        diff=render({"acme/billing.py": (old, new)}),
+    )
+
+
+def check_order(result):
+    return [(check.kind, check.stage) for check in result.checks]
 
 
 def a_plan(**overrides):
@@ -267,3 +311,211 @@ def test_a_non_positive_timeout_raises_value_error(timeout):
         prove_plan(
             a_rename_proposal(), PROOF_BASIC, a_plan(tests=COMMAND), timeout
         )
+
+
+# Spec AC3: every configured stage green records all eight checks in stage order.
+def test_all_four_green_stages_pass_the_tests_level():
+    result = prove_plan(a_rename_proposal(), PROOF_BASIC, an_all_stage_plan())
+
+    assert result.level is ProofLevel.TESTS_PASSED
+    assert result.cause is None
+    assert result.patch_applied is True
+    assert check_order(result) == [
+        ("baseline", ProofStage.BUILD),
+        ("baseline", ProofStage.CHARACTERIZE),
+        ("baseline", ProofStage.REPLAY),
+        ("baseline", ProofStage.TESTS),
+        ("after", ProofStage.BUILD),
+        ("after", ProofStage.CHARACTERIZE),
+        ("after", ProofStage.REPLAY),
+        ("after", ProofStage.TESTS),
+    ]
+    assert all(check.returncode == 0 for check in result.checks)
+    assert result.baseline is result.checks[3]
+    assert result.after is result.checks[7]
+
+
+# Spec AC4: a green weaker stage does not mask a red stronger one.
+def test_a_green_build_with_red_tests_is_unverified_not_build_only():
+    plan = a_plan(
+        build=(sys.executable, "-c", "import acme.client"),
+        tests=COMMAND,
+    )
+
+    result = prove_plan(
+        a_rename_proposal(proposer=BrokenProposer()), PROOF_BASIC, plan
+    )
+
+    assert result.level is ProofLevel.UNVERIFIED
+    assert result.cause is ProofCause.TESTS_FAILED_AFTER
+    assert result.patch_applied is True
+    assert check_order(result) == [
+        ("baseline", ProofStage.BUILD),
+        ("baseline", ProofStage.TESTS),
+        ("after", ProofStage.BUILD),
+        ("after", ProofStage.TESTS),
+    ]
+    assert result.checks[2].returncode == 0
+    assert result.checks[3].returncode != 0
+    assert result.baseline is result.checks[1]
+    assert result.after is result.checks[3]
+
+
+# Spec AC5: a red build baseline never applies and never runs a later baseline.
+def test_a_red_build_baseline_stops_before_apply_and_later_baselines(monkeypatch):
+    def unexpected(*args, **kwargs):
+        raise AssertionError("a red build baseline must not apply the patch")
+
+    monkeypatch.setattr("tenon.prove.run.apply_diff", unexpected)
+
+    result = prove_plan(
+        a_rename_proposal(),
+        PROOF_BASIC,
+        a_plan(build=FAILING, tests=COMMAND),
+    )
+
+    assert result.cause is ProofCause.BUILD_FAILED_BEFORE
+    assert result.baseline.stage is ProofStage.BUILD
+    assert result.checks == (result.baseline,)
+    assert result.after is None
+    assert result.patch_applied is False
+
+
+# Spec AC5: a red replay baseline keeps the earlier green baselines and stops.
+def test_a_red_replay_baseline_stops_before_apply(monkeypatch):
+    def unexpected(*args, **kwargs):
+        raise AssertionError("a red replay baseline must not apply the patch")
+
+    monkeypatch.setattr("tenon.prove.run.apply_diff", unexpected)
+
+    result = prove_plan(
+        a_rename_proposal(),
+        PROOF_BASIC,
+        a_plan(build=COMMAND, replay=FAILING, tests=COMMAND),
+    )
+
+    assert result.cause is ProofCause.REPLAY_FAILED_BEFORE
+    assert check_order(result) == [
+        ("baseline", ProofStage.BUILD),
+        ("baseline", ProofStage.REPLAY),
+    ]
+    assert result.checks[0].returncode == 0
+    assert result.baseline is result.checks[1]
+    assert result.after is None
+    assert result.patch_applied is False
+
+
+# Spec AC6: a rejected diff keeps every baseline and runs no after check.
+def test_a_garbage_diff_is_patch_did_not_apply_with_the_baselines():
+    result = prove_plan(
+        a_garbage_proposal(),
+        PROOF_BASIC,
+        a_plan(build=COMMAND, tests=COMMAND),
+    )
+
+    assert result.level is ProofLevel.UNVERIFIED
+    assert result.cause is ProofCause.PATCH_DID_NOT_APPLY
+    assert check_order(result) == [
+        ("baseline", ProofStage.BUILD),
+        ("baseline", ProofStage.TESTS),
+    ]
+    assert all(check.returncode == 0 for check in result.checks)
+    assert result.baseline is result.checks[1]
+    assert result.after is None
+    assert result.patch_applied is False
+
+
+# Spec AC6: the patch is applied once, not once per stage.
+def test_the_diff_is_applied_once(monkeypatch):
+    calls = []
+
+    def counting(copy, diff):
+        calls.append(diff)
+        return apply_diff(copy, diff)
+
+    monkeypatch.setattr("tenon.prove.run.apply_diff", counting)
+
+    result = prove_plan(
+        a_rename_proposal(),
+        PROOF_BASIC,
+        a_plan(build=COMMAND, tests=COMMAND),
+    )
+
+    assert result.level is ProofLevel.TESTS_PASSED
+    assert len(calls) == 1
+    assert "amount_cents" in calls[0]
+
+
+# Spec AC7: a baseline timeout names the timeout and the stage, before apply.
+def test_a_baseline_timeout_is_check_timed_out_with_its_stage():
+    result = prove_plan(
+        a_rename_proposal(),
+        PROOF_BASIC,
+        a_plan(
+            build=(sys.executable, "-c", "import time; time.sleep(30)"),
+            tests=COMMAND,
+        ),
+        timeout=0.2,
+    )
+
+    assert result.level is ProofLevel.UNVERIFIED
+    assert result.cause is ProofCause.CHECK_TIMED_OUT
+    assert result.baseline.stage is ProofStage.BUILD
+    assert result.baseline.timed_out is True
+    assert result.baseline.returncode is None
+    assert result.after is None
+    assert result.checks == (result.baseline,)
+    assert result.patch_applied is False
+
+
+# Spec AC7: an after timeout keeps the applied patch and the stage on the record.
+def test_a_tests_after_timeout_keeps_the_applied_patch():
+    result = prove_plan(
+        a_hanging_proposal(),
+        PROOF_BASIC,
+        a_plan(
+            build=(sys.executable, "-c", "import acme.client"),
+            tests=COMMAND,
+        ),
+        timeout=0.5,
+    )
+
+    assert result.level is ProofLevel.UNVERIFIED
+    assert result.cause is ProofCause.CHECK_TIMED_OUT
+    assert result.after.stage is ProofStage.TESTS
+    assert result.after.timed_out is True
+    assert result.after.returncode is None
+    assert result.patch_applied is True
+    assert check_order(result) == [
+        ("baseline", ProofStage.BUILD),
+        ("baseline", ProofStage.TESTS),
+        ("after", ProofStage.BUILD),
+        ("after", ProofStage.TESTS),
+    ]
+
+
+# Spec AC10: the same inputs produce the same checks in the same order.
+def test_the_same_plan_serialises_identically_twice():
+    first = prove_plan(a_rename_proposal(), PROOF_BASIC, an_all_stage_plan())
+    second = prove_plan(a_rename_proposal(), PROOF_BASIC, an_all_stage_plan())
+
+    assert check_order(first) == check_order(second)
+    assert first.to_json() == second.to_json()
+
+
+# Spec AC9: checks run in a temp copy, and that copy is gone afterwards.
+def test_checks_run_in_a_copy_that_is_removed(monkeypatch):
+    seen = []
+
+    def spy(command, cwd, kind, timeout):
+        seen.append(Path(cwd))
+        return run_check(command, cwd, kind, timeout)
+
+    monkeypatch.setattr("tenon.prove.run.run_check", spy)
+
+    result = prove_plan(a_rename_proposal(), PROOF_BASIC, an_all_stage_plan())
+
+    assert result.level is ProofLevel.TESTS_PASSED
+    assert len(seen) == 8
+    assert all(PROOF_BASIC not in path.parents for path in seen)
+    assert all(not path.exists() for path in seen)

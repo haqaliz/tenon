@@ -168,52 +168,65 @@ def _run_plan(
     plan: ProofPlan,
     timeout: float,
 ) -> ProofResult:
-    """Run the configured stage baseline-first, applying the patch once."""
-    stage, field = next(
-        (stage, field) for stage, field in _STAGES if getattr(plan, field)
-    )
-    command = getattr(plan, field)
-    baseline = replace(run_check(command, copy, "baseline", timeout), stage=stage)
-    if baseline.timed_out:
-        return _unverified(
-            ProofCause.CHECK_TIMED_OUT, baseline=baseline, checks=(baseline,)
-        )
-    if baseline.returncode != 0:
-        return _unverified(
-            _FAILED_BEFORE[stage], baseline=baseline, checks=(baseline,)
-        )
+    """All baselines, one apply, all afters; fail closed on any red check."""
+    configured = [
+        (stage, getattr(plan, field))
+        for stage, field in _STAGES
+        if getattr(plan, field)
+    ]
+    baselines: list[CheckResult] = []
+    for stage, command in configured:
+        baseline = replace(run_check(command, copy, "baseline", timeout), stage=stage)
+        baselines.append(baseline)
+        if baseline.timed_out:
+            return _unverified(
+                ProofCause.CHECK_TIMED_OUT,
+                baseline=baseline,
+                checks=tuple(baselines),
+            )
+        if baseline.returncode != 0:
+            return _unverified(
+                _FAILED_BEFORE[stage],
+                baseline=baseline,
+                checks=tuple(baselines),
+            )
     try:
         applied = apply_diff(copy, proposal.diff)
     except subprocess.TimeoutExpired:
         applied = False
     if not applied:
         return _unverified(
-            ProofCause.PATCH_DID_NOT_APPLY, baseline=baseline, checks=(baseline,)
+            ProofCause.PATCH_DID_NOT_APPLY,
+            baseline=baselines[-1],
+            checks=tuple(baselines),
         )
-    after = replace(run_check(command, copy, "after", timeout), stage=stage)
-    checks = (baseline, after)
-    if after.timed_out:
-        return _unverified(
-            ProofCause.CHECK_TIMED_OUT,
-            baseline=baseline,
-            after=after,
-            patch_applied=True,
-            checks=checks,
-        )
-    if after.returncode != 0:
-        return _unverified(
-            _FAILED_AFTER[stage],
-            baseline=baseline,
-            after=after,
-            patch_applied=True,
-            checks=checks,
-        )
+    afters: list[CheckResult] = []
+    for stage, command in configured:
+        after = replace(run_check(command, copy, "after", timeout), stage=stage)
+        afters.append(after)
+        checks = tuple(baselines + afters)
+        if after.timed_out:
+            return _unverified(
+                ProofCause.CHECK_TIMED_OUT,
+                baseline=baselines[-1],
+                after=after,
+                patch_applied=True,
+                checks=checks,
+            )
+        if after.returncode != 0:
+            return _unverified(
+                _FAILED_AFTER[stage],
+                baseline=baselines[-1],
+                after=after,
+                patch_applied=True,
+                checks=checks,
+            )
     return ProofResult(
-        level=_LEVEL_FOR_STAGE[stage],
-        baseline=baseline,
-        after=after,
+        level=_LEVEL_FOR_STAGE[configured[-1][0]],
+        baseline=baselines[-1],
+        after=afters[-1],
         patch_applied=True,
-        checks=checks,
+        checks=tuple(baselines + afters),
     )
 
 
