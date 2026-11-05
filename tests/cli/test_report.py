@@ -2,7 +2,7 @@
 
 import pytest
 
-from tenon.cli.report import FixResult, check_exit, fix_exit
+from tenon.cli.report import FixResult, check_exit, fix_exit, render_check_text
 from tenon.detect import Change, ChangeKind, Location
 from tenon.locate import (
     AmbiguityReason,
@@ -60,11 +60,11 @@ def an_ambiguous_group(**overrides):
     return AmbiguousGroup(**values)
 
 
-def a_locate(*, certain=(), ambiguous=(), reason=None):
+def a_locate(*, change=None, certain=(), ambiguous=(), reason=None):
     if not certain and not ambiguous and reason is None:
         reason = LocateReason.NO_SITES
     return LocateResult(
-        change=a_change(),
+        change=change if change is not None else a_change(),
         certain=certain,
         ambiguous=ambiguous,
         reason=reason,
@@ -288,3 +288,105 @@ def test_fix_result_defaults_to_no_pr_request():
     )
 
     assert result.pr is None
+
+
+CHECK_TEXT = """\
+renamed POST /v1/checkout/sessions: payment_method_types -> allowed_payment_method_types
+acme/billing.py:7:30  keyword  payment_method_types
+acme/checkout.py:42:9  call  payment_method_types
+
+endpoint_removed #/paths/~1v1~1charges
+no affected sites (NO_SITES)
+
+2 changes, 2 certain sites, 0 ambiguity groups
+"""
+
+
+def an_untouched_change():
+    return a_change(
+        kind=ChangeKind.ENDPOINT_REMOVED,
+        location=Location(pointer="#/paths/~1v1~1charges"),
+        before=None,
+        after=None,
+    )
+
+
+# Spec AC3: the whole check report is one pinned deterministic text.
+def test_check_text_is_the_golden_text():
+    results = [
+        a_locate(
+            certain=(
+                a_site(path="acme/checkout.py", line=42, column=9, shape=SiteShape.CALL),
+                a_site(),
+            )
+        ),
+        a_locate(change=an_untouched_change(), reason=LocateReason.NO_SITES),
+    ]
+
+    assert render_check_text(results) == CHECK_TEXT
+
+
+# Spec AC3: one ambiguity line names the reason, symbol and every candidate.
+def test_check_text_renders_an_ambiguity_group():
+    text = render_check_text([a_locate(ambiguous=(an_ambiguous_group(),))])
+
+    assert text == (
+        "renamed POST /v1/checkout/sessions: payment_method_types -> "
+        "allowed_payment_method_types\n"
+        "ambiguous DYNAMIC_KWARGS: payment_method_types at "
+        "acme/a.py:3:1, acme/b.py:9:4\n"
+        "\n"
+        "1 changes, 0 certain sites, 1 ambiguity groups\n"
+    )
+
+
+# Spec AC3: a reason with no sites is named instead of an empty block.
+def test_check_text_renders_a_reason_with_no_sites():
+    text = render_check_text(
+        [a_locate(reason=LocateReason.UNSUPPORTED_CHANGE_KIND)]
+    )
+
+    assert text == (
+        "renamed POST /v1/checkout/sessions: payment_method_types -> "
+        "allowed_payment_method_types\n"
+        "no affected sites (UNSUPPORTED_CHANGE_KIND)\n"
+        "\n"
+        "1 changes, 0 certain sites, 0 ambiguity groups\n"
+    )
+
+
+# Spec AC3: blocks follow the input order.
+def test_check_text_keeps_the_input_order():
+    results = [
+        a_locate(change=an_untouched_change(), reason=LocateReason.NO_SITES),
+        a_locate(certain=(a_site(),)),
+    ]
+
+    text = render_check_text(results)
+
+    assert text.index("no affected sites") < text.index("acme/billing.py:7:30")
+
+
+# Spec AC3 / S1: zero results still carry the summary.
+def test_check_text_without_results_is_only_the_summary():
+    assert render_check_text([]) == "0 changes, 0 certain sites, 0 ambiguity groups\n"
+
+
+# Spec AC3: exactly one trailing newline and no colour.
+def test_check_text_has_one_trailing_newline_and_no_colour():
+    text = render_check_text([a_locate(certain=(a_site(),))])
+
+    assert text.endswith("\n")
+    assert not text.endswith("\n\n")
+    assert "\x1b[" not in text
+
+
+# Spec AC3: container values use the same canonical spelling as the PR summary.
+def test_check_text_renders_container_values_canonically():
+    change = a_change(before={"b": 2, "a": 1}, after=[2, {"z": 1, "a": 0}])
+
+    text = render_check_text([a_locate(change=change, reason=LocateReason.NO_SITES)])
+
+    assert text.startswith(
+        'renamed POST /v1/checkout/sessions: {"a":1,"b":2} -> [2,{"a":0,"z":1}]\n'
+    )
