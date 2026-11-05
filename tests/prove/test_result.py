@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from tenon.prove import CheckResult, ProofCause, ProofLevel, ProofResult, tail
+from tenon.prove.result import PROOF_RANK, ProofStage, proof_rank
 
 
 def a_check(**overrides):
@@ -56,21 +57,74 @@ def test_check_result_does_not_normalise_a_return_code_on_a_timeout():
     assert check.timed_out is True
 
 
-# Spec AC1 / PRD M8: the two levels and seven causes are the closed vocabulary.
-def test_proof_level_values_are_the_closed_two():
-    assert [level.value for level in ProofLevel] == ["TESTS_PASSED", "UNVERIFIED"]
+# Spec AC1: the four stages are the closed vocabulary, in runner order.
+def test_proof_stage_values_are_the_closed_four():
+    assert [stage.value for stage in ProofStage] == [
+        "BUILD",
+        "CHARACTERIZE",
+        "REPLAY",
+        "TESTS",
+    ]
 
 
-def test_proof_cause_values_are_the_closed_seven():
+# Spec AC1 / PRD M1: the five levels are the closed vocabulary, in docs order.
+def test_proof_level_values_are_the_closed_five():
+    assert [level.value for level in ProofLevel] == [
+        "TESTS_PASSED",
+        "CHARACTERIZED",
+        "REPLAYED",
+        "TYPES_BUILD_ONLY",
+        "UNVERIFIED",
+    ]
+
+
+# Spec AC7 / PRD M7: the fourteen causes are the closed vocabulary.
+def test_proof_cause_values_are_the_closed_fourteen():
     assert [cause.value for cause in ProofCause] == [
         "NO_PATCH_PROPOSED",
         "PATCH_DID_NOT_APPLY",
         "NO_TESTS_FOUND",
+        "NO_PROOF_COMMAND",
         "TESTS_FAILED_BEFORE",
         "TESTS_FAILED_AFTER",
+        "BUILD_FAILED_BEFORE",
+        "BUILD_FAILED_AFTER",
+        "CHARACTERIZE_FAILED_BEFORE",
+        "CHARACTERIZE_FAILED_AFTER",
+        "REPLAY_FAILED_BEFORE",
+        "REPLAY_FAILED_AFTER",
         "CHECK_TIMED_OUT",
         "COPY_FAILED",
     ]
+
+
+# Spec AC1: every stage constructs from its string.
+@pytest.mark.parametrize("stage", list(ProofStage))
+def test_every_proof_stage_constructs(stage):
+    assert ProofStage(stage.value) is stage
+
+
+# Spec AC2: the rank orders the five levels, strongest first.
+def test_proof_rank_orders_the_five_levels():
+    assert PROOF_RANK == {
+        ProofLevel.TESTS_PASSED: 4,
+        ProofLevel.CHARACTERIZED: 3,
+        ProofLevel.REPLAYED: 2,
+        ProofLevel.TYPES_BUILD_ONLY: 1,
+        ProofLevel.UNVERIFIED: 0,
+    }
+
+
+@pytest.mark.parametrize("level", list(ProofLevel))
+def test_proof_rank_returns_each_level_rank(level):
+    assert proof_rank(level) == PROOF_RANK[level]
+
+
+# Spec AC2: a string coerces; an unknown value raises rather than defaulting.
+def test_proof_rank_coerces_a_string_and_rejects_an_unknown():
+    assert proof_rank("CHARACTERIZED") == 3
+    with pytest.raises(ValueError):
+        proof_rank("VERIFIED")
 
 
 @pytest.mark.parametrize("level", list(ProofLevel))
@@ -228,11 +282,12 @@ def test_unverified_round_trips_every_cause(cause):
     assert parsed["after"] is None
 
 
-# Spec AC1: every level is constructible and appears as a plain string.
-def test_every_level_round_trips_through_to_dict():
+# Spec AC1: the shipped levels appear as plain strings.
+def test_shipped_levels_round_trip_through_to_dict():
     results = [a_passed(), an_unverified()]
     assert [result.to_dict()["level"] for result in results] == [
-        proof_level.value for proof_level in ProofLevel
+        "TESTS_PASSED",
+        "UNVERIFIED",
     ]
 
 

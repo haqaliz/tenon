@@ -5,11 +5,37 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
+class ProofStage(StrEnum):
+    """One configured stage, in the order the runner executes it."""
+
+    BUILD = "BUILD"
+    CHARACTERIZE = "CHARACTERIZE"
+    REPLAY = "REPLAY"
+    TESTS = "TESTS"
+
+
 class ProofLevel(StrEnum):
-    """The strongest statement this card can make. The rest of the ladder is T7."""
+    """The strongest statement this card can make, strongest first."""
 
     TESTS_PASSED = "TESTS_PASSED"
+    CHARACTERIZED = "CHARACTERIZED"
+    REPLAYED = "REPLAYED"
+    TYPES_BUILD_ONLY = "TYPES_BUILD_ONLY"
     UNVERIFIED = "UNVERIFIED"
+
+
+PROOF_RANK: dict[ProofLevel, int] = {
+    ProofLevel.TESTS_PASSED: 4,
+    ProofLevel.CHARACTERIZED: 3,
+    ProofLevel.REPLAYED: 2,
+    ProofLevel.TYPES_BUILD_ONLY: 1,
+    ProofLevel.UNVERIFIED: 0,
+}
+
+
+def proof_rank(level: ProofLevel | str) -> int:
+    """The ladder rank of a level; strings coerce and unknown values raise."""
+    return PROOF_RANK[ProofLevel(level)]
 
 
 class ProofCause(StrEnum):
@@ -18,8 +44,15 @@ class ProofCause(StrEnum):
     NO_PATCH_PROPOSED = "NO_PATCH_PROPOSED"
     PATCH_DID_NOT_APPLY = "PATCH_DID_NOT_APPLY"
     NO_TESTS_FOUND = "NO_TESTS_FOUND"
+    NO_PROOF_COMMAND = "NO_PROOF_COMMAND"
     TESTS_FAILED_BEFORE = "TESTS_FAILED_BEFORE"
     TESTS_FAILED_AFTER = "TESTS_FAILED_AFTER"
+    BUILD_FAILED_BEFORE = "BUILD_FAILED_BEFORE"
+    BUILD_FAILED_AFTER = "BUILD_FAILED_AFTER"
+    CHARACTERIZE_FAILED_BEFORE = "CHARACTERIZE_FAILED_BEFORE"
+    CHARACTERIZE_FAILED_AFTER = "CHARACTERIZE_FAILED_AFTER"
+    REPLAY_FAILED_BEFORE = "REPLAY_FAILED_BEFORE"
+    REPLAY_FAILED_AFTER = "REPLAY_FAILED_AFTER"
     CHECK_TIMED_OUT = "CHECK_TIMED_OUT"
     COPY_FAILED = "COPY_FAILED"
 
