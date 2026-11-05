@@ -11,7 +11,7 @@ import pytest
 from tenon.cli import main
 from tenon.detect import diff, load
 from tenon.pr import PrDraft, PrRefusal, PrResult, PrStatus
-from tenon.prove import CheckResult, ProofLevel, ProofResult
+from tenon.prove import CheckResult, ProofLevel, ProofPlan, ProofResult
 
 # ``tenon.cli.main`` the submodule is shadowed by the exported function.
 cli_main = importlib.import_module("tenon.cli.main")
@@ -287,8 +287,8 @@ def test_fix_passing_check_prints_diff_and_proof(
     assert a_snapshot(a_repo) == before
 
 
-# Spec AC5: no check command is UNVERIFIED, not a passed proof.
-def test_fix_without_a_check_command_is_unverified(
+# Spec AC5: no proof command is UNVERIFIED, not a passed proof.
+def test_fix_without_a_proof_command_is_unverified(
     a_repo, a_specs, a_no_command_config, capsys
 ):
     assert (
@@ -296,7 +296,7 @@ def test_fix_without_a_check_command_is_unverified(
     )
     out = capsys.readouterr().out
     assert "Proof: UNVERIFIED" in out
-    assert "Cause: NO_TESTS_FOUND" in out
+    assert "Cause: NO_PROOF_COMMAND" in out
 
 
 # Spec AC5: --require changes the exit code only; the label stays UNVERIFIED.
@@ -315,6 +315,139 @@ def test_fix_require_unverified_exits_zero(
         == 0
     )
     assert "Proof: UNVERIFIED" in capsys.readouterr().out
+
+
+# Spec AC1/AC2: a build-only plan meets TYPES_BUILD_ONLY and shows the build.
+def test_fix_build_only_with_build_requirement_exits_zero(
+    a_repo, a_specs, a_no_command_config, a_build, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--build",
+            a_build,
+            "--require",
+            "TYPES_BUILD_ONLY",
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "Proof: TYPES_BUILD_ONLY" in out
+    assert "import acme.billing" in out
+    assert "TESTS_PASSED" not in out
+
+
+# Spec AC3: the same build-only proof does not meet TESTS_PASSED.
+def test_fix_build_only_under_tests_requirement_exits_one(
+    a_repo, a_specs, a_no_command_config, a_build, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--build",
+            a_build,
+            "--require",
+            "TESTS_PASSED",
+        )
+        == 1
+    )
+    assert "Proof: TYPES_BUILD_ONLY" in capsys.readouterr().out
+
+
+# Spec AC4: a green build with a red test fails closed at TESTS_FAILED_AFTER.
+def test_fix_green_build_red_test_is_unverified_after(
+    a_repo, a_specs, a_build, a_test_red_after_patch, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--build",
+            a_build,
+            "--check",
+            a_test_red_after_patch,
+            "--json",
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    proof = payload["results"][0]["proof"]
+    assert proof["level"] == "UNVERIFIED"
+    assert proof["cause"] == "TESTS_FAILED_AFTER"
+    build_checks = [check for check in proof["checks"] if check["stage"] == "BUILD"]
+    test_checks = [check for check in proof["checks"] if check["stage"] == "TESTS"]
+    assert [check["returncode"] for check in build_checks] == [0, 0]
+    assert [check["returncode"] for check in test_checks] == [0, 1]
+
+
+# Spec AC1: the four stage flags reach one plan, in plan order.
+def test_fix_stage_flags_reach_one_plan(a_repo, a_specs, monkeypatch):
+    seen = []
+
+    def prove_plan_spy(proposal, repo, plan):
+        seen.append(plan)
+        return a_green_proof()
+
+    monkeypatch.setattr(cli_main, "prove_plan", prove_plan_spy)
+
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--build",
+            "build one",
+            "--characterize",
+            "characterize one",
+            "--replay",
+            "replay one",
+            "--check",
+            "tests one",
+        )
+        == 0
+    )
+    assert seen == [
+        ProofPlan(
+            tests=("tests", "one"),
+            characterize=("characterize", "one"),
+            replay=("replay", "one"),
+            build=("build", "one"),
+        )
+    ]
+
+
+# Spec AC1: a missing stage flag falls back to [tenon], not to empty.
+def test_fix_stage_commands_fall_back_to_the_config(a_repo, a_specs, monkeypatch):
+    (a_repo / "tenon.toml").write_text(
+        '[locate]\nsdk_package = "acme.client"\n'
+        "\n[tenon]\n"
+        'command = ["tests", "from", "config"]\n'
+        'build = ["build", "from", "config"]\n'
+        'characterize = ["characterize", "from", "config"]\n'
+        'replay = ["replay", "from", "config"]\n'
+    )
+    seen = []
+
+    def prove_plan_spy(proposal, repo, plan):
+        seen.append(plan)
+        return a_green_proof()
+
+    monkeypatch.setattr(cli_main, "prove_plan", prove_plan_spy)
+
+    assert a_fix(a_repo, a_specs) == 0
+    assert seen == [
+        ProofPlan(
+            tests=("tests", "from", "config"),
+            characterize=("characterize", "from", "config"),
+            replay=("replay", "from", "config"),
+            build=("build", "from", "config"),
+        )
+    ]
 
 
 # Spec AC5: the JSON proof carries the named cause.
@@ -336,7 +469,7 @@ def test_fix_json_carries_the_unverified_cause(
     assert set(payload) == {"command", "results", "summary"}
     assert payload["command"] == "fix"
     assert payload["results"][0]["proof"]["level"] == "UNVERIFIED"
-    assert payload["results"][0]["proof"]["cause"] == "NO_TESTS_FOUND"
+    assert payload["results"][0]["proof"]["cause"] == "NO_PROOF_COMMAND"
     assert payload["results"][0]["pr"] is None
     assert payload["summary"]["unverified"] == 1
 
@@ -383,7 +516,9 @@ def test_fix_ts_locates_proposes_and_renders_the_diff(
         return real_propose(change, result, repo)
 
     monkeypatch.setattr(cli_main, "propose", propose_spy)
-    monkeypatch.setattr(cli_main, "prove", lambda *args, **kwargs: a_green_proof())
+    monkeypatch.setattr(
+        cli_main, "prove_plan", lambda *args, **kwargs: a_green_proof()
+    )
     before = a_snapshot(a_ts_repo.repo)
 
     assert a_fix(a_ts_repo.repo, a_ts_repo.specs, "--language", "ts") == 0
@@ -645,13 +780,14 @@ def test_missing_spec_exits_two(a_repo, a_specs, tmp_path, capsys):
     assert "Traceback" not in err
 
 
-# Spec AC8/M6: only the shipped proof levels parse; the rest names T7.
-def test_unknown_require_names_t7(a_repo, a_specs, capsys):
+# Spec AC2/M6: an unknown --require names the five ladder levels.
+def test_unknown_require_names_the_five_levels(a_repo, a_specs, capsys):
     assert a_fix(a_repo, a_specs, "--require", "BY_HAND") == 2
 
     err = capsys.readouterr().err
     assert "--require" in err
-    assert "T7" in err
+    assert "TYPES_BUILD_ONLY" in err
+    assert "UNVERIFIED" in err
 
 
 # Spec M10: an unexpected failure is an internal 1, not a traceback.

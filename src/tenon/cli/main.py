@@ -11,9 +11,15 @@ from tenon.detect import Change, DiffResult, SpecRefusal, diff, load
 from tenon.locate import LocateConfig, TsLocateConfig, locate, locate_ts
 from tenon.pr import GitGhRemote, Remote, write_pr
 from tenon.propose import propose
-from tenon.prove import prove
+from tenon.prove import ProofPlan, prove_plan
 
-from .config import CliConfig, load_cli_config, overrides, resolve_config_path
+from .config import (
+    CliConfig,
+    a_level,
+    load_cli_config,
+    overrides,
+    resolve_config_path,
+)
 from .report import (
     FixResult,
     check_exit,
@@ -41,12 +47,11 @@ def _package_version() -> str:
 
 
 def _require(value: str) -> str:
-    """Only the two shipped proof levels; the rest of the ladder is T7."""
-    if value not in ("TESTS_PASSED", "UNVERIFIED"):
-        raise argparse.ArgumentTypeError(
-            f"--require must be TESTS_PASSED or UNVERIFIED until T7: {value!r}"
-        )
-    return value
+    """Any ladder level; the config coerces the kept string to a ProofLevel."""
+    try:
+        return a_level(value, "--require").value
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
@@ -100,6 +105,11 @@ def _parser() -> argparse.ArgumentParser:
     fix = commands.add_parser("fix", help="propose and prove fixes")
     _common(fix)
     fix.add_argument("--check", dest="check", default=None, help="check command")
+    fix.add_argument("--build", default=None, help="build command")
+    fix.add_argument(
+        "--characterize", default=None, help="characterization command"
+    )
+    fix.add_argument("--replay", default=None, help="replay command")
     fix.add_argument("--require", type=_require, default=None, help="proof level")
     fix.add_argument("--open-pr", action="store_true", help="open a pull request")
     fix.add_argument(
@@ -135,6 +145,9 @@ def _config(args: argparse.Namespace) -> CliConfig:
         operations=args.operation,
         fields=args.field,
         command=getattr(args, "check", None),
+        build=getattr(args, "build", None),
+        characterize=getattr(args, "characterize", None),
+        replay=getattr(args, "replay", None),
         require=getattr(args, "require", None),
         breaking_only=args.breaking_only,
         language=args.language,
@@ -172,11 +185,17 @@ def _fix(
 ) -> int:
     result, changes = _diff_and_filter(args.old, args.new, config)
     repo = Path(args.repo)
+    plan = ProofPlan(
+        tests=config.command,
+        characterize=config.characterize,
+        replay=config.replay,
+        build=config.build,
+    )
     results: list[FixResult] = []
     for change in changes:
         located = _locate(change, repo, config)
         proposal = propose(change, located, repo)
-        proof = prove(proposal, repo, config.command)
+        proof = prove_plan(proposal, repo, plan)
         pr = None
         if args.open_pr:
             pr = write_pr(

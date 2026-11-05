@@ -7,14 +7,14 @@ from typing import Any, Sequence
 from tenon.detect import Change
 from tenon.locate import LocateReason, LocateResult, Site
 from tenon.propose import Proposal
-from tenon.prove import CheckResult, ProofLevel, ProofResult
+from tenon.prove import PROOF_RANK, CheckResult, ProofLevel, ProofResult, proof_rank
 from tenon.pr import PrResult, PrStatus
 
 # Spec AC1: these reasons mean the analysis could not run, not that it found nothing.
 _UNCLEAN_REASONS = frozenset(
     {LocateReason.NO_SDK_IMPORT, LocateReason.OPERATION_NOT_MAPPED}
 )
-_LEVEL_RANK = {ProofLevel.UNVERIFIED: 0, ProofLevel.TESTS_PASSED: 1}
+_LEVEL_RANK = PROOF_RANK
 
 SITE_LINE = "{path}:{line}:{column}  {shape}  {symbol}"
 AMBIGUOUS_LINE = "ambiguous {reason}: {symbol} at {candidates}"
@@ -67,7 +67,7 @@ def check_exit(results: Sequence[LocateResult]) -> int:
 
 
 def _meets(level: ProofLevel, require: ProofLevel) -> bool:
-    return _LEVEL_RANK[level] >= _LEVEL_RANK[require]
+    return proof_rank(level) >= proof_rank(require)
 
 
 def fix_exit(changes: int, results: Sequence[FixResult], require: ProofLevel) -> int:
