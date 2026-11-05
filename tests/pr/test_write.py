@@ -1,6 +1,7 @@
 """Write a proven proposal as a branch and PR without touching the user's tree."""
 
 import hashlib
+import inspect
 import os
 import subprocess
 import tempfile
@@ -732,6 +733,16 @@ def test_offline_end_to_end_with_the_real_git_adapter(
     )
     assert git(repo_with_remote.work, "branch", "--list", "tenon/*") == ""
     assert tree_hashes(repo_with_remote.work) == before
+
+
+# Plan phase 4: the required-level arguments are public, with the shipped default
+# and the deprecated alias intact.
+def test_write_pr_exposes_the_required_level_with_safe_defaults():
+    parameters = inspect.signature(write_pr).parameters
+
+    assert parameters["required"].default is ProofLevel.TESTS_PASSED
+    assert parameters["allow_below_required"].default is False
+    assert parameters["allow_unverified"].default is False
 
 
 # Plan phase 4: `tenon.pr` is the full public surface for the writer.
