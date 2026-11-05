@@ -3,7 +3,7 @@
 - **Slug:** `proof-ladder`
 - **Capability:** T7 in `docs/technical/CAPABILITY_ROADMAP.md`
 - **Milestone:** M2.2 in `docs/ROADMAP.md` (Phase 2)
-- **Status:** draft for review
+- **Status:** implemented 2026-11-06 (`src/tenon/prove/`, CLI/PR integration, 1,178 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

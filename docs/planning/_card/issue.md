@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T7 Proof ladder** (`docs/technical/CAPABILITY_ROADMAP.md:13`)
 - **Milestone:** M2.2 (`docs/ROADMAP.md`)
+- **State:** shipped 2026-11-06 (`src/tenon/prove/`, CLI/PR integration, 1,178 tests)
 - **Branch:** `feat/proof-ladder/aliz`
 - **Worktree:** `.claude/worktrees/feat-proof-ladder`
 

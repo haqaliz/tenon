@@ -10,7 +10,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T4** | **Proof runner.** Apply the patch in an isolated working copy, run the user's tests, record the proof level. | T3 | Execution decides the label | **Shipped 2026-10-29** |
 | **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging | **Shipped 2026-11-05** |
 | **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | | **Shipped 2026-11-05** |
-| **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | Not started |
+| **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | **Shipped 2026-11-06** |
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | Not started |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | Not started |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | Not started |
@@ -115,6 +115,25 @@ are not resolved); JSX attribute names are parsed but not sites; no type inferen
 factory-returned client is unrooted; a parse-error file is skipped; static string subscripts are
 `DYNAMIC_GETATTR`; T4's isolated copy still drops `node_modules`, so a real TS `npm test` may be
 `TESTS_FAILED_BEFORE` in the proof copy while `tenon check` works; the grammar versions are pinned.
+
+### T7 as built (2026-11-06)
+
+`src/tenon/prove/`: `ProofStage` (build/characterize/replay/tests), the five-level `ProofLevel`
+(`TESTS_PASSED > CHARACTERIZED > REPLAYED > TYPES_BUILD_ONLY > UNVERIFIED`), `PROOF_RANK`,
+stage-specific causes, `CheckResult.stage` and `ProofResult.checks`. `ProofPlan` + `prove_plan` run
+every configured stage's baseline, apply the diff once, run every after-check, and fail closed: any
+configured red stage is `UNVERIFIED` with its cause; the level is the strongest stage only when every
+configured stage is green. `prove` remains a tests-only shortcut. The CLI adds `--build`,
+`--characterize`, `--replay`, the five-level `--require`, and `--allow-below-required`. T5's
+`write_pr` takes `required`/`allow_below_required`: a normal PR at or above the requirement, a draft
+below with opt-in, `UNVERIFIED` always a draft, and `BELOW_REQUIRED_LEVEL` otherwise. 1,178 tests,
+offline.
+
+Known limits at this level: the characterization and replay commands are user-supplied; Tenon does
+not generate the tests or record the traffic, so the label is only as strong as the command (the body
+says so). All stages share one timeout; a red weaker stage fails the whole result even when a stronger
+stage is green; per-stage timeouts and generators/recorders are later cards. A `TYPES_BUILD_ONLY` PR
+is a normal PR only when the user requires that level; otherwise it is a refusal or an opted-in draft.
 
 
 
