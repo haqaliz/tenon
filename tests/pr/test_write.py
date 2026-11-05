@@ -495,6 +495,152 @@ def test_allow_unverified_opens_a_draft_pr_naming_the_cause(
     assert "## Tenon proof: UNVERIFIED" in pr[5]
 
 
+# Spec AC3: a build-only proof below the required tests is refused before any remote call.
+def test_types_build_only_below_required_calls_no_remote(
+    repo_with_remote, a_rename_proposal, a_proof_at
+):
+    remote = a_fake_remote()
+
+    result = write_pr(
+        a_rename_proposal,
+        a_proof_at(ProofLevel.TYPES_BUILD_ONLY),
+        repo_with_remote.work,
+        remote=remote,
+    )
+
+    assert result.status is PrStatus.REFUSED
+    assert result.refusal is PrRefusal.BELOW_REQUIRED_LEVEL
+    assert "TESTS_PASSED" in result.detail
+    assert "TYPES_BUILD_ONLY" in result.detail
+    assert remote.calls == []
+
+
+# Spec AC3: opting in below the requirement opens a draft PR.
+def test_below_required_with_opt_in_opens_a_draft(
+    repo_with_remote, a_rename_proposal, a_proof_at
+):
+    remote = a_fake_remote()
+
+    result = write_pr(
+        a_rename_proposal,
+        a_proof_at(ProofLevel.TYPES_BUILD_ONLY),
+        repo_with_remote.work,
+        remote=remote,
+        allow_below_required=True,
+    )
+
+    assert result.status is PrStatus.OPENED
+    assert remote.calls[-1][-1] is True
+
+
+# Spec AC1: a tests-passed proof at the required tests level opens a normal PR.
+def test_tests_passed_at_required_opens_a_normal_pr(
+    repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    remote = a_fake_remote()
+
+    result = write_pr(
+        a_rename_proposal,
+        a_passed_proof,
+        repo_with_remote.work,
+        remote=remote,
+        required=ProofLevel.TESTS_PASSED,
+    )
+
+    assert result.status is PrStatus.OPENED
+    assert remote.calls[-1][-1] is False
+
+
+# Spec AC1: a build-only proof at the required build level opens a normal PR.
+def test_types_build_only_at_required_opens_a_normal_pr(
+    repo_with_remote, a_rename_proposal, a_proof_at
+):
+    remote = a_fake_remote()
+
+    result = write_pr(
+        a_rename_proposal,
+        a_proof_at(ProofLevel.TYPES_BUILD_ONLY),
+        repo_with_remote.work,
+        remote=remote,
+        required=ProofLevel.TYPES_BUILD_ONLY,
+    )
+
+    assert result.status is PrStatus.OPENED
+    assert remote.calls[-1][-1] is False
+
+
+# Spec AC2: a stronger proof satisfies a weaker requirement with a normal PR.
+def test_tests_passed_above_required_opens_a_normal_pr(
+    repo_with_remote, a_rename_proposal, a_passed_proof
+):
+    remote = a_fake_remote()
+
+    result = write_pr(
+        a_rename_proposal,
+        a_passed_proof,
+        repo_with_remote.work,
+        remote=remote,
+        required=ProofLevel.TYPES_BUILD_ONLY,
+    )
+
+    assert result.status is PrStatus.OPENED
+    assert remote.calls[-1][-1] is False
+
+
+# Spec AC4: an unverified proof opted in below the requirement opens a draft.
+def test_unverified_with_allow_below_required_opens_a_draft(
+    repo_with_remote, a_rename_proposal, an_unverified_proof
+):
+    remote = a_fake_remote()
+
+    result = write_pr(
+        a_rename_proposal,
+        an_unverified_proof(),
+        repo_with_remote.work,
+        remote=remote,
+        allow_below_required=True,
+    )
+
+    assert result.status is PrStatus.OPENED
+    assert remote.calls[-1][-1] is True
+
+
+# Spec AC4: requiring UNVERIFIED still opens a draft, never a normal PR.
+def test_unverified_at_required_is_still_a_draft(
+    repo_with_remote, a_rename_proposal, an_unverified_proof
+):
+    remote = a_fake_remote()
+
+    result = write_pr(
+        a_rename_proposal,
+        an_unverified_proof(),
+        repo_with_remote.work,
+        remote=remote,
+        required=ProofLevel.UNVERIFIED,
+    )
+
+    assert result.status is PrStatus.OPENED
+    assert remote.calls[-1][-1] is True
+
+
+# Spec AC5: allow_unverified is the deprecated alias for allow_below_required.
+def test_allow_unverified_is_an_alias_below_the_required_level(
+    repo_with_remote, a_rename_proposal, a_proof_at
+):
+    remote = a_fake_remote()
+
+    result = write_pr(
+        a_rename_proposal,
+        a_proof_at(ProofLevel.REPLAYED),
+        repo_with_remote.work,
+        remote=remote,
+        allow_unverified=True,
+    )
+
+    assert result.status is PrStatus.OPENED
+    assert remote.calls[-1][-1] is True
+
+
 # Spec AC7: a rejected push is PUSH_FAILED and create_pr is never called.
 def test_a_rejected_push_is_push_failed(
     repo_with_remote, a_rename_proposal, a_passed_proof
