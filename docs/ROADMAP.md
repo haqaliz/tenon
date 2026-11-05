@@ -29,12 +29,12 @@ Milestone order is my proposal; reorder freely.
 
 ## Phase 2: Breadth and proof depth (weeks 8-12)
 
-| # | Milestone | Done when |
-|---|---|---|
-| M2.1 | TypeScript/JavaScript locator (T6) | Same contract as the Python locator |
-| M2.2 | Weaker and stronger proofs (T7) | Types/build-only, characterization tests, recorded-call replay, each labelled |
-| M2.3 | MCP schema diffs and `tenon probe` (T8) | Agent run against an MCP server or API; reports what worked |
-| M2.4 | Benchmark of (change, patch, proof, outcome) | Public set of real changes with how often each proof level held |
+| # | Milestone | Done when | State |
+|---|---|---|---|
+| M2.1 | TypeScript/JavaScript locator (T6) | Same contract as the Python locator | **Shipped 2026-11-05** (`src/tenon/locate/ts_*.py`, 1,006 tests) |
+| M2.2 | Weaker and stronger proofs (T7) | Types/build-only, characterization tests, recorded-call replay, each labelled | Not started |
+| M2.3 | MCP schema diffs and `tenon probe` (T8) | Agent run against an MCP server or API; reports what worked | Not started |
+| M2.4 | Benchmark of (change, patch, proof, outcome) | Public set of real changes with how often each proof level held | Not started |
 
 ## Phase 3: Provider layer (after the window)
 

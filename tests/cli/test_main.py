@@ -11,7 +11,7 @@ import pytest
 from tenon.cli import main
 from tenon.detect import diff, load
 from tenon.pr import PrDraft, PrRefusal, PrResult, PrStatus
-from tenon.prove import ProofLevel
+from tenon.prove import CheckResult, ProofLevel, ProofResult
 
 # ``tenon.cli.main`` the submodule is shadowed by the exported function.
 cli_main = importlib.import_module("tenon.cli.main")
@@ -160,6 +160,106 @@ def test_missing_config_without_sdk_package_is_usage(a_repo_without_config, a_sp
     assert "sdk-package" in capsys.readouterr().err
 
 
+# Spec AC3: [locate] language = "ts" is enough; no flag is needed.
+def test_check_ts_language_from_the_config(a_ts_repo, capsys):
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs) == 1
+
+    out = capsys.readouterr().out
+    assert "src/billing.ts:5:25" in out
+    assert "amount" in out
+    assert "1 change, 1 certain site, 0 ambiguity groups" in out
+
+
+# Spec AC3: --language ts overrides a file written for Python.
+def test_check_language_flag_overrides_a_python_config(a_ts_repo, capsys):
+    (a_ts_repo.repo / "tenon.toml").write_text(
+        '[locate]\nsdk_package = "stripe"\n'
+    )
+
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--language", "ts") == 1
+    assert "src/billing.ts:5:25" in capsys.readouterr().out
+
+
+# Spec AC3: the TS check uses the shipped JSON envelope.
+def test_check_ts_json_has_one_exact_envelope(a_ts_repo, capsys):
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--json") == 1
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+
+    assert set(payload) == {"command", "results", "summary"}
+    assert payload["command"] == "check"
+    assert payload["summary"] == {"changes": 1, "certain": 1, "ambiguous": 0}
+    (result,) = payload["results"]
+    assert result["certain"][0]["path"] == "src/billing.ts"
+    assert result["certain"][0]["line"] == 5
+    assert result["certain"][0]["column"] == 25
+    assert result["certain"][0]["symbol"] == "amount"
+    assert result["reason"] is None
+    assert out.count("\n") == 1
+
+
+# Spec AC3: a TS change with no matching site is a clean 0.
+def test_check_ts_without_a_site_exits_zero(a_ts_repo, capsys):
+    (a_ts_repo.repo / "src" / "billing.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        'export const client = new Stripe("sk_test");\n'
+        "\n"
+        'client.charges.delete("ch_1");\n'
+    )
+
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs) == 0
+    assert "NO_SITES" in capsys.readouterr().out
+
+
+# Spec AC5: --language python validates the file's npm package as Python.
+def test_language_python_rejects_a_scoped_npm_package(a_ts_repo, capsys):
+    (a_ts_repo.repo / "tenon.toml").write_text(
+        '[locate]\nlanguage = "ts"\nsdk_package = "@scope/pkg"\n'
+    )
+
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--language", "python") == 2
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    assert "Traceback" not in err
+
+
+# Spec AC5: argparse rejects an unknown --language before any analysis.
+def test_unknown_language_flag_is_usage(a_ts_repo, capsys):
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--language", "ruby") == 2
+
+    captured = capsys.readouterr()
+    assert "--language" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC5: a missing file builds the TS default from --sdk-package.
+def test_missing_config_with_language_ts_uses_sdk_package(a_ts_repo, capsys):
+    (a_ts_repo.repo / "tenon.toml").unlink()
+
+    assert (
+        a_check(
+            a_ts_repo.repo,
+            a_ts_repo.specs,
+            "--language",
+            "ts",
+            "--sdk-package",
+            "stripe",
+        )
+        == 1
+    )
+    assert "src/billing.ts" in capsys.readouterr().out
+
+
+# Spec AC5: --language ts without any package is still a usage error.
+def test_missing_config_with_language_ts_without_package_is_usage(a_ts_repo, capsys):
+    (a_ts_repo.repo / "tenon.toml").unlink()
+
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--language", "ts") == 2
+    assert "sdk-package" in capsys.readouterr().err
+
+
 def a_fix(repo, specs, *extra, remote=None):
     old, new = specs
     return main(
@@ -254,6 +354,88 @@ def test_fix_zero_changes_exits_zero(a_repo, a_same_specs, capsys):
     assert a_fix(a_repo, a_same_specs) == 0
     out = capsys.readouterr().out
     assert "0 changes, 0 proposals" in out
+
+
+def a_green_proof():
+    green = CheckResult(
+        kind="baseline", command=("npm", "test"), returncode=0, timed_out=False
+    )
+    after = CheckResult(
+        kind="after", command=("npm", "test"), returncode=0, timed_out=False
+    )
+    return ProofResult(
+        level=ProofLevel.TESTS_PASSED,
+        baseline=green,
+        after=after,
+        patch_applied=True,
+    )
+
+
+# Spec AC4: fix uses the TS site, proposes against it and leaves the tree alone.
+def test_fix_ts_locates_proposes_and_renders_the_diff(
+    a_ts_repo, a_snapshot, monkeypatch, capsys
+):
+    located = []
+    real_propose = cli_main.propose
+
+    def propose_spy(change, result, repo):
+        located.append(result)
+        return real_propose(change, result, repo)
+
+    monkeypatch.setattr(cli_main, "propose", propose_spy)
+    monkeypatch.setattr(cli_main, "prove", lambda *args, **kwargs: a_green_proof())
+    before = a_snapshot(a_ts_repo.repo)
+
+    assert a_fix(a_ts_repo.repo, a_ts_repo.specs, "--language", "ts") == 0
+
+    out = capsys.readouterr().out
+    assert (
+        '+client.charges.create({ amount_cents: 100, currency: "usd" });' in out
+    )
+    assert "Proof: TESTS_PASSED" in out
+    assert [
+        (site.path, site.line, site.column) for site in located[0].certain
+    ] == [a_ts_repo.site]
+    assert a_snapshot(a_ts_repo.repo) == before
+
+
+# Spec AC5: --language ts with a package npm cannot accept is a named config error.
+def test_language_ts_rejects_an_invalid_npm_package(a_ts_repo, capsys):
+    (a_ts_repo.repo / "tenon.toml").write_text(
+        '[locate]\nsdk_package = "acme/client"\n'
+    )
+
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--language", "ts") == 2
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    assert "Traceback" not in err
+
+
+# Spec AC2/AC5: a TS config with an invalid Python package is one JSON error object.
+def test_ts_config_invalid_python_package_json_is_one_error(a_ts_repo, capsys):
+    (a_ts_repo.repo / "tenon.toml").write_text(
+        '[locate]\nlanguage = "ts"\nsdk_package = "@scope/pkg"\n'
+    )
+
+    assert (
+        a_check(
+            a_ts_repo.repo,
+            a_ts_repo.specs,
+            "--language",
+            "python",
+            "--json",
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "config"
+    assert "sdk_package" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
 
 
 def a_pr(proof, status=PrStatus.OPENED, refusal=None):
@@ -486,7 +668,7 @@ def test_unexpected_failure_is_internal(a_repo, a_specs, monkeypatch, capsys):
     assert "Traceback" not in captured.err
 
 
-def a_run_module_check(repo, specs, seed):
+def a_run_module_check(repo, specs, seed, *extra):
     old, new = specs
     return subprocess.run(
         [
@@ -499,6 +681,7 @@ def a_run_module_check(repo, specs, seed):
             str(old),
             "--new",
             str(new),
+            *extra,
             "--json",
         ],
         capture_output=True,
@@ -516,3 +699,15 @@ def test_check_json_is_byte_stable_across_hash_seeds(a_repo, a_specs):
     assert first.stdout == second.stdout
     assert b"acme/billing.py" in first.stdout
     assert str(a_repo).encode() not in first.stdout
+
+
+# Spec AC3/M12: the same TS check report is byte-identical across hash seeds.
+def test_check_ts_json_is_byte_stable_across_hash_seeds(a_ts_repo):
+    first = a_run_module_check(a_ts_repo.repo, a_ts_repo.specs, "0")
+    second = a_run_module_check(a_ts_repo.repo, a_ts_repo.specs, "1")
+
+    assert first.returncode == 1
+    assert second.returncode == 1
+    assert first.stdout == second.stdout
+    assert b"src/billing.ts" in first.stdout
+    assert str(a_ts_repo.repo).encode() not in first.stdout

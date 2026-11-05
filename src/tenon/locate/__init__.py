@@ -11,6 +11,8 @@ from .result import (
 )
 from .resolve import locate
 from .scan import Dynamic, Hit, ScanResult, scan
+from .ts_config import TsLocateConfig
+from .ts_locate import locate_ts
 
 __all__ = [
     "AmbiguityReason",
@@ -24,8 +26,10 @@ __all__ = [
     "ScanResult",
     "Site",
     "SiteShape",
+    "TsLocateConfig",
     "derive",
     "load_config",
     "locate",
+    "locate_ts",
     "scan",
 ]

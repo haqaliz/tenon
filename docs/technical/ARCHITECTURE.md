@@ -1,9 +1,9 @@
 # Tenon: Architecture
 
-Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR) and the
-`tenon check` / `tenon fix` CLI are implemented** under `src/tenon/detect/`, `src/tenon/locate/`,
-`src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/` and `src/tenon/cli/`. The probe and the
-later stages are not.
+Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR), T6
+(locate, TypeScript/JavaScript) and the `tenon check` / `tenon fix` CLI are implemented** under
+`src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`
+and `src/tenon/cli/`. The probe and the later stages are not.
 
 ## Pipeline
 
@@ -31,7 +31,7 @@ API change source (OpenAPI v1 -> v2 | MCP schema | SDK metadata)
 ```text
 src/tenon/
   detect/     T1: spec parsers, differ, Change records      <- built
-  locate/     T2: per-language call-site finders            <- built (Python)
+  locate/     T2/T6: per-language call-site finders       <- built (Python + TS/JS)
   propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
   prove/      T4/T7: working-copy runner, proof levels     <- built (TESTS_PASSED)
   pr/         T5: branch and PR writer                     <- built (git + gh seam)
@@ -45,6 +45,9 @@ tests/        offline; fixture repos and specs; no network, no model calls
 
 - **Change record is the unit.** Everything downstream consumes typed Change records, so adding a
   source (MCP, SDK metadata) does not touch locate or prove.
+- **One certainty policy, per-language scanners.** T2 and T6 both emit `Hit`/`Dynamic`/`ScanResult`
+  evidence and call the same `resolve` rule table. Python parses with `ast`, TypeScript/JavaScript
+  with tree-sitter; neither runs the scanned code, needs Node, or infers types.
 - **Proof is a ladder, chosen by the user.** `--require TESTS_PASSED|CHARACTERIZED|REPLAYED|TYPES_BUILD_ONLY`.
   If the required level cannot be reached, the result is a flagged suggestion, not a verified PR.
 - **Isolated working copy and clone.** T4 patches a copy; T5 clones the clean checkout to a temporary
@@ -69,19 +72,19 @@ tests/        offline; fixture repos and specs; no network, no model calls
 
 ## CLI
 
-`tenon check <repo> --old SPEC --new SPEC [--json]` lists affected call sites and exits 0 when clean,
-1 when a site or an unanalyzable repository is found.
-`tenon fix <repo> --old SPEC --new SPEC [--require LEVEL] [--check CMD] [--open-pr] [--json]`
-proposes, proves and prints the diff; `--open-pr` delegates to T5.
+`tenon check <repo> --old SPEC --new SPEC [--language python|ts] [--json]` lists affected call sites
+and exits 0 when clean, 1 when a site or an unanalyzable repository is found.
+`tenon fix <repo> --old SPEC --new SPEC [--language python|ts] [--require LEVEL] [--check CMD]
+[--open-pr] [--json]` proposes, proves and prints the diff; `--open-pr` delegates to T5.
 `tenon probe <api-or-mcp-url> [--agent CMD]` (T8, not built).
 
-`tenon.toml` provides `[locate]` and `[tenon]` defaults; flags override. Exit 2 on usage or bad
-input. Never a traceback.
+`tenon.toml` provides `[locate]` (`language`, `sdk_package`, mappings) and `[tenon]` defaults; flags
+override. Exit 2 on usage or bad input. Never a traceback.
 
 ## Open questions
 
-- Language-server or tree-sitter for TypeScript location; decide at T6.
-- Where TypeScript analysis lives if the core stays Python (subprocess helper vs. separate package).
-- PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
+- T6 follow-ups: `tsconfig`/workspace path aliases, JSX attribute sites, and a T4 copy policy for
+  `node_modules` so a real TS `npm test` can run in the proof copy.
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
+- PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.

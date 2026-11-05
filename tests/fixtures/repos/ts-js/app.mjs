@@ -1,0 +1,5 @@
+import Stripe from "stripe";
+
+const client = new Stripe("sk_test");
+
+client.charges.create({ amount: 1 });
