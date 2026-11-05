@@ -20,6 +20,22 @@ CHECK_SUMMARY = "{changes} changes, {certain} certain sites, {ambiguous} ambigui
 SITE_LINE = "{path}:{line}:{column}  {shape}  {symbol}"
 AMBIGUOUS_LINE = "ambiguous {reason}: {symbol} at {candidates}"
 NO_AFFECTED_SITES_LINE = "no affected sites ({reason})"
+FIX_SUMMARY = (
+    "{changes} changes, {proposals} proposals, {passed} passed, "
+    "{unverified} unverified, {prs_opened} PRs opened, {prs_refused} PRs refused"
+)
+PROOF_LINE = "Proof: {level}"
+CAUSE_LINE = "Cause: {cause}"
+COMMAND_LINE = "Command: {command}"
+BASELINE_EXIT_LINE = "Baseline exit: {exit}"
+AFTER_EXIT_LINE = "After exit: {exit}"
+SKIPPED_LINE = "Skipped: {path}:{line}:{column}  {symbol}  {reason}"
+NO_SKIPPED_LINE = "Skipped: none"
+PR_LINE = "PR: {url}"
+PR_REFUSED_LINE = "PR refused: {refusal}"
+PR_REFUSED_DETAIL_LINE = "PR refused: {refusal}: {detail}"
+NOT_RUN = "not run"
+TIMED_OUT = "timed out"
 
 _SCALARS = (str, int, float, bool, type(None))
 
@@ -127,4 +143,95 @@ def render_check_text(results: Sequence[LocateResult]) -> str:
     blocks = [_check_block(result) for result in results]
     summary = CHECK_SUMMARY.format(**_check_counts(results))
     return "\n\n".join([*blocks, summary]) + "\n"
+
+
+def _exit(check: Any) -> str:
+    if check is None:
+        return NOT_RUN
+    if check.timed_out:
+        return TIMED_OUT
+    if check.returncode is None:
+        return NOT_RUN
+    return str(check.returncode)
+
+
+def _command(proof: ProofResult) -> str:
+    check = proof.baseline if proof.baseline is not None else proof.after
+    return " ".join(check.command) if check is not None else NOT_RUN
+
+
+def _fix_counts(results: Sequence[FixResult]) -> dict[str, int]:
+    return {
+        "changes": len(results),
+        "proposals": sum(1 for result in results if result.proposal.edits),
+        "passed": sum(
+            1 for result in results if result.proof.level is ProofLevel.TESTS_PASSED
+        ),
+        "unverified": sum(
+            1 for result in results if result.proof.level is ProofLevel.UNVERIFIED
+        ),
+        "prs_opened": sum(
+            1
+            for result in results
+            if result.pr is not None and result.pr.status is PrStatus.OPENED
+        ),
+        "prs_refused": sum(
+            1
+            for result in results
+            if result.pr is not None and result.pr.status is PrStatus.REFUSED
+        ),
+    }
+
+
+def _fix_block(result: FixResult) -> str:
+    lines = [_change_line(result.change)]
+    diff = result.proposal.diff.rstrip("\n")
+    if diff:
+        lines.append(diff)
+    proof = result.proof
+    lines.append(PROOF_LINE.format(level=proof.level.value))
+    if proof.level is ProofLevel.UNVERIFIED:
+        lines.append(CAUSE_LINE.format(cause=proof.cause.value))
+    lines.extend(
+        [
+            COMMAND_LINE.format(command=_command(proof)),
+            BASELINE_EXIT_LINE.format(exit=_exit(proof.baseline)),
+            AFTER_EXIT_LINE.format(exit=_exit(proof.after)),
+        ]
+    )
+    if result.proposal.skipped:
+        lines.extend(
+            SKIPPED_LINE.format(
+                path=entry.site.path,
+                line=entry.site.line,
+                column=entry.site.column,
+                symbol=entry.site.symbol,
+                reason=entry.reason.value,
+            )
+            for entry in result.proposal.skipped
+        )
+    else:
+        lines.append(NO_SKIPPED_LINE)
+
+    pr = result.pr
+    if pr is not None:
+        if pr.status is PrStatus.OPENED:
+            lines.append(PR_LINE.format(url=pr.url))
+        elif pr.detail:
+            lines.append(
+                PR_REFUSED_DETAIL_LINE.format(
+                    refusal=pr.refusal.value, detail=pr.detail
+                )
+            )
+        else:
+            lines.append(PR_REFUSED_LINE.format(refusal=pr.refusal.value))
+    return "\n".join(lines)
+
+
+def render_fix_text(results: Sequence[FixResult]) -> str:
+    """One block with diff and proof per change, then the counts."""
+    blocks = [_fix_block(result) for result in results]
+    summary = FIX_SUMMARY.format(**_fix_counts(results))
+    return "\n\n".join([*blocks, summary]) + "\n"
+
 

@@ -2,7 +2,13 @@
 
 import pytest
 
-from tenon.cli.report import FixResult, check_exit, fix_exit, render_check_text
+from tenon.cli.report import (
+    FixResult,
+    check_exit,
+    fix_exit,
+    render_check_text,
+    render_fix_text,
+)
 from tenon.detect import Change, ChangeKind, Location
 from tenon.locate import (
     AmbiguityReason,
@@ -390,3 +396,164 @@ def test_check_text_renders_container_values_canonically():
     assert text.startswith(
         'renamed POST /v1/checkout/sessions: {"a":1,"b":2} -> [2,{"a":0,"z":1}]\n'
     )
+
+
+FIX_DIFF = (
+    "--- a/acme/billing.py\n"
+    "+++ b/acme/billing.py\n"
+    "@@ -7 +7 @@\n"
+    "-    payment_method_types=payment_method_types,\n"
+    "+    payment_method_types=allowed_payment_method_types,\n"
+)
+
+FIX_TEXT = """\
+renamed POST /v1/checkout/sessions: payment_method_types -> allowed_payment_method_types
+--- a/acme/billing.py
++++ b/acme/billing.py
+@@ -7 +7 @@
+-    payment_method_types=payment_method_types,
++    payment_method_types=allowed_payment_method_types,
+Proof: TESTS_PASSED
+Command: python -m pytest -q
+Baseline exit: 0
+After exit: 0
+Skipped: none
+
+1 changes, 1 proposals, 1 passed, 0 unverified, 0 PRs opened, 0 PRs refused
+"""
+
+
+# Spec AC4: the whole passed fix report is one pinned deterministic text.
+def test_fix_text_is_the_golden_text():
+    result = a_fix_result(
+        proposal=a_proposal(edits=(an_edit(),), diff=FIX_DIFF),
+    )
+
+    assert render_fix_text([result]) == FIX_TEXT
+
+
+# Spec AC4: UNVERIFIED names the cause and the missing checks.
+def test_fix_text_names_the_unverified_cause_and_missing_checks():
+    result = a_fix_result(
+        proposal=a_proposal(reason=ProposalReason.NO_RULE),
+        proof=an_unverified_proof(),
+    )
+
+    text = render_fix_text([result])
+
+    assert text == (
+        "renamed POST /v1/checkout/sessions: payment_method_types -> "
+        "allowed_payment_method_types\n"
+        "Proof: UNVERIFIED\n"
+        "Cause: NO_TESTS_FOUND\n"
+        "Command: not run\n"
+        "Baseline exit: not run\n"
+        "After exit: not run\n"
+        "Skipped: none\n"
+        "\n"
+        "1 changes, 0 proposals, 0 passed, 1 unverified, 0 PRs opened, "
+        "0 PRs refused\n"
+    )
+
+
+# Spec AC4: every skipped site is listed with its reason.
+def test_fix_text_lists_the_skipped_sites():
+    skipped = (
+        Skipped(
+            site=a_site(path="acme/other.py", line=3, column=1, symbol="x"),
+            reason=SkipReason.DYNAMIC_KWARGS,
+        ),
+        Skipped(
+            site=a_site(path="acme/third.py", line=5, column=2, symbol="y"),
+            reason=SkipReason.STALE_SITE,
+        ),
+    )
+    result = a_fix_result(
+        proposal=a_proposal(edits=(an_edit(),), skipped=skipped, diff=FIX_DIFF)
+    )
+
+    text = render_fix_text([result])
+
+    assert "Skipped: acme/other.py:3:1  x  DYNAMIC_KWARGS\n" in text
+    assert "Skipped: acme/third.py:5:2  y  STALE_SITE\n" in text
+
+
+# Spec AC4: an opened PR is the URL.
+def test_fix_text_renders_an_opened_pr_url():
+    text = render_fix_text([a_fix_result(pr=an_opened_pr())])
+
+    assert "PR: https://github.com/example/repo/pull/7\n" in text
+
+
+# Spec AC4: a refusal names the cause and the detail.
+def test_fix_text_renders_a_refused_pr():
+    text = render_fix_text([a_fix_result(pr=a_refused_pr())])
+
+    assert "PR refused: DIRTY_CHECKOUT: working tree has uncommitted changes\n" in text
+
+
+# Spec AC4: a refusal without detail is still one honest line.
+def test_fix_text_renders_a_refusal_without_detail():
+    result = a_fix_result(pr=a_refused_pr(refusal=PrRefusal.NOT_A_GIT_REPO, detail=""))
+
+    text = render_fix_text([result])
+
+    assert "PR refused: NOT_A_GIT_REPO\n" in text
+
+
+# Plan edge case: a killed check renders as timed out.
+def test_fix_text_renders_a_timeout_as_timed_out():
+    proof = a_passed_proof(
+        baseline=a_check(returncode=None, timed_out=True),
+    )
+
+    text = render_fix_text([a_fix_result(proof=proof)])
+
+    assert "Baseline exit: timed out\n" in text
+    assert "After exit: 0\n" in text
+
+
+# Spec AC4 / S1: the summary counts every result and every PR outcome.
+def test_fix_text_summary_counts_results_and_prs():
+    results = [
+        a_fix_result(pr=an_opened_pr()),
+        a_fix_result(pr=a_refused_pr(), proof=an_unverified_proof()),
+    ]
+
+    text = render_fix_text(results)
+
+    assert text.endswith(
+        "2 changes, 2 proposals, 1 passed, 1 unverified, 1 PRs opened, "
+        "1 PRs refused\n"
+    )
+
+
+# Spec AC4: a run without a PR request has no PR line at all.
+def test_fix_text_omits_the_pr_line_without_a_request():
+    text = render_fix_text([a_fix_result()])
+
+    assert "PR:" not in text
+    assert "PR refused" not in text
+
+
+# Spec AC4: exactly one trailing newline and no colour.
+def test_fix_text_has_one_trailing_newline_and_no_colour():
+    text = render_fix_text([a_fix_result()])
+
+    assert text.endswith("\n")
+    assert not text.endswith("\n\n")
+    assert "\x1b[" not in text
+
+
+# Spec AC4: blocks follow the input order.
+def test_fix_text_keeps_the_input_order():
+    first = a_fix_result(
+        change=an_untouched_change(),
+        proof=an_unverified_proof(),
+    )
+    second = a_fix_result()
+
+    text = render_fix_text([first, second])
+
+    assert text.index("endpoint_removed") < text.index("renamed")
+
