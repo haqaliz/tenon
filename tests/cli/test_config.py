@@ -1,3 +1,7 @@
+import re
+
+import pytest
+
 from tenon.cli import CliConfig, load_cli_config
 from tenon.locate import LocateConfig
 from tenon.prove import ProofLevel
@@ -47,3 +51,58 @@ def test_full_file_round_trips(tmp_path):
         require=ProofLevel.UNVERIFIED,
         breaking_only=True,
     )
+
+
+# Spec AC3: a malformed key is refused by name, not with a traceback.
+@pytest.mark.parametrize(
+    ("text", "key"),
+    [
+        ("[tenon]\ncommand = []\n", "[locate]"),
+        ("[locate]\noperations = {}\n", "sdk_package"),
+        ('locate = "stripe"\n', "[locate]"),
+        (
+            '[locate]\nsdk_package = "stripe"\noperations = ["x"]\n',
+            "operations",
+        ),
+        ('[locate]\nsdk_package = "stripe"\nfields = ["x"]\n', "fields"),
+        ('tenon = true\n[locate]\nsdk_package = "stripe"\n', "[tenon]"),
+        ('[locate]\nsdk_package = "stripe"\n\n[tenon]\ncommand = "pytest"\n', "command"),
+        (
+            '[locate]\nsdk_package = "stripe"\n\n[tenon]\ncommand = ["pytest", ""]\n',
+            "command",
+        ),
+        (
+            '[locate]\nsdk_package = "stripe"\n\n[tenon]\ncommand = ["pytest", 1]\n',
+            "command",
+        ),
+        (
+            '[locate]\nsdk_package = "stripe"\n\n[tenon]\nbreaking_only = "yes"\n',
+            "breaking_only",
+        ),
+        (
+            '[locate]\nsdk_package = "stripe"\n\n[tenon]\nrequire = "BY_HAND"\n',
+            "T7",
+        ),
+    ],
+)
+def test_load_cli_config_validates_a_malformed_key(tmp_path, text, key):
+    path = a_file(tmp_path, text)
+
+    with pytest.raises(ValueError, match=re.escape(key)):
+        load_cli_config(path)
+
+
+# Spec AC3: a bad file is one ValueError that names the path.
+def test_load_cli_config_validates_a_parse_error(tmp_path):
+    path = a_file(tmp_path, "[locate\n")
+
+    with pytest.raises(ValueError, match=re.escape(str(path))):
+        load_cli_config(path)
+
+
+# Spec AC3: a missing file is one ValueError that names the path.
+def test_load_cli_config_validates_a_missing_file(tmp_path):
+    path = tmp_path / "tenon.toml"
+
+    with pytest.raises(ValueError, match=re.escape(str(path))):
+        load_cli_config(path)

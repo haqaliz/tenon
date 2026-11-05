@@ -25,17 +25,49 @@ class CliConfig:
 
 def load_cli_config(path: str | Path) -> CliConfig:
     """Read ``[locate]`` and ``[tenon]`` from one TOML file."""
-    with open(path, "rb") as handle:
-        data = tomllib.load(handle)
-    section = data["locate"]
+    try:
+        with open(path, "rb") as handle:
+            data = tomllib.load(handle)
+    except (tomllib.TOMLDecodeError, OSError) as error:
+        raise ValueError(f"{path}: {error}") from error
+
+    section = data.get("locate")
+    if not isinstance(section, dict):
+        raise ValueError(f"{path}: missing the [locate] table")
+    if "sdk_package" not in section:
+        raise ValueError(f"{path}: [locate] is missing sdk_package")
+    operations = section.get("operations", {})
+    if not isinstance(operations, dict):
+        raise ValueError(f"{path}: [locate] operations must be a table")
+    fields = section.get("fields", {})
+    if not isinstance(fields, dict):
+        raise ValueError(f"{path}: [locate] fields must be a table")
+
     tenon = data.get("tenon", {})
+    if not isinstance(tenon, dict):
+        raise ValueError(f"{path}: [tenon] must be a table")
+    command = tenon.get("command", [])
+    if not isinstance(command, list) or not all(
+        isinstance(item, str) and item for item in command
+    ):
+        raise ValueError(f"{path}: [tenon] command must be an array of non-empty strings")
+    require = tenon.get("require", ProofLevel.TESTS_PASSED)
+    if require not in (ProofLevel.TESTS_PASSED, ProofLevel.UNVERIFIED):
+        raise ValueError(
+            f"{path}: [tenon] require {require!r} is not supported until T7; "
+            "use TESTS_PASSED or UNVERIFIED"
+        )
+    breaking_only = tenon.get("breaking_only", False)
+    if not isinstance(breaking_only, bool):
+        raise ValueError(f"{path}: [tenon] breaking_only must be a bool")
+
     return CliConfig(
         locate=LocateConfig(
             sdk_package=section["sdk_package"],
-            operations=section.get("operations", {}),
-            fields=section.get("fields", {}),
+            operations=operations,
+            fields=fields,
         ),
-        command=tuple(tenon.get("command", ())),
-        require=ProofLevel(tenon.get("require", ProofLevel.TESTS_PASSED)),
-        breaking_only=tenon.get("breaking_only", False),
+        command=tuple(command),
+        require=ProofLevel(require),
+        breaking_only=breaking_only,
     )
