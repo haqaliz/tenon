@@ -21,6 +21,7 @@ SDK_TSX = FIXTURES / "ts-tsx"
 SDK_DECOY = FIXTURES / "ts-decoy"
 SDK_DYNAMIC = FIXTURES / "ts-dynamic"
 SDK_NO_SDK = FIXTURES / "ts-no-sdk"
+SDK_UNICODE = FIXTURES / "ts-unicode"
 
 IGNORED_DIRECTORIES = (
     "node_modules",
@@ -778,3 +779,55 @@ def test_the_decoy_has_no_certain_evidence_and_no_unreachable_hits():
         ("src/sdk.ts", 8, False),
     ]
     assert result.dynamics == ()
+
+
+# Phase 6: determinism, no writes and UTF-8 columns.
+def test_scan_ts_is_deterministic():
+    first = scan_ts(SDK_BASIC, "stripe")
+    second = scan_ts(SDK_BASIC, "stripe")
+
+    assert first == second
+    assert (first.modules, first.hits, first.dynamics) == (
+        second.modules,
+        second.hits,
+        second.dynamics,
+    )
+
+
+def test_scan_ts_never_modifies_the_scanned_tree():
+    def snapshot():
+        return {
+            path.relative_to(SDK_BASIC).as_posix(): (
+                path.stat().st_mtime_ns,
+                path.read_bytes(),
+            )
+            for path in SDK_BASIC.rglob("*")
+            if path.is_file()
+        }
+
+    before = snapshot()
+
+    scan_ts(SDK_BASIC, "stripe")
+
+    assert snapshot() == before
+
+
+def test_column_counts_characters_not_utf8_bytes():
+    line = (SDK_UNICODE / "src/app.ts").read_text(encoding="utf-8").split("\n")[3]
+    character_column = line.index("amount") + 1
+    byte_column = line.encode("utf-8").index(b"amount") + 1
+
+    result = scan_ts(SDK_UNICODE, "stripe")
+
+    [keyword] = [item for item in result.hits if item.shape is SiteShape.KEYWORD]
+    assert character_column != byte_column
+    assert keyword == hit(
+        SDK_UNICODE,
+        "src/app.ts",
+        4,
+        character_column,
+        SiteShape.KEYWORD,
+        "amount",
+        ("charges", "create"),
+        True,
+    )
