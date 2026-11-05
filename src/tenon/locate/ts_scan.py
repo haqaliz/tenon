@@ -35,6 +35,19 @@ _SKIP_DIRECTORIES = frozenset(
 )
 _TYPESCRIPT_EXTENSIONS = frozenset({".ts", ".mts", ".cts"})
 _JAVASCRIPT_EXTENSIONS = frozenset({".js", ".jsx", ".mjs", ".cjs"})
+_PRIMITIVE_ARGUMENTS = frozenset(
+    {
+        "string",
+        "number",
+        "true",
+        "false",
+        "null",
+        "undefined",
+        "template_string",
+        "regex",
+        "unary_expression",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -610,6 +623,23 @@ class _Visitor:
             elif child.type == "shorthand_property_identifier":
                 self._emit(child, SiteShape.KEYWORD, _text(child), chain, rooted)
 
+    def _object_dynamics(self, object_node: Node, chain: tuple[str, ...]) -> None:
+        for child in object_node.named_children:
+            if child.type == "spread_element":
+                self.dynamics.append(
+                    _dynamic(
+                        self._source, child, DynamicKind.STAR_KWARGS, chain=chain
+                    )
+                )
+            elif child.type == "pair":
+                key = child.child_by_field_name("key")
+                if key is not None and key.type == "computed_property_name":
+                    self.dynamics.append(
+                        _dynamic(
+                            self._source, key, DynamicKind.STAR_KWARGS, chain=chain
+                        )
+                    )
+
     def _call(self, node: Node) -> None:
         function = node.child_by_field_name("function")
         root, tail = _parts(function)
@@ -627,10 +657,26 @@ class _Visitor:
         for argument in args:
             if argument.type == "object":
                 self._keys(argument, chain if rooted else (), rooted)
+                if rooted:
+                    self._object_dynamics(argument, chain)
             elif argument.type == "array":
                 for element in argument.named_children:
                     if element.type == "object":
                         self._keys(element, chain if rooted else (), rooted)
+                        if rooted:
+                            self._object_dynamics(element, chain)
+            elif rooted and argument.type == "spread_element":
+                self.dynamics.append(
+                    _dynamic(
+                        self._source, argument, DynamicKind.STAR_ARGS, chain=chain
+                    )
+                )
+            elif rooted and argument.type not in _PRIMITIVE_ARGUMENTS:
+                self.dynamics.append(
+                    _dynamic(
+                        self._source, argument, DynamicKind.STAR_KWARGS, chain=chain
+                    )
+                )
         self._in_chain(function)
         for argument in args:
             self.visit(argument)
@@ -657,6 +703,23 @@ class _Visitor:
             for argument in arguments.named_children:
                 self.visit(argument)
 
+    def _subscript(self, node: Node) -> None:
+        object_node = node.child_by_field_name("object")
+        root, tail = _parts(object_node)
+        chain, rooted = self._ref(root, tail)
+        index = node.child_by_field_name("index")
+        if rooted:
+            symbol = (
+                _string_value(index)
+                if index is not None and index.type == "string"
+                else None
+            )
+            self.dynamics.append(
+                _dynamic(self._source, node, DynamicKind.GETATTR, symbol, chain)
+            )
+        self._in_chain(object_node)
+        self.visit(index)
+
     def _member(self, node: Node) -> None:
         if self._callee == 0:
             root, tail = _parts(node)
@@ -682,6 +745,8 @@ class _Visitor:
             self._new(node)
         elif node.type == "member_expression":
             self._member(node)
+        elif node.type == "subscript_expression":
+            self._subscript(node)
         else:
             for child in node.children:
                 self.visit(child)
@@ -692,9 +757,10 @@ def scan_ts(root: str | Path, sdk_package: str) -> ScanResult:
     modules = _read(Path(root))
     reachable = _reachable(modules, sdk_package)
     hits: list[Hit] = []
+    dynamics: list[Dynamic] = []
     for module in reachable:
         roots, classes = _bindings(module.tree, sdk_package)
-        alias_roots, class_aliases, _ = _aliases(
+        alias_roots, class_aliases, alias_dynamics = _aliases(
             module.tree, roots, classes, sdk_package, module.source
         )
         visitor = _Visitor(
@@ -705,7 +771,10 @@ def scan_ts(root: str | Path, sdk_package: str) -> ScanResult:
         )
         visitor.visit(module.tree.root_node)
         hits.extend(visitor.hits)
+        dynamics.extend(alias_dynamics)
+        dynamics.extend(visitor.dynamics)
     return ScanResult(
         modules=tuple(module.rel for module in reachable),
         hits=tuple(hits),
+        dynamics=tuple(dynamics),
     )

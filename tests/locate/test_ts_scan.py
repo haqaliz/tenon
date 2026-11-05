@@ -19,6 +19,7 @@ SDK_CJS = FIXTURES / "ts-cjs"
 SDK_JS = FIXTURES / "ts-js"
 SDK_TSX = FIXTURES / "ts-tsx"
 SDK_DECOY = FIXTURES / "ts-decoy"
+SDK_DYNAMIC = FIXTURES / "ts-dynamic"
 SDK_NO_SDK = FIXTURES / "ts-no-sdk"
 
 IGNORED_DIRECTORIES = (
@@ -38,6 +39,10 @@ EXTENSIONS = (".ts", ".mts", ".cts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 def hit(repo, path, line, column, shape, symbol, chain=(), rooted=False):
     line_text = (repo / path).read_text(encoding="utf-8").split("\n")[line - 1]
     return Hit(path, line, column, shape, symbol, chain, rooted, line_text)
+
+
+def dynamic(path, line, column, kind, symbol=None, chain=()):
+    return Dynamic(path, line, column, kind, symbol, chain)
 
 
 def parse_ts(text, suffix=".ts"):
@@ -573,3 +578,203 @@ def test_calls_in_tsx_and_jsx_are_found():
     assert ("list", SiteShape.CALL, True) in [
         (item.symbol, item.shape, item.rooted) for item in jsx.hits
     ]
+
+
+# Phase 5: dynamics and the decoy.
+def test_object_spread_is_star_kwargs(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        "const client = new Stripe();\n"
+        "const payload = { amount: 1 };\n"
+        "client.charges.create({ ...payload });\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.dynamics == (
+        dynamic("app.ts", 5, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+    )
+
+
+def test_object_variable_argument_is_star_kwargs(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        "const client = new Stripe();\n"
+        "client.charges.create(payload);\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.dynamics == (
+        dynamic("app.ts", 4, 23, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+    )
+
+
+def test_computed_object_key_is_star_kwargs(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        "const client = new Stripe();\n"
+        "client.charges.create({ [key]: 1 });\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.dynamics == (
+        dynamic("app.ts", 4, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+    )
+    assert result.hits == (
+        hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        hit(tmp_path, "app.ts", 4, 16, SiteShape.CALL, "create", ("charges", "create"), True),
+    )
+
+
+def test_spread_argument_is_star_args(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        "const client = new Stripe();\n"
+        "client.charges.create(...rows);\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.dynamics == (
+        dynamic("app.ts", 4, 23, DynamicKind.STAR_ARGS, chain=("charges", "create")),
+    )
+
+
+def test_a_primitive_literal_argument_is_not_dynamic(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        "const client = new Stripe();\n"
+        'client.charges.retrieve("ch_1");\n',
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.dynamics == ()
+    assert [(item.shape, item.symbol) for item in result.hits] == [
+        (SiteShape.CALL, "Stripe"),
+        (SiteShape.CALL, "retrieve"),
+    ]
+
+
+def test_computed_member_is_getattr(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        "const client = new Stripe();\n"
+        "const value = client[key];\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.dynamics == (
+        dynamic("app.ts", 4, 15, DynamicKind.GETATTR),
+    )
+    assert all(item.shape is not SiteShape.ATTRIBUTE for item in result.hits)
+
+
+def test_computed_callee_chain_is_getattr_and_the_call_is_unrooted(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        "const client = new Stripe();\n"
+        'client["charges"].create({ amount: 1 });\n',
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.dynamics == (
+        dynamic("app.ts", 4, 1, DynamicKind.GETATTR, "charges"),
+    )
+    assert result.hits == (
+        hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        hit(tmp_path, "app.ts", 4, 19, SiteShape.CALL, "create", ("create",), False),
+        hit(tmp_path, "app.ts", 4, 28, SiteShape.KEYWORD, "amount", (), False),
+    )
+
+
+def test_a_second_hop_alias_is_reported_by_the_scan(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        "const client = new Stripe();\n"
+        "const c = client;\n"
+        "const d = c;\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.dynamics == (
+        dynamic("app.ts", 5, 7, DynamicKind.ALIAS_CHAIN, "d"),
+    )
+
+
+def test_dynamic_import_roots_nothing(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        'const sdk = await import("stripe");\n'
+        "sdk.charges.create({ amount: 1 });\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.dynamics == ()
+    assert [
+        (item.shape, item.symbol, item.chain, item.rooted) for item in result.hits
+    ] == [
+        (SiteShape.CALL, "create", ("charges", "create"), False),
+        (SiteShape.KEYWORD, "amount", (), False),
+    ]
+
+
+def test_ts_dynamic_fixture_reports_every_dynamic_kind():
+    result = scan_ts(SDK_DYNAMIC, "stripe")
+
+    assert result.dynamics == (
+        dynamic("src/flows.ts", 6, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+        dynamic("src/flows.ts", 7, 23, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+        dynamic("src/flows.ts", 8, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+        dynamic("src/flows.ts", 11, 15, DynamicKind.GETATTR),
+        dynamic("src/flows.ts", 12, 1, DynamicKind.GETATTR),
+        dynamic("src/flows.ts", 13, 1, DynamicKind.GETATTR, "charges"),
+        dynamic("src/flows.ts", 16, 7, DynamicKind.ALIAS_CHAIN, "d"),
+    )
+
+
+def test_ts_dynamic_fixture_roots_only_the_static_call():
+    result = scan_ts(SDK_DYNAMIC, "stripe")
+
+    assert [
+        (item.line, item.rooted) for item in result.hits if item.symbol == "amount"
+    ] == [(9, True), (12, False), (13, False)]
+
+
+def test_the_decoy_has_no_certain_evidence_and_no_unreachable_hits():
+    result = scan_ts(SDK_DECOY, "stripe")
+
+    assert result.modules == ("src/sdk.ts",)
+    assert [
+        (item.path, item.line, item.rooted)
+        for item in result.hits
+        if item.symbol == "amount"
+    ] == [
+        ("src/sdk.ts", 7, True),
+        ("src/sdk.ts", 8, False),
+    ]
+    assert result.dynamics == ()
