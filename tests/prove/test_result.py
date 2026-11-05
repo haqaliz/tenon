@@ -217,6 +217,31 @@ def an_unverified(cause=ProofCause.NO_TESTS_FOUND, **overrides):
     return ProofResult(**values)
 
 
+_GREEN_STAGE = {
+    ProofLevel.TESTS_PASSED: ProofStage.TESTS,
+    ProofLevel.CHARACTERIZED: ProofStage.CHARACTERIZE,
+    ProofLevel.REPLAYED: ProofStage.REPLAY,
+    ProofLevel.TYPES_BUILD_ONLY: ProofStage.BUILD,
+}
+
+
+def a_green(level=ProofLevel.TESTS_PASSED, **overrides):
+    stage = _GREEN_STAGE[level]
+    values = {
+        "level": level,
+        "cause": None,
+        "baseline": a_check(kind="baseline", stage=stage, returncode=0),
+        "after": a_check(kind="after", stage=stage, returncode=0),
+        "patch_applied": True,
+        "checks": (
+            a_check(kind="baseline", stage=stage, returncode=0),
+            a_check(kind="after", stage=stage, returncode=0),
+        ),
+    }
+    values.update(overrides)
+    return ProofResult(**values)
+
+
 # Spec AC2 + M8: the only passing shape is a green after check on an applied patch.
 def test_tests_passed_with_a_green_after_and_an_applied_patch_is_valid():
     result = a_passed()
@@ -285,6 +310,132 @@ def test_unverified_keeps_the_checks_that_ran():
     assert result.after.returncode == 1
 
 
+# Spec AC4: a result without checks is empty, so every shipped constructor agrees.
+def test_proof_result_without_checks_is_empty():
+    assert a_passed().checks == ()
+    assert an_unverified().checks == ()
+
+
+# Spec AC4: a sequence coerces to a tuple of checks.
+def test_proof_result_coerces_checks_to_a_tuple():
+    check = a_check(kind="after")
+    result = an_unverified(checks=[check])
+    assert result.checks == (check,)
+    assert isinstance(result.checks, tuple)
+
+
+# Spec AC5: each green level accepts a matching green after check in checks.
+@pytest.mark.parametrize(
+    "level, stage",
+    [
+        (ProofLevel.TESTS_PASSED, ProofStage.TESTS),
+        (ProofLevel.CHARACTERIZED, ProofStage.CHARACTERIZE),
+        (ProofLevel.REPLAYED, ProofStage.REPLAY),
+        (ProofLevel.TYPES_BUILD_ONLY, ProofStage.BUILD),
+    ],
+)
+def test_each_green_level_accepts_its_matching_after_check(level, stage):
+    result = a_green(level)
+    assert result.level is level
+    assert result.checks[-1].stage is stage
+
+
+# Spec AC5: the three new green levels need the checks that would justify them.
+@pytest.mark.parametrize(
+    "level",
+    [
+        ProofLevel.CHARACTERIZED,
+        ProofLevel.REPLAYED,
+        ProofLevel.TYPES_BUILD_ONLY,
+    ],
+)
+def test_a_new_green_level_without_checks_raises(level):
+    with pytest.raises(ValueError, match=f"{level.value} needs checks"):
+        a_green(level, checks=())
+
+
+# Spec AC5: no after check in checks means nothing ran after the patch.
+def test_a_green_level_without_a_matching_after_check_raises():
+    with pytest.raises(ValueError):
+        a_green(
+            ProofLevel.CHARACTERIZED,
+            checks=(a_check(kind="baseline", stage="CHARACTERIZE"),),
+        )
+
+
+# Spec AC5: a green check for another stage does not prove this level.
+def test_a_green_level_with_a_mismatched_after_stage_raises():
+    with pytest.raises(ValueError):
+        a_green(
+            ProofLevel.REPLAYED,
+            checks=(a_check(kind="after", stage="TESTS", returncode=0),),
+        )
+
+
+# Spec AC5: a red after check is not proof, even when the stage matches.
+def test_a_green_level_with_a_red_after_check_raises():
+    with pytest.raises(ValueError):
+        a_green(
+            ProofLevel.TYPES_BUILD_ONLY,
+            checks=(a_check(kind="after", stage="BUILD", returncode=1),),
+        )
+
+
+# Spec AC5: a timed-out after check is not proof.
+def test_a_green_level_with_a_timed_out_after_check_raises():
+    with pytest.raises(ValueError):
+        a_green(
+            ProofLevel.TESTS_PASSED,
+            checks=(
+                a_check(
+                    kind="after", stage="TESTS", returncode=0, timed_out=True
+                ),
+            ),
+        )
+
+
+# Spec AC5: a green level needs an applied patch, checks or not.
+def test_a_green_level_with_checks_without_an_applied_patch_raises():
+    with pytest.raises(ValueError):
+        a_green(ProofLevel.CHARACTERIZED, patch_applied=False)
+
+
+# Spec AC5: a green level with a cause is a contradiction.
+def test_a_green_level_with_checks_and_a_cause_raises():
+    with pytest.raises(ValueError):
+        a_green(ProofLevel.REPLAYED, cause=ProofCause.REPLAY_FAILED_AFTER)
+
+
+# Spec AC5: UNVERIFIED keeps every check after a failure and may keep patch_applied.
+def test_unverified_keeps_checks_after_a_failed_after():
+    result = an_unverified(
+        cause=ProofCause.REPLAY_FAILED_AFTER,
+        checks=(
+            a_check(kind="baseline", stage="REPLAY"),
+            a_check(kind="after", stage="REPLAY", returncode=1),
+        ),
+        patch_applied=True,
+    )
+    assert [check.stage for check in result.checks] == [
+        ProofStage.REPLAY,
+        ProofStage.REPLAY,
+    ]
+    assert result.patch_applied is True
+
+
+# Spec AC6: the old constructors keep their shipped shapes with no checks.
+def test_old_constructors_keep_working():
+    passed = a_passed()
+    unverified = an_unverified(
+        cause=ProofCause.TESTS_FAILED_AFTER,
+        after=a_check(kind="after", returncode=1),
+        patch_applied=True,
+    )
+    assert passed.checks == ()
+    assert unverified.checks == ()
+    assert unverified.patch_applied is True
+
+
 # Plan edge case: string values are coerced, matching the house style.
 def test_proof_result_coerces_a_string_level_and_cause():
     result = ProofResult(
@@ -310,19 +461,34 @@ def test_unverified_round_trips_every_cause(cause):
     assert parsed["after"] is None
 
 
-# Spec AC1: the shipped levels appear as plain strings.
-def test_shipped_levels_round_trip_through_to_dict():
-    results = [a_passed(), an_unverified()]
+# Spec AC1: every level is constructible and appears as a plain string.
+def test_every_level_round_trips_through_to_dict():
+    results = [
+        a_green(level)
+        for level in (
+            ProofLevel.TESTS_PASSED,
+            ProofLevel.CHARACTERIZED,
+            ProofLevel.REPLAYED,
+            ProofLevel.TYPES_BUILD_ONLY,
+        )
+    ] + [an_unverified()]
     assert [result.to_dict()["level"] for result in results] == [
-        "TESTS_PASSED",
-        "UNVERIFIED",
+        proof_level.value for proof_level in ProofLevel
     ]
 
 
 def test_to_dict_has_the_contract_keys_and_a_nested_check_record():
     parsed = a_passed().to_dict()
-    assert set(parsed) == {"level", "cause", "baseline", "after", "patch_applied"}
+    assert set(parsed) == {
+        "level",
+        "cause",
+        "baseline",
+        "after",
+        "patch_applied",
+        "checks",
+    }
     assert parsed["cause"] is None
+    assert parsed["checks"] == []
     assert parsed["after"] == {
         "kind": "after",
         "stage": "TESTS",
@@ -334,12 +500,35 @@ def test_to_dict_has_the_contract_keys_and_a_nested_check_record():
     }
 
 
+# Spec AC4: every recorded check appears in checks with its stage.
+def test_to_dict_lists_every_check_with_its_stage():
+    parsed = a_green(ProofLevel.CHARACTERIZED).to_dict()
+    assert [check["stage"] for check in parsed["checks"]] == [
+        "CHARACTERIZE",
+        "CHARACTERIZE",
+    ]
+    assert all(
+        set(check)
+        == {
+            "kind",
+            "stage",
+            "command",
+            "returncode",
+            "timed_out",
+            "stdout_tail",
+            "stderr_tail",
+        }
+        for check in parsed["checks"]
+    )
+
+
 # Spec AC5: no tuple, enum object or dataclass repr reaches the payload.
 def test_to_json_holds_only_json_primitives():
-    text = a_passed().to_json()
-    assert json.loads(text) == a_passed().to_dict()
+    text = a_green(ProofLevel.CHARACTERIZED).to_json()
+    assert json.loads(text) == a_green(ProofLevel.CHARACTERIZED).to_dict()
     for leak in (
         "ProofLevel.",
+        "ProofStage.",
         "ProofCause.",
         "CheckResult(",
         "ProofResult(",
@@ -353,6 +542,7 @@ from tenon.prove import CheckResult, ProofCause, ProofResult
 
 baseline = CheckResult(
     kind="baseline",
+    stage="REPLAY",
     command=("python", "-m", "pytest", "-q"),
     returncode=0,
     timed_out=False,
@@ -361,6 +551,7 @@ baseline = CheckResult(
 )
 after = CheckResult(
     kind="after",
+    stage="REPLAY",
     command=("python", "-m", "pytest", "-q"),
     returncode=1,
     timed_out=False,
@@ -369,10 +560,11 @@ after = CheckResult(
 )
 result = ProofResult(
     level="UNVERIFIED",
-    cause=ProofCause.TESTS_FAILED_AFTER,
+    cause=ProofCause.REPLAY_FAILED_AFTER,
     baseline=baseline,
     after=after,
     patch_applied=True,
+    checks=(baseline, after),
 )
 print(result.to_json(), end="")
 """
