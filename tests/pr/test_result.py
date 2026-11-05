@@ -16,8 +16,13 @@ def test_pr_status_values_are_the_closed_two():
     assert [status.value for status in PrStatus] == ["OPENED", "REFUSED"]
 
 
-# Spec AC1: the refusal vocabulary is exactly fourteen values, in order.
-def test_pr_refusal_values_are_the_closed_fourteen():
+# Spec M10/AC3: a weak but not unverified proof gets its own named refusal.
+def test_below_required_level_is_named():
+    assert PrRefusal.BELOW_REQUIRED_LEVEL.value == "BELOW_REQUIRED_LEVEL"
+
+
+# Spec AC1: the refusal vocabulary is exactly fifteen values, in order.
+def test_pr_refusal_values_are_the_closed_fifteen():
     assert [refusal.value for refusal in PrRefusal] == [
         "NOT_A_GIT_REPO",
         "DIRTY_CHECKOUT",
@@ -28,6 +33,7 @@ def test_pr_refusal_values_are_the_closed_fourteen():
         "BRANCH_EXISTS",
         "REMOTE_CHECK_FAILED",
         "UNVERIFIED_NOT_ALLOWED",
+        "BELOW_REQUIRED_LEVEL",
         "PATCH_DID_NOT_APPLY",
         "COPY_FAILED",
         "COMMIT_FAILED",
