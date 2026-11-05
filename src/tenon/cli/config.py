@@ -4,22 +4,29 @@ import shlex
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Literal, Sequence
 
-from tenon.locate import LocateConfig
+from tenon.locate import LocateConfig, TsLocateConfig
 from tenon.prove import ProofLevel
+
+LANGUAGES = ("python", "ts")
 
 
 @dataclass(frozen=True, slots=True)
 class CliConfig:
     """Everything one CLI run needs before it starts."""
 
-    locate: LocateConfig
+    locate: LocateConfig | TsLocateConfig
     command: tuple[str, ...] = ()
     require: ProofLevel = ProofLevel.TESTS_PASSED
     breaking_only: bool = False
+    language: Literal["python", "ts"] = "python"
 
     def __post_init__(self) -> None:
+        if self.language not in LANGUAGES:
+            raise ValueError(
+                f"language must be python or ts: {self.language!r}"
+            )
         object.__setattr__(self, "command", tuple(self.command))
         if not isinstance(self.require, ProofLevel):
             object.__setattr__(self, "require", ProofLevel(self.require))
@@ -47,7 +54,9 @@ def a_pairs(values: Sequence[str], flag: str) -> dict[str, str]:
     return pairs
 
 
-def load_cli_config(path: str | Path) -> CliConfig:
+def load_cli_config(
+    path: str | Path, language: str | None = None
+) -> CliConfig:
     """Read ``[locate]`` and ``[tenon]`` from one TOML file."""
     try:
         with open(path, "rb") as handle:
@@ -58,6 +67,11 @@ def load_cli_config(path: str | Path) -> CliConfig:
     section = data.get("locate")
     if not isinstance(section, dict):
         raise ValueError(f"{path}: missing the [locate] table")
+    chosen = section.get("language", "python") if language is None else language
+    if not isinstance(chosen, str) or chosen not in LANGUAGES:
+        raise ValueError(
+            f"{path}: [locate] language must be python or ts: {chosen!r}"
+        )
     if "sdk_package" not in section:
         raise ValueError(f"{path}: [locate] is missing sdk_package")
     operations = section.get("operations", {})
@@ -81,8 +95,9 @@ def load_cli_config(path: str | Path) -> CliConfig:
     if not isinstance(breaking_only, bool):
         raise ValueError(f"{path}: [tenon] breaking_only must be a bool")
 
+    locate_type = TsLocateConfig if chosen == "ts" else LocateConfig
     return CliConfig(
-        locate=LocateConfig(
+        locate=locate_type(
             sdk_package=section["sdk_package"],
             operations=operations,
             fields=fields,
@@ -92,6 +107,7 @@ def load_cli_config(path: str | Path) -> CliConfig:
             tenon.get("require", ProofLevel.TESTS_PASSED), f"{path}: [tenon] require"
         ),
         breaking_only=breaking_only,
+        language=chosen,
     )
 
 
@@ -104,13 +120,23 @@ def overrides(
     command: str | None = None,
     require: str | None = None,
     breaking_only: bool | None = None,
+    language: str | None = None,
 ) -> CliConfig:
     """Apply flags over the config; only supplied flags change anything."""
+    chosen = config.language if language is None else language
+    if chosen not in LANGUAGES:
+        raise ValueError(f"--language must be python or ts: {language!r}")
     locate = config.locate
     operations_over = a_pairs(operations, "--operation")
     fields_over = a_pairs(fields, "--field")
-    if sdk_package is not None or operations_over or fields_over:
-        locate = LocateConfig(
+    if (
+        sdk_package is not None
+        or operations_over
+        or fields_over
+        or chosen != config.language
+    ):
+        locate_type = TsLocateConfig if chosen == "ts" else LocateConfig
+        locate = locate_type(
             sdk_package=locate.sdk_package if sdk_package is None else sdk_package,
             operations={**locate.operations, **operations_over},
             fields={**locate.fields, **fields_over},
@@ -128,6 +154,7 @@ def overrides(
         command=tuple(parts),
         require=config.require if require is None else a_level(require, "--require"),
         breaking_only=config.breaking_only if breaking_only is None else breaking_only,
+        language=chosen,
     )
 
 
