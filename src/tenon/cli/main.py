@@ -174,7 +174,7 @@ def _fix(
     repo = Path(args.repo)
     results: list[FixResult] = []
     for change in changes:
-        located = locate(change, repo, config.locate)
+        located = _locate(change, repo, config)
         proposal = propose(change, located, repo)
         proof = prove(proposal, repo, config.command)
         pr = None
