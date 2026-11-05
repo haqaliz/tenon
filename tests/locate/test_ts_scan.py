@@ -18,6 +18,7 @@ SDK_BASIC = FIXTURES / "ts-sdk-basic"
 SDK_CJS = FIXTURES / "ts-cjs"
 SDK_JS = FIXTURES / "ts-js"
 SDK_TSX = FIXTURES / "ts-tsx"
+SDK_ALIAS = FIXTURES / "ts-alias"
 SDK_DECOY = FIXTURES / "ts-decoy"
 SDK_DYNAMIC = FIXTURES / "ts-dynamic"
 SDK_NO_SDK = FIXTURES / "ts-no-sdk"
@@ -37,12 +38,12 @@ IGNORED_DIRECTORIES = (
 EXTENSIONS = (".ts", ".mts", ".cts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
 
 
-def hit(repo, path, line, column, shape, symbol, chain=(), rooted=False):
+def a_hit(repo, path, line, column, shape, symbol, chain=(), rooted=False):
     line_text = (repo / path).read_text(encoding="utf-8").split("\n")[line - 1]
     return Hit(path, line, column, shape, symbol, chain, rooted, line_text)
 
 
-def dynamic(path, line, column, kind, symbol=None, chain=()):
+def a_dynamic(path, line, column, kind, symbol=None, chain=()):
     return Dynamic(path, line, column, kind, symbol, chain)
 
 
@@ -62,6 +63,7 @@ def rooted(text, sdk_package="stripe"):
 
 
 # Phase 1: discovery, grammar selection and skipped files.
+# Spec AC1: all eight extensions parse; ignored directories and broken files skip.
 def test_scan_ts_discovers_modules_that_import_the_sdk():
     result = scan_ts(SDK_BASIC, "stripe")
 
@@ -116,6 +118,7 @@ def test_scan_ts_skips_an_undecodable_file(tmp_path):
 
 
 # Phase 2: import bindings and reachability.
+# Spec AC2/AC3: every import form roots; only SDK importers and their importers scan.
 def test_default_import_binds_the_constructor():
     roots, classes = bindings('import Stripe from "stripe";\n')
 
@@ -281,6 +284,7 @@ def test_scan_ts_reaches_the_sdk_importer_but_not_an_unrelated_module():
 
 
 # Phase 3: one-hop aliases.
+# Spec AC4: new/call/name/member/destructuring are one hop; a second hop is dynamic.
 def test_alias_from_a_new_expression_is_rooted():
     aliases, class_aliases, dynamics = rooted(
         'import Stripe from "stripe";\nconst client = new Stripe("sk");\n'
@@ -443,17 +447,18 @@ def test_unrooted_call_and_member_are_not_aliases():
 
 
 # Phase 4: calls, object keys and attributes.
+# Spec AC5: exact 1-based line, column, shape, symbol and chain for each shape.
 def test_basic_fixture_emits_the_exact_hit_tuples():
     result = scan_ts(SDK_BASIC, "stripe")
 
     assert result.hits == (
-        hit(SDK_BASIC, "src/billing.ts", 3, 27, SiteShape.CALL, "Stripe", ("Stripe",), True),
-        hit(SDK_BASIC, "src/billing.ts", 5, 16, SiteShape.CALL, "create", ("charges", "create"), True),
-        hit(SDK_BASIC, "src/billing.ts", 5, 25, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
-        hit(SDK_BASIC, "src/billing.ts", 5, 38, SiteShape.KEYWORD, "currency", ("charges", "create"), True),
-        hit(SDK_BASIC, "src/billing.ts", 6, 16, SiteShape.CALL, "delete", ("charges", "delete"), True),
-        hit(SDK_BASIC, "src/reporting.ts", 3, 16, SiteShape.CALL, "list", ("charges", "list"), False),
-        hit(SDK_BASIC, "src/reporting.ts", 3, 23, SiteShape.KEYWORD, "limit", (), False),
+        a_hit(SDK_BASIC, "src/billing.ts", 3, 27, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        a_hit(SDK_BASIC, "src/billing.ts", 5, 16, SiteShape.CALL, "create", ("charges", "create"), True),
+        a_hit(SDK_BASIC, "src/billing.ts", 5, 25, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
+        a_hit(SDK_BASIC, "src/billing.ts", 5, 38, SiteShape.KEYWORD, "currency", ("charges", "create"), True),
+        a_hit(SDK_BASIC, "src/billing.ts", 6, 16, SiteShape.CALL, "delete", ("charges", "delete"), True),
+        a_hit(SDK_BASIC, "src/reporting.ts", 3, 16, SiteShape.CALL, "list", ("charges", "list"), False),
+        a_hit(SDK_BASIC, "src/reporting.ts", 3, 23, SiteShape.KEYWORD, "limit", (), False),
     )
 
 
@@ -469,9 +474,9 @@ def test_dict_key_is_reported_at_the_opening_quote(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.hits == (
-        hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
-        hit(tmp_path, "app.ts", 4, 16, SiteShape.CALL, "create", ("charges", "create"), True),
-        hit(tmp_path, "app.ts", 4, 25, SiteShape.DICT_KEY, "amount", ("charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        a_hit(tmp_path, "app.ts", 4, 16, SiteShape.CALL, "create", ("charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 4, 25, SiteShape.DICT_KEY, "amount", ("charges", "create"), True),
     )
 
 
@@ -488,7 +493,7 @@ def test_shorthand_object_key_is_a_keyword(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     [keyword] = [item for item in result.hits if item.shape is SiteShape.KEYWORD]
-    assert keyword == hit(
+    assert keyword == a_hit(
         tmp_path, "app.ts", 5, 25, SiteShape.KEYWORD, "amount", ("charges", "create"), True
     )
 
@@ -507,10 +512,10 @@ def test_attribute_is_rooted_only_for_a_class_receiver(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.hits == (
-        hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
-        hit(tmp_path, "app.ts", 4, 8, SiteShape.ATTRIBUTE, "amount", ("amount",), True),
-        hit(tmp_path, "app.ts", 5, 8, SiteShape.ATTRIBUTE, "amount", ("Stripe", "amount"), True),
-        hit(tmp_path, "app.ts", 6, 10, SiteShape.ATTRIBUTE, "amount", (), False),
+        a_hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        a_hit(tmp_path, "app.ts", 4, 8, SiteShape.ATTRIBUTE, "amount", ("amount",), True),
+        a_hit(tmp_path, "app.ts", 5, 8, SiteShape.ATTRIBUTE, "amount", ("Stripe", "amount"), True),
+        a_hit(tmp_path, "app.ts", 6, 10, SiteShape.ATTRIBUTE, "amount", (), False),
     )
 
 
@@ -526,10 +531,10 @@ def test_objects_inside_a_direct_array_argument_are_walked(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.hits == (
-        hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
-        hit(tmp_path, "app.ts", 4, 16, SiteShape.CALL, "create", ("charges", "create"), True),
-        hit(tmp_path, "app.ts", 4, 26, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
-        hit(tmp_path, "app.ts", 4, 41, SiteShape.DICT_KEY, "currency", ("charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        a_hit(tmp_path, "app.ts", 4, 16, SiteShape.CALL, "create", ("charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 4, 26, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 4, 41, SiteShape.DICT_KEY, "currency", ("charges", "create"), True),
     )
 
 
@@ -544,8 +549,8 @@ def test_an_unrooted_call_reports_unrooted_hits(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.hits == (
-        hit(tmp_path, "app.ts", 3, 5, SiteShape.CALL, "record", ("record",), False),
-        hit(tmp_path, "app.ts", 3, 14, SiteShape.KEYWORD, "amount", (), False),
+        a_hit(tmp_path, "app.ts", 3, 5, SiteShape.CALL, "record", ("record",), False),
+        a_hit(tmp_path, "app.ts", 3, 14, SiteShape.KEYWORD, "amount", (), False),
     )
 
 
@@ -560,8 +565,8 @@ def test_a_bare_subpath_call_is_rooted(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.hits == (
-        hit(tmp_path, "app.ts", 3, 1, SiteShape.CALL, "create", ("charges", "create"), True),
-        hit(tmp_path, "app.ts", 3, 10, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 3, 1, SiteShape.CALL, "create", ("charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 3, 10, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
     )
 
 
@@ -582,6 +587,7 @@ def test_calls_in_tsx_and_jsx_are_found():
 
 
 # Phase 5: dynamics and the decoy.
+# Spec AC6: spread, object variable, computed key/member, dynamic import and alias chains.
 def test_object_spread_is_star_kwargs(tmp_path):
     (tmp_path / "app.ts").write_text(
         'import Stripe from "stripe";\n'
@@ -595,7 +601,7 @@ def test_object_spread_is_star_kwargs(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.dynamics == (
-        dynamic("app.ts", 5, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+        a_dynamic("app.ts", 5, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
     )
 
 
@@ -611,7 +617,7 @@ def test_object_variable_argument_is_star_kwargs(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.dynamics == (
-        dynamic("app.ts", 4, 23, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+        a_dynamic("app.ts", 4, 23, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
     )
 
 
@@ -627,11 +633,11 @@ def test_computed_object_key_is_star_kwargs(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.dynamics == (
-        dynamic("app.ts", 4, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+        a_dynamic("app.ts", 4, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
     )
     assert result.hits == (
-        hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
-        hit(tmp_path, "app.ts", 4, 16, SiteShape.CALL, "create", ("charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        a_hit(tmp_path, "app.ts", 4, 16, SiteShape.CALL, "create", ("charges", "create"), True),
     )
 
 
@@ -647,7 +653,7 @@ def test_spread_argument_is_star_args(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.dynamics == (
-        dynamic("app.ts", 4, 23, DynamicKind.STAR_ARGS, chain=("charges", "create")),
+        a_dynamic("app.ts", 4, 23, DynamicKind.STAR_ARGS, chain=("charges", "create")),
     )
 
 
@@ -681,7 +687,7 @@ def test_computed_member_is_getattr(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.dynamics == (
-        dynamic("app.ts", 4, 15, DynamicKind.GETATTR),
+        a_dynamic("app.ts", 4, 15, DynamicKind.GETATTR),
     )
     assert all(item.shape is not SiteShape.ATTRIBUTE for item in result.hits)
 
@@ -698,12 +704,12 @@ def test_computed_callee_chain_is_getattr_and_the_call_is_unrooted(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.dynamics == (
-        dynamic("app.ts", 4, 1, DynamicKind.GETATTR, "charges"),
+        a_dynamic("app.ts", 4, 1, DynamicKind.GETATTR, "charges"),
     )
     assert result.hits == (
-        hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
-        hit(tmp_path, "app.ts", 4, 19, SiteShape.CALL, "create", ("create",), False),
-        hit(tmp_path, "app.ts", 4, 28, SiteShape.KEYWORD, "amount", (), False),
+        a_hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        a_hit(tmp_path, "app.ts", 4, 19, SiteShape.CALL, "create", ("create",), False),
+        a_hit(tmp_path, "app.ts", 4, 28, SiteShape.KEYWORD, "amount", (), False),
     )
 
 
@@ -720,7 +726,7 @@ def test_a_second_hop_alias_is_reported_by_the_scan(tmp_path):
     result = scan_ts(tmp_path, "stripe")
 
     assert result.dynamics == (
-        dynamic("app.ts", 5, 7, DynamicKind.ALIAS_CHAIN, "d"),
+        a_dynamic("app.ts", 5, 7, DynamicKind.ALIAS_CHAIN, "d"),
     )
 
 
@@ -748,13 +754,13 @@ def test_ts_dynamic_fixture_reports_every_dynamic_kind():
     result = scan_ts(SDK_DYNAMIC, "stripe")
 
     assert result.dynamics == (
-        dynamic("src/flows.ts", 6, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
-        dynamic("src/flows.ts", 7, 23, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
-        dynamic("src/flows.ts", 8, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
-        dynamic("src/flows.ts", 11, 15, DynamicKind.GETATTR),
-        dynamic("src/flows.ts", 12, 1, DynamicKind.GETATTR),
-        dynamic("src/flows.ts", 13, 1, DynamicKind.GETATTR, "charges"),
-        dynamic("src/flows.ts", 16, 7, DynamicKind.ALIAS_CHAIN, "d"),
+        a_dynamic("src/flows.ts", 6, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+        a_dynamic("src/flows.ts", 7, 23, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+        a_dynamic("src/flows.ts", 8, 25, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
+        a_dynamic("src/flows.ts", 11, 15, DynamicKind.GETATTR),
+        a_dynamic("src/flows.ts", 12, 1, DynamicKind.GETATTR),
+        a_dynamic("src/flows.ts", 13, 1, DynamicKind.GETATTR, "charges"),
+        a_dynamic("src/flows.ts", 16, 7, DynamicKind.ALIAS_CHAIN, "d"),
     )
 
 
@@ -782,6 +788,7 @@ def test_the_decoy_has_no_certain_evidence_and_no_unreachable_hits():
 
 
 # Phase 6: determinism, no writes and UTF-8 columns.
+# Spec AC7/AC8: a human character column and byte-stable, read-only scans.
 def test_scan_ts_is_deterministic():
     first = scan_ts(SDK_BASIC, "stripe")
     second = scan_ts(SDK_BASIC, "stripe")
@@ -821,7 +828,7 @@ def test_column_counts_characters_not_utf8_bytes():
 
     [keyword] = [item for item in result.hits if item.shape is SiteShape.KEYWORD]
     assert character_column != byte_column
-    assert keyword == hit(
+    assert keyword == a_hit(
         SDK_UNICODE,
         "src/app.ts",
         4,
@@ -830,4 +837,41 @@ def test_column_counts_characters_not_utf8_bytes():
         "amount",
         ("charges", "create"),
         True,
+    )
+
+
+def test_computed_destructuring_key_is_an_alias_chain():
+    aliases, _, dynamics = rooted(
+        'import * as stripe from "stripe";\n'
+        "const { [key]: value } = stripe;\n"
+    )
+
+    assert aliases == {}
+    assert dynamics == [a_dynamic("m.ts", 2, 16, DynamicKind.ALIAS_CHAIN, "value")]
+
+
+def test_required_computed_destructuring_binds_nothing():
+    assert bindings('const { [key]: value } = require("stripe");\n') == ({}, set())
+
+
+def test_alias_fixture_has_the_exact_rooted_and_unrooted_evidence():
+    result = scan_ts(SDK_ALIAS, "stripe")
+
+    assert result.hits == (
+        a_hit(SDK_ALIAS, "src/aliases.ts", 4, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        a_hit(SDK_ALIAS, "src/aliases.ts", 6, 24, SiteShape.ATTRIBUTE, "charges", (), False),
+        a_hit(SDK_ALIAS, "src/aliases.ts", 9, 8, SiteShape.ATTRIBUTE, "amount", ("amount",), True),
+        a_hit(SDK_ALIAS, "src/aliases.ts", 10, 8, SiteShape.ATTRIBUTE, "amount", ("Stripe", "amount"), True),
+        a_hit(SDK_ALIAS, "src/aliases.ts", 11, 9, SiteShape.CALL, "create", ("charges", "create"), True),
+        a_hit(SDK_ALIAS, "src/aliases.ts", 11, 18, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
+        a_hit(SDK_ALIAS, "src/aliases.ts", 12, 9, SiteShape.CALL, "retrieve", ("balance", "retrieve"), True),
+        a_hit(SDK_ALIAS, "src/aliases.ts", 13, 9, SiteShape.CALL, "create", ("charges", "create"), True),
+        a_hit(SDK_ALIAS, "src/aliases.ts", 13, 18, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
+        a_hit(SDK_ALIAS, "src/aliases.ts", 20, 16, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        a_hit(SDK_ALIAS, "src/aliases.ts", 22, 14, SiteShape.CALL, "create", ("charges", "create"), False),
+        a_hit(SDK_ALIAS, "src/aliases.ts", 22, 23, SiteShape.KEYWORD, "amount", (), False),
+    )
+    assert result.dynamics == (
+        a_dynamic("src/aliases.ts", 16, 7, DynamicKind.ALIAS_CHAIN, "d"),
+        a_dynamic("src/aliases.ts", 18, 20, DynamicKind.ALIAS_CHAIN, "id"),
     )

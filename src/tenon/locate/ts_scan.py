@@ -33,8 +33,8 @@ _SKIP_DIRECTORIES = frozenset(
         "__pycache__",
     }
 )
-_TYPESCRIPT_EXTENSIONS = frozenset({".ts", ".mts", ".cts"})
 _JAVASCRIPT_EXTENSIONS = frozenset({".js", ".jsx", ".mjs", ".cjs"})
+# A literal cannot hide a key, so `retrieve("ch_1")` stays certain.
 _PRIMITIVE_ARGUMENTS = frozenset(
     {
         "string",
@@ -188,7 +188,11 @@ def _import_bindings(
     for clause in node.named_children:
         if clause.type == "import_require_clause":
             identifier = next(
-                (child for child in clause.named_children if child.type == "identifier"),
+                (
+                    child
+                    for child in clause.named_children
+                    if child.type == "identifier"
+                ),
                 None,
             )
             if identifier is not None:
@@ -238,7 +242,12 @@ def _pattern_bindings(
         elif child.type == "pair_pattern":
             key = child.child_by_field_name("key")
             value = child.child_by_field_name("value")
-            if key is None or value is None or value.type != "identifier":
+            if (
+                key is None
+                or value is None
+                or value.type != "identifier"
+                or key.type == "computed_property_name"
+            ):
                 continue
             name = _string_value(key) if key.type == "string" else _text(key)
             if name is None:
@@ -381,7 +390,8 @@ def _aliases(
         if node.type == "variable_declarator":
             name = node.child_by_field_name("name")
             if name is not None:
-                events.append((node.start_byte, name, node.child_by_field_name("value")))
+                value = node.child_by_field_name("value")
+                events.append((node.start_byte, name, value))
         elif node.type == "assignment_expression":
             left = node.child_by_field_name("left")
             if left is not None and left.type == "identifier":
@@ -465,6 +475,17 @@ def _aliases(
                 key = child.child_by_field_name("key")
                 member = child.child_by_field_name("value")
                 if key is None or member is None:
+                    continue
+                if key.type == "computed_property_name":
+                    for binding in _pattern_names(member):
+                        dynamics.append(
+                            _dynamic(
+                                source,
+                                binding,
+                                DynamicKind.ALIAS_CHAIN,
+                                _text(binding),
+                            )
+                        )
                     continue
                 member_name = (
                     _string_value(key) if key.type == "string" else _text(key)
