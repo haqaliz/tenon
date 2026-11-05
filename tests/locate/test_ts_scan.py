@@ -434,3 +434,142 @@ def test_unrooted_call_and_member_are_not_aliases():
     assert aliases == {}
     assert class_aliases == set()
     assert dynamics == []
+
+
+# Phase 4: calls, object keys and attributes.
+def test_basic_fixture_emits_the_exact_hit_tuples():
+    result = scan_ts(SDK_BASIC, "stripe")
+
+    assert result.hits == (
+        hit(SDK_BASIC, "src/billing.ts", 3, 27, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        hit(SDK_BASIC, "src/billing.ts", 5, 16, SiteShape.CALL, "create", ("charges", "create"), True),
+        hit(SDK_BASIC, "src/billing.ts", 5, 25, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
+        hit(SDK_BASIC, "src/billing.ts", 5, 38, SiteShape.KEYWORD, "currency", ("charges", "create"), True),
+        hit(SDK_BASIC, "src/billing.ts", 6, 16, SiteShape.CALL, "delete", ("charges", "delete"), True),
+        hit(SDK_BASIC, "src/reporting.ts", 3, 16, SiteShape.CALL, "list", ("charges", "list"), False),
+        hit(SDK_BASIC, "src/reporting.ts", 3, 23, SiteShape.KEYWORD, "limit", (), False),
+    )
+
+
+def test_dict_key_is_reported_at_the_opening_quote(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        'const client = new Stripe();\n'
+        'client.charges.create({ "amount": 1 });\n',
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        hit(tmp_path, "app.ts", 4, 16, SiteShape.CALL, "create", ("charges", "create"), True),
+        hit(tmp_path, "app.ts", 4, 25, SiteShape.DICT_KEY, "amount", ("charges", "create"), True),
+    )
+
+
+def test_shorthand_object_key_is_a_keyword(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        "const client = new Stripe();\n"
+        "const amount = 1;\n"
+        "client.charges.create({ amount });\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    [keyword] = [item for item in result.hits if item.shape is SiteShape.KEYWORD]
+    assert keyword == hit(
+        tmp_path, "app.ts", 5, 25, SiteShape.KEYWORD, "amount", ("charges", "create"), True
+    )
+
+
+def test_attribute_is_rooted_only_for_a_class_receiver(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import { Stripe } from "stripe";\n'
+        "\n"
+        "const charge = new Stripe();\n"
+        "charge.amount;\n"
+        "Stripe.amount;\n"
+        "response.amount;\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        hit(tmp_path, "app.ts", 4, 8, SiteShape.ATTRIBUTE, "amount", ("amount",), True),
+        hit(tmp_path, "app.ts", 5, 8, SiteShape.ATTRIBUTE, "amount", ("Stripe", "amount"), True),
+        hit(tmp_path, "app.ts", 6, 10, SiteShape.ATTRIBUTE, "amount", (), False),
+    )
+
+
+def test_objects_inside_a_direct_array_argument_are_walked(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        "const client = new Stripe();\n"
+        'client.charges.create([{ amount: 1 }, { "currency": "usd" }]);\n',
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        hit(tmp_path, "app.ts", 3, 20, SiteShape.CALL, "Stripe", ("Stripe",), True),
+        hit(tmp_path, "app.ts", 4, 16, SiteShape.CALL, "create", ("charges", "create"), True),
+        hit(tmp_path, "app.ts", 4, 26, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
+        hit(tmp_path, "app.ts", 4, 41, SiteShape.DICT_KEY, "currency", ("charges", "create"), True),
+    )
+
+
+def test_an_unrooted_call_reports_unrooted_hits(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        "api.record({ amount: 1 });\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        hit(tmp_path, "app.ts", 3, 5, SiteShape.CALL, "record", ("record",), False),
+        hit(tmp_path, "app.ts", 3, 14, SiteShape.KEYWORD, "amount", (), False),
+    )
+
+
+def test_a_bare_subpath_call_is_rooted(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import { create } from "stripe/charges";\n'
+        "\n"
+        "create({ amount: 1 });\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        hit(tmp_path, "app.ts", 3, 1, SiteShape.CALL, "create", ("charges", "create"), True),
+        hit(tmp_path, "app.ts", 3, 10, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
+    )
+
+
+def test_calls_in_tsx_and_jsx_are_found():
+    tsx = scan_ts(SDK_TSX, "stripe")
+    jsx = scan_ts(SDK_JS, "stripe")
+
+    assert [
+        (item.symbol, item.shape, item.rooted) for item in tsx.hits
+    ] == [
+        ("Stripe", SiteShape.CALL, True),
+        ("create", SiteShape.CALL, True),
+        ("amount", SiteShape.KEYWORD, True),
+    ]
+    assert ("list", SiteShape.CALL, True) in [
+        (item.symbol, item.shape, item.rooted) for item in jsx.hits
+    ]

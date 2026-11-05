@@ -16,6 +16,7 @@ import tree_sitter_javascript as tsjs
 import tree_sitter_typescript as tsts
 from tree_sitter import Language, Node, Parser, Tree
 
+from .result import SiteShape
 from .scan import Dynamic, DynamicKind, Hit, ScanResult, _Source, _column
 
 _EXTENSIONS = (".ts", ".mts", ".cts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
@@ -539,12 +540,172 @@ def _reachable(modules: list[_Module], sdk_package: str) -> list[_Module]:
     return [by_rel[rel] for rel in sorted(seen)]
 
 
+class _Visitor:
+    """Emit hits for the four shapes and dynamics for the opaque ones."""
+
+    def __init__(
+        self,
+        source: _Source,
+        sdk_package: str,
+        roots: dict[str, tuple[str, ...]],
+        classes: set[str],
+    ) -> None:
+        self._source = source
+        self._sdk_parts = tuple(sdk_package.split("/"))
+        self._roots = roots
+        self._classes = classes
+        self._callee = 0
+        self.hits: list[Hit] = []
+        self.dynamics: list[Dynamic] = []
+
+    def _ref(
+        self, root: str | None, tail: tuple[str, ...]
+    ) -> tuple[tuple[str, ...], bool]:
+        full = _full(root, tail, self._roots, self._sdk_parts)
+        if full is None:
+            return tail, False
+        return full[len(self._sdk_parts) :], True
+
+    def _emit(
+        self,
+        node: Node,
+        shape: SiteShape,
+        symbol: str,
+        chain: tuple[str, ...],
+        rooted: bool,
+    ) -> None:
+        line = self._source.lines[node.start_point.row]
+        self.hits.append(
+            Hit(
+                self._source.path,
+                node.start_point.row + 1,
+                _column(line, node.start_point.column),
+                shape,
+                symbol,
+                chain,
+                rooted,
+                line,
+            )
+        )
+
+    def _in_chain(self, node: Node | None) -> None:
+        self._callee += 1
+        self.visit(node)
+        self._callee -= 1
+
+    def _keys(
+        self, object_node: Node, chain: tuple[str, ...], rooted: bool
+    ) -> None:
+        for child in object_node.named_children:
+            if child.type == "pair":
+                key = child.child_by_field_name("key")
+                if key is None:
+                    continue
+                if key.type in {"property_identifier", "identifier"}:
+                    self._emit(key, SiteShape.KEYWORD, _text(key), chain, rooted)
+                elif key.type == "string":
+                    symbol = _string_value(key)
+                    if symbol is not None:
+                        self._emit(key, SiteShape.DICT_KEY, symbol, chain, rooted)
+            elif child.type == "shorthand_property_identifier":
+                self._emit(child, SiteShape.KEYWORD, _text(child), chain, rooted)
+
+    def _call(self, node: Node) -> None:
+        function = node.child_by_field_name("function")
+        root, tail = _parts(function)
+        chain, rooted = self._ref(root, tail)
+        is_member = function is not None and function.type == "member_expression"
+        if function is not None and (is_member or (rooted and chain)):
+            leaf = (
+                function.child_by_field_name("property") if is_member else function
+            )
+            symbol = tail[-1] if tail else (root or "")
+            if leaf is not None:
+                self._emit(leaf, SiteShape.CALL, symbol, chain, rooted)
+        arguments = node.child_by_field_name("arguments")
+        args = arguments.named_children if arguments is not None else ()
+        for argument in args:
+            if argument.type == "object":
+                self._keys(argument, chain if rooted else (), rooted)
+            elif argument.type == "array":
+                for element in argument.named_children:
+                    if element.type == "object":
+                        self._keys(element, chain if rooted else (), rooted)
+        self._in_chain(function)
+        for argument in args:
+            self.visit(argument)
+
+    def _new(self, node: Node) -> None:
+        constructor = node.child_by_field_name("constructor")
+        root, tail = _parts(constructor)
+        chain, rooted = self._ref(root, tail)
+        is_member = (
+            constructor is not None and constructor.type == "member_expression"
+        )
+        if constructor is not None and (is_member or (rooted and chain)):
+            leaf = (
+                constructor.child_by_field_name("property")
+                if is_member
+                else constructor
+            )
+            symbol = tail[-1] if tail else (root or "")
+            if leaf is not None:
+                self._emit(leaf, SiteShape.CALL, symbol, chain, rooted)
+        self._in_chain(constructor)
+        arguments = node.child_by_field_name("arguments")
+        if arguments is not None:
+            for argument in arguments.named_children:
+                self.visit(argument)
+
+    def _member(self, node: Node) -> None:
+        if self._callee == 0:
+            root, tail = _parts(node)
+            chain, rooted = self._ref(root, tail)
+            rooted = rooted and root in self._classes
+            property_node = node.child_by_field_name("property")
+            if property_node is not None:
+                self._emit(
+                    property_node,
+                    SiteShape.ATTRIBUTE,
+                    _text(property_node),
+                    chain if rooted else (),
+                    rooted,
+                )
+        self._in_chain(node.child_by_field_name("object"))
+
+    def visit(self, node: Node | None) -> None:
+        if node is None:
+            return
+        if node.type == "call_expression":
+            self._call(node)
+        elif node.type == "new_expression":
+            self._new(node)
+        elif node.type == "member_expression":
+            self._member(node)
+        else:
+            for child in node.children:
+                self.visit(child)
+
+
 def scan_ts(root: str | Path, sdk_package: str) -> ScanResult:
     """Parse ``root`` read-only and report SDK-rooted TS/JS evidence."""
     modules = _read(Path(root))
     reachable = _reachable(modules, sdk_package)
+    hits: list[Hit] = []
+    for module in reachable:
+        roots, classes = _bindings(module.tree, sdk_package)
+        alias_roots, class_aliases, _ = _aliases(
+            module.tree, roots, classes, sdk_package, module.source
+        )
+        visitor = _Visitor(
+            module.source,
+            sdk_package,
+            {**roots, **alias_roots},
+            classes | class_aliases,
+        )
+        visitor.visit(module.tree.root_node)
+        hits.extend(visitor.hits)
     return ScanResult(
         modules=tuple(module.rel for module in reachable),
-        hits=tuple[Hit](),
-        dynamics=tuple[Dynamic](),
+        hits=tuple(hits),
     )
