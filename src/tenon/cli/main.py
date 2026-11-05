@@ -9,7 +9,7 @@ from typing import Sequence
 
 from tenon.detect import Change, DiffResult, SpecRefusal, diff, load
 from tenon.locate import LocateConfig, locate
-from tenon.pr import Remote
+from tenon.pr import GitGhRemote, Remote, write_pr
 from tenon.propose import propose
 from tenon.prove import prove
 
@@ -152,19 +152,30 @@ def _check(args: argparse.Namespace, config: CliConfig) -> int:
 def _fix(
     args: argparse.Namespace, config: CliConfig, remote: Remote | None
 ) -> int:
-    _result, changes = _diff_and_filter(args.old, args.new, config)
+    result, changes = _diff_and_filter(args.old, args.new, config)
     repo = Path(args.repo)
     results: list[FixResult] = []
     for change in changes:
         located = locate(change, repo, config.locate)
         proposal = propose(change, located, repo)
         proof = prove(proposal, repo, config.command)
+        pr = None
+        if args.open_pr:
+            pr = write_pr(
+                proposal,
+                proof,
+                repo,
+                remote=remote or GitGhRemote(),
+                allow_unverified=args.allow_unverified,
+                unanalyzed=result.unanalyzed,
+            )
         results.append(
             FixResult(
                 change=change,
                 locate=located,
                 proposal=proposal,
                 proof=proof,
+                pr=pr,
             )
         )
     text = render_fix_json(results) if args.json else render_fix_text(results)

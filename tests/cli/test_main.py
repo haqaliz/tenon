@@ -1,5 +1,6 @@
 """The CLI entry point: parse, compose the stages, report and return a code."""
 
+import importlib
 import json
 import subprocess
 import sys
@@ -7,6 +8,12 @@ import sys
 import pytest
 
 from tenon.cli import main
+from tenon.detect import diff, load
+from tenon.pr import PrDraft, PrRefusal, PrResult, PrStatus
+from tenon.prove import ProofLevel
+
+# ``tenon.cli.main`` the submodule is shadowed by the exported function.
+cli_main = importlib.import_module("tenon.cli.main")
 
 
 # Spec AC1: help is a 0, and no SystemExit escapes main.
@@ -152,9 +159,12 @@ def test_missing_config_without_sdk_package_is_usage(a_repo_without_config, a_sp
     assert "sdk-package" in capsys.readouterr().err
 
 
-def a_fix(repo, specs, *extra):
+def a_fix(repo, specs, *extra, remote=None):
     old, new = specs
-    return main(["fix", str(repo), "--old", str(old), "--new", str(new), *extra])
+    return main(
+        ["fix", str(repo), "--old", str(old), "--new", str(new), *extra],
+        remote=remote,
+    )
 
 
 # Spec AC4: a green check prints the diff and the proof, and writes nothing.
@@ -243,3 +253,152 @@ def test_fix_zero_changes_exits_zero(a_repo, a_same_specs, capsys):
     assert a_fix(a_repo, a_same_specs) == 0
     out = capsys.readouterr().out
     assert "0 changes, 0 proposals" in out
+
+
+def a_pr(proof, status=PrStatus.OPENED, refusal=None):
+    draft = PrDraft(
+        title=f"[{proof.level.value}] tenon: rename",
+        body="body",
+        branch="tenon/rename-1234abcd",
+        commit_message="tenon: rename",
+    )
+    if status is PrStatus.OPENED:
+        return PrResult(
+            status=status,
+            level=proof.level,
+            draft=draft,
+            url="https://github.com/example/repo/pull/7",
+        )
+    return PrResult(
+        status=status, level=proof.level, draft=draft, refusal=refusal
+    )
+
+
+def a_recorder(make_result):
+    calls = []
+
+    def write_pr(
+        proposal, proof, repo, *, remote, allow_unverified=False, unanalyzed=()
+    ):
+        calls.append(
+            {
+                "proposal": proposal,
+                "proof": proof,
+                "repo": repo,
+                "remote": remote,
+                "allow_unverified": allow_unverified,
+                "unanalyzed": unanalyzed,
+            }
+        )
+        return make_result(proof)
+
+    return write_pr, calls
+
+
+# Spec AC6: one passed proposal is one opened PR, with the diff's unanalyzed list.
+def test_fix_open_pr_opens_one_pr(a_repo, a_specs, monkeypatch, capsys):
+    old, new = a_specs
+    expected_unanalyzed = diff(load(old), load(new)).unanalyzed
+    write_pr, calls = a_recorder(a_pr)
+    remote = object()
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_fix(a_repo, a_specs, "--open-pr", remote=remote) == 0
+
+    assert "PR: https://github.com/example/repo/pull/7" in capsys.readouterr().out
+    (call,) = calls
+    assert call["proposal"].edits
+    assert call["proof"].level is ProofLevel.TESTS_PASSED
+    assert call["repo"] == a_repo
+    assert call["remote"] is remote
+    assert call["allow_unverified"] is False
+    assert call["unanalyzed"] == expected_unanalyzed
+
+
+# Spec AC6: the CLI does not pre-gate UNVERIFIED; the writer refuses and says so.
+def test_fix_open_pr_unverified_is_refused_by_the_writer(
+    a_repo, a_specs, a_no_command_config, monkeypatch, capsys
+):
+    write_pr, calls = a_recorder(
+        lambda proof: a_pr(
+            proof, PrStatus.REFUSED, PrRefusal.UNVERIFIED_NOT_ALLOWED
+        )
+    )
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--open-pr",
+            remote=object(),
+        )
+        == 1
+    )
+
+    assert "PR refused: UNVERIFIED_NOT_ALLOWED" in capsys.readouterr().out
+    assert calls[0]["allow_unverified"] is False
+
+
+# Spec AC6: --allow-unverified reaches the writer; --require only moves the exit.
+def test_fix_open_pr_allow_unverified_is_passed_through(
+    a_repo, a_specs, a_no_command_config, monkeypatch
+):
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--open-pr",
+            "--allow-unverified",
+            "--require",
+            "UNVERIFIED",
+            remote=object(),
+        )
+        == 0
+    )
+    assert calls[0]["allow_unverified"] is True
+
+
+# Spec AC6: any refused writer result makes the run a 1 and is rendered.
+def test_fix_open_pr_refusal_is_rendered(a_repo, a_specs, monkeypatch, capsys):
+    write_pr, _calls = a_recorder(
+        lambda proof: a_pr(proof, PrStatus.REFUSED, PrRefusal.DIRTY_CHECKOUT)
+    )
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_fix(a_repo, a_specs, "--open-pr", "--json", remote=object()) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["results"][0]["pr"]["status"] == "REFUSED"
+    assert payload["results"][0]["pr"]["refusal"] == "DIRTY_CHECKOUT"
+    assert payload["summary"]["prs_opened"] == 0
+    assert payload["summary"]["prs_refused"] == 1
+
+
+# Spec AC10: the real adapter is never constructed without --open-pr.
+def test_fix_without_open_pr_does_not_construct_a_remote(
+    a_repo, a_specs, monkeypatch
+):
+    def bomb():
+        raise AssertionError("GitGhRemote must not be constructed")
+
+    monkeypatch.setattr(cli_main, "GitGhRemote", bomb)
+
+    assert a_fix(a_repo, a_specs) == 0
+
+
+# Spec AC6/M11: --open-pr without an injected remote builds the real adapter once.
+def test_fix_open_pr_builds_the_default_remote(a_repo, a_specs, monkeypatch):
+    marker = object()
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "GitGhRemote", lambda: marker)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_fix(a_repo, a_specs, "--open-pr") == 0
+    assert calls[0]["remote"] is marker
