@@ -1,6 +1,7 @@
 """Fixtures for the CLI tests: a temp repo, spec pairs and a config file."""
 
 import json
+import shlex
 import shutil
 import sys
 from dataclasses import dataclass
@@ -80,6 +81,23 @@ def a_config(command: bool = True) -> str:
         argv = [sys.executable, "-c", "import acme.billing"]
         text += "\n[tenon]\ncommand = " + json.dumps(argv) + "\n"
     return text
+
+
+@pytest.fixture
+def a_build():
+    """A build stage that imports the fixture package."""
+    return shlex.join([sys.executable, "-c", "import acme.billing"])
+
+
+@pytest.fixture
+def a_test_red_after_patch():
+    """A test that passes before the rename patch and fails after it."""
+    script = (
+        "import pathlib, sys; "
+        "sys.exit(0 if 'amount=amount' in "
+        "pathlib.Path('acme/billing.py').read_text() else 1)"
+    )
+    return shlex.join([sys.executable, "-c", script])
 
 
 def a_ts_copy(destination: Path) -> Path:

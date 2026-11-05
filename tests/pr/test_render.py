@@ -21,8 +21,14 @@ from tenon.detect import (
 from tenon.locate import Site, SiteShape
 from tenon.pr import render_pr
 from tenon.pr.render import (
+    CHARACTERIZED_PROOF,
+    CHARACTERIZED_SENTENCE,
+    REPLAYED_PROOF,
+    REPLAYED_SENTENCE,
     TESTS_PASSED_PROOF,
     TESTS_PASSED_SENTENCE,
+    TYPES_BUILD_ONLY_PROOF,
+    TYPES_BUILD_ONLY_SENTENCE,
     _branch,
     _commit_message,
     _slug,
@@ -30,7 +36,7 @@ from tenon.pr.render import (
     _title,
 )
 from tenon.propose import SkipReason, Skipped
-from tenon.prove import CheckResult, ProofCause
+from tenon.prove import CheckResult, ProofCause, ProofLevel
 
 CHARGE_POINTER = "#/components/schemas/Charge/properties"
 PROOF_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "proof-basic"
@@ -464,6 +470,179 @@ def test_unverified_body_caps_the_failure_tail(
     assert "line 1\n" not in body
     assert "line 6\n" in body
     assert "line 25\n" in body
+
+
+# Spec AC6: the text excludes any word that would overstate a build-only result.
+TYPES_BUILD_ONLY_BODY = """\
+## Tenon proof: TYPES_BUILD_ONLY
+
+The build or type-check command returned 0 before and after the patch; no tests ran.
+
+### Change
+
+- Kind: `renamed`
+- Location: `#/components/schemas/Charge/properties`
+- Before: `amount`
+- After: `amount_cents`
+- Breaking: `True`
+- Confidence: `inferred`
+
+### Check
+
+- Command: `python -m compileall -q .`
+- Baseline exit: `0`
+- After exit: `0`
+
+### Files
+
+- `acme/billing.py`
+
+### Skipped sites
+
+None.
+
+### What this proves
+
+The build or type-check ran green before and after the patch, so the change did not break it. No tests ran: this is weak proof, and it does not prove the change is correct.
+
+Opened by Tenon. No merge was performed.
+"""
+
+
+# Spec AC6: the build-only body is one pinned, honest text.
+def test_types_build_only_body_is_the_golden_text(a_rename_proposal, a_proof_at):
+    draft = render_pr(
+        a_rename_proposal, a_proof_at(ProofLevel.TYPES_BUILD_ONLY)
+    )
+
+    assert draft.title.startswith("[TYPES_BUILD_ONLY] tenon: ")
+    assert draft.body == TYPES_BUILD_ONLY_BODY
+
+
+CHARACTERIZED_BODY = """\
+## Tenon proof: CHARACTERIZED
+
+The user-supplied characterization command returned 0 before and after the patch.
+
+### Change
+
+- Kind: `renamed`
+- Location: `#/components/schemas/Charge/properties`
+- Before: `amount`
+- After: `amount_cents`
+- Breaking: `True`
+- Confidence: `inferred`
+
+### Check
+
+- Command: `python -m pytest tests/characterization -q`
+- Baseline exit: `0`
+- After exit: `0`
+
+### Files
+
+- `acme/billing.py`
+
+### Skipped sites
+
+None.
+
+### What this proves
+
+The characterization command ran green before and after the patch. It checks current behavior, not the vendor's new API; Tenon did not generate it. It does not prove the change is correct.
+
+Opened by Tenon. No merge was performed.
+"""
+
+
+# Spec AC6: the characterized body is one pinned, honest text.
+def test_characterized_body_is_the_golden_text(a_rename_proposal, a_proof_at):
+    draft = render_pr(a_rename_proposal, a_proof_at(ProofLevel.CHARACTERIZED))
+
+    assert draft.title.startswith("[CHARACTERIZED] tenon: ")
+    assert draft.body == CHARACTERIZED_BODY
+
+
+REPLAYED_BODY = """\
+## Tenon proof: REPLAYED
+
+The user-supplied recorded-call replay returned 0 before and after the patch.
+
+### Change
+
+- Kind: `renamed`
+- Location: `#/components/schemas/Charge/properties`
+- Before: `amount`
+- After: `amount_cents`
+- Breaking: `True`
+- Confidence: `inferred`
+
+### Check
+
+- Command: `python -m pytest tests/replay -q`
+- Baseline exit: `0`
+- After exit: `0`
+
+### Files
+
+- `acme/billing.py`
+
+### Skipped sites
+
+None.
+
+### What this proves
+
+The recorded-call replay ran green before and after the patch. The recording was supplied, not made by Tenon, so it only proves the replayed calls behaved as recorded. It does not prove the change is correct.
+
+Opened by Tenon. No merge was performed.
+"""
+
+
+# Spec AC6: the replayed body is one pinned, honest text.
+def test_replayed_body_is_the_golden_text(a_rename_proposal, a_proof_at):
+    draft = render_pr(a_rename_proposal, a_proof_at(ProofLevel.REPLAYED))
+
+    assert draft.title.startswith("[REPLAYED] tenon: ")
+    assert draft.body == REPLAYED_BODY
+
+
+@pytest.mark.parametrize(
+    ("level", "sentence", "paragraph", "command"),
+    [
+        (
+            ProofLevel.TYPES_BUILD_ONLY,
+            TYPES_BUILD_ONLY_SENTENCE,
+            TYPES_BUILD_ONLY_PROOF,
+            "python -m compileall -q .",
+        ),
+        (
+            ProofLevel.CHARACTERIZED,
+            CHARACTERIZED_SENTENCE,
+            CHARACTERIZED_PROOF,
+            "python -m pytest tests/characterization -q",
+        ),
+        (
+            ProofLevel.REPLAYED,
+            REPLAYED_SENTENCE,
+            REPLAYED_PROOF,
+            "python -m pytest tests/replay -q",
+        ),
+    ],
+)
+# Spec AC6: every weak level names its command and what it does not prove.
+def test_weak_level_body_states_what_actually_ran(
+    level, sentence, paragraph, command, a_rename_proposal, a_proof_at
+):
+    draft = render_pr(a_rename_proposal, a_proof_at(level))
+
+    assert f"[{level.value}]" in draft.title
+    assert sentence in draft.body
+    assert f"- Command: `{command}`" in draft.body
+    assert f"### What this proves\n\n{paragraph}" in draft.body
+    assert "verified" not in draft.body.lower()
+    assert TESTS_PASSED_SENTENCE not in draft.body
+    assert TESTS_PASSED_PROOF not in draft.body
 
 
 # Spec AC7: every supplied unanalyzed subtree keeps its pointer and reason.

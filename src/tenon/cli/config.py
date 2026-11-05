@@ -18,6 +18,9 @@ class CliConfig:
 
     locate: LocateConfig | TsLocateConfig
     command: tuple[str, ...] = ()
+    build: tuple[str, ...] = ()
+    characterize: tuple[str, ...] = ()
+    replay: tuple[str, ...] = ()
     require: ProofLevel = ProofLevel.TESTS_PASSED
     breaking_only: bool = False
     language: Literal["python", "ts"] = "python"
@@ -27,18 +30,21 @@ class CliConfig:
             raise ValueError(
                 f"language must be python or ts: {self.language!r}"
             )
-        object.__setattr__(self, "command", tuple(self.command))
+        for name in ("command", "build", "characterize", "replay"):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
         if not isinstance(self.require, ProofLevel):
             object.__setattr__(self, "require", ProofLevel(self.require))
 
 
 def a_level(value: object, source: str) -> ProofLevel:
-    """One of the two proof levels shipped today; anything else is a T7 error."""
-    if value not in (ProofLevel.TESTS_PASSED, ProofLevel.UNVERIFIED):
+    """One of the five ladder levels; anything else names the whole ladder."""
+    try:
+        return ProofLevel(value)
+    except ValueError:
+        names = ", ".join(level.value for level in ProofLevel)
         raise ValueError(
-            f"{source} must be TESTS_PASSED or UNVERIFIED until T7: {value!r}"
-        )
-    return ProofLevel(value)
+            f"{source} must be one of {names}: {value!r}"
+        ) from None
 
 
 def a_pairs(values: Sequence[str], flag: str) -> dict[str, str]:
@@ -52,6 +58,18 @@ def a_pairs(values: Sequence[str], flag: str) -> dict[str, str]:
             )
         pairs[key] = mapped
     return pairs
+
+
+def a_command(tenon: dict, path: str | Path, key: str) -> tuple[str, ...]:
+    """One stage's command array, validated exactly like ``command``."""
+    value = tenon.get(key, [])
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item for item in value
+    ):
+        raise ValueError(
+            f"{path}: [tenon] {key} must be an array of non-empty strings"
+        )
+    return tuple(value)
 
 
 def load_cli_config(
@@ -84,13 +102,10 @@ def load_cli_config(
     tenon = data.get("tenon", {})
     if not isinstance(tenon, dict):
         raise ValueError(f"{path}: [tenon] must be a table")
-    command = tenon.get("command", [])
-    if not isinstance(command, list) or not all(
-        isinstance(item, str) and item for item in command
-    ):
-        raise ValueError(
-            f"{path}: [tenon] command must be an array of non-empty strings"
-        )
+    commands = {
+        key: a_command(tenon, path, key)
+        for key in ("command", "build", "characterize", "replay")
+    }
     breaking_only = tenon.get("breaking_only", False)
     if not isinstance(breaking_only, bool):
         raise ValueError(f"{path}: [tenon] breaking_only must be a bool")
@@ -102,13 +117,23 @@ def load_cli_config(
             operations=operations,
             fields=fields,
         ),
-        command=tuple(command),
+        command=commands["command"],
+        build=commands["build"],
+        characterize=commands["characterize"],
+        replay=commands["replay"],
         require=a_level(
             tenon.get("require", ProofLevel.TESTS_PASSED), f"{path}: [tenon] require"
         ),
         breaking_only=breaking_only,
         language=chosen,
     )
+
+
+def _split(value: str, flag: str) -> tuple[str, ...]:
+    parts = shlex.split(value)
+    if not parts:
+        raise ValueError(f"{flag} must not be blank: {value!r}")
+    return tuple(parts)
 
 
 def overrides(
@@ -118,6 +143,9 @@ def overrides(
     operations: Sequence[str] = (),
     fields: Sequence[str] = (),
     command: str | None = None,
+    build: str | None = None,
+    characterize: str | None = None,
+    replay: str | None = None,
     require: str | None = None,
     breaking_only: bool | None = None,
     language: str | None = None,
@@ -143,15 +171,20 @@ def overrides(
         )
 
     if command is not None:
-        parts = shlex.split(command)
-        if not parts:
-            raise ValueError(f"--check must not be blank: {command!r}")
+        command_parts = _split(command, "--check")
     else:
-        parts = config.command
+        command_parts = config.command
 
     return CliConfig(
         locate=locate,
-        command=tuple(parts),
+        command=tuple(command_parts),
+        build=config.build if build is None else _split(build, "--build"),
+        characterize=(
+            config.characterize
+            if characterize is None
+            else _split(characterize, "--characterize")
+        ),
+        replay=config.replay if replay is None else _split(replay, "--replay"),
         require=config.require if require is None else a_level(require, "--require"),
         breaking_only=config.breaking_only if breaking_only is None else breaking_only,
         language=chosen,

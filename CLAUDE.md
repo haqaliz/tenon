@@ -16,24 +16,26 @@ usable by AI agents, by running an agent against it.
 The name: a *tenon* is the tongue cut on a timber to fit its mortise exactly. The joint holds
 only if the two sides still match. Tenon asks of an integration: *does your side still fit theirs?*
 
-Status: **T1, T2, T3, T4, T5, T6 and M1.4 shipped.** `src/tenon/detect/` turns two OpenAPI 3.x
+Status: **T1, T2, T3, T4, T5, T6, T7 and M1.4 shipped.** `src/tenon/detect/` turns two OpenAPI 3.x
 documents into typed `Change` records; `src/tenon/locate/` turns a record into call sites with file,
 line and column, keeping anything unprovable in named ambiguity groups — Python via `ast`,
 TypeScript/JavaScript via tree-sitter, no Node analysis runtime; `src/tenon/propose/` turns certain
 sites into a candidate diff and never applies it; `src/tenon/prove/` applies that diff to a copy,
-runs the user's check before and after, and records `TESTS_PASSED` or `UNVERIFIED` with a cause;
-`src/tenon/pr/` renders a deterministic PR whose title and body state that level, then clones a clean
-checkout, commits the exact diff to a new branch and opens the PR through the user's own `git` and
-`gh`; `src/tenon/cli/` exposes `tenon check` and `tenon fix` with `--language python|ts`, text or
-byte-stable JSON, honest exit codes, `tenon.toml` config, and `fix --open-pr` delegating to T5.
-`fix` never writes the checkout; the PR writer refuses a dirty tree, the default branch, an existing
-branch, a failed remote check, and an `UNVERIFIED` result unless `allow_unverified=True` (which opens
-a draft); it has no merge path. Tests live in `tests/`. The Phase 0 gate (M0.3) is met on two real
-cases: `fighthealthinsurance/fighthealthinsurance` @ `56e69cf` (three certain sites, a three-edit
-diff, `TESTS_PASSED` on the focused checkout test) and `yezz123/stripe-template` @ `9d9178c` (a
-mock-assertion site, `TESTS_PASSED` on the offline subset; the case that forced T2's mock-assertion
-keyword attribution). The next engine work is T7 (proof ladder); T8-T11 do not exist — do not
-describe capability that isn't there yet.
+runs every configured proof stage before and after, and records the strongest level that actually
+passed (`TESTS_PASSED`, `CHARACTERIZED`, `REPLAYED`, `TYPES_BUILD_ONLY`) or `UNVERIFIED` with a
+stage-specific cause; `src/tenon/pr/` renders a deterministic PR whose title and body state that
+level, then clones a clean checkout, commits the exact diff to a new branch and opens the PR through
+the user's own `git` and `gh`; `src/tenon/cli/` exposes `tenon check` and `tenon fix` with
+`--language python|ts`, `--build`/`--characterize`/`--replay`/`--check`, the five-level `--require`,
+text or byte-stable JSON, honest exit codes, `tenon.toml` config, and `fix --open-pr` delegating to
+T5 with the required level and a draft gate. `fix` never writes the checkout; the PR writer refuses
+a dirty tree, the default branch, an existing branch, a failed remote check, and a proof below the
+required level unless the user opts into a draft; it has no merge path. Tests live in `tests/`. The
+Phase 0 gate (M0.3) is met on two real cases: `fighthealthinsurance/fighthealthinsurance` @ `56e69cf`
+(three certain sites, a three-edit diff, `TESTS_PASSED` on the focused checkout test) and
+`yezz123/stripe-template` @ `9d9178c` (a mock-assertion site, `TESTS_PASSED` on the offline subset;
+the case that forced T2's mock-assertion keyword attribution). The next engine work is T8
+(MCP/probe) or T9 (benchmark); T8-T11 do not exist — do not describe capability that isn't there yet.
 
 Lineage: one of three siblings scaffolded together on 2026-10-22 (with Assay and Pry) from a
 market-demand pass (`~/dev/at/ideas/market-demand-2026-10.md`). It answers the YC Fall 2026
@@ -80,11 +82,13 @@ request "Self-Maintaining APIs". Standalone: no code dependency on Belay or Plum
 | Level | Meaning | When it may be used |
 |---|---|---|
 | **TESTS_PASSED** | The repo's own tests pass after the patch (and failed or were affected before) | Tests exist and exercise the changed call sites |
-| **CHARACTERIZED** | Generated tests of current behavior pass before and after | The user opted in to characterization tests |
-| **REPLAYED** | Recorded real calls replay against the new API shape | The user supplied or recorded traffic |
+| **CHARACTERIZED** | Your characterization command passes before and after | You supplied the command and opted in; Tenon does not generate it |
+| **REPLAYED** | Your recorded-call replay passes before and after | You supplied the recording |
 | **TYPES_BUILD_ONLY** | Type-check and build pass, nothing more | No tests; labelled as weak |
 | **UNVERIFIED** | No acceptable proof ran | Default when nothing the user required could run |
 
+All configured stages run. Any red stage is `UNVERIFIED` with a stage-specific cause; the strongest
+green stage is the level. The current characterization and replay commands are user-supplied.
 The PR title and body state the level. A required level the run could not reach means no
 "verified" PR, only a flagged one.
 

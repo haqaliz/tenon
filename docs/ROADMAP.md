@@ -32,7 +32,7 @@ Milestone order is my proposal; reorder freely.
 | # | Milestone | Done when | State |
 |---|---|---|---|
 | M2.1 | TypeScript/JavaScript locator (T6) | Same contract as the Python locator | **Shipped 2026-11-05** (`src/tenon/locate/ts_*.py`, 1,006 tests) |
-| M2.2 | Weaker and stronger proofs (T7) | Types/build-only, characterization tests, recorded-call replay, each labelled | Not started |
+| M2.2 | Weaker and stronger proofs (T7) | Types/build-only, characterization tests, recorded-call replay, each labelled | **Shipped 2026-11-06** (`src/tenon/prove/`, CLI/PR integration, 1,178 tests) |
 | M2.3 | MCP schema diffs and `tenon probe` (T8) | Agent run against an MCP server or API; reports what worked | Not started |
 | M2.4 | Benchmark of (change, patch, proof, outcome) | Public set of real changes with how often each proof level held | Not started |
 

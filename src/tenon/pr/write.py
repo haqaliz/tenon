@@ -10,7 +10,7 @@ from typing import Iterator, Sequence
 
 from tenon.detect import Unanalyzed
 from tenon.propose import Proposal
-from tenon.prove import ProofLevel, ProofResult, tail
+from tenon.prove import ProofLevel, ProofResult, proof_rank, tail
 
 from .remote import Remote, RemoteError
 from .render import render_pr
@@ -143,6 +143,8 @@ def write_pr(
     *,
     remote: Remote,
     base: str | None = None,
+    required: ProofLevel = ProofLevel.TESTS_PASSED,
+    allow_below_required: bool = False,
     allow_unverified: bool = False,
     unanalyzed: Sequence[Unanalyzed] = (),
 ) -> PrResult:
@@ -189,8 +191,20 @@ def write_pr(
     except _GitError as exc:
         return _refused(proof, draft, PrRefusal.COMMIT_FAILED, exc.detail)
 
-    if proof.level is ProofLevel.UNVERIFIED and not allow_unverified:
-        return _refused(proof, draft, PrRefusal.UNVERIFIED_NOT_ALLOWED)
+    # Spec AC3/AC4: rank the proof against the requirement before any remote work.
+    required = ProofLevel(required)
+    allowed = allow_below_required or allow_unverified
+    below = proof_rank(proof.level) < proof_rank(required)
+    if below and not allowed:
+        if proof.level is ProofLevel.UNVERIFIED:
+            return _refused(proof, draft, PrRefusal.UNVERIFIED_NOT_ALLOWED)
+        return _refused(
+            proof,
+            draft,
+            PrRefusal.BELOW_REQUIRED_LEVEL,
+            f"required {required.value}, proved {proof.level.value}",
+        )
+    as_draft = proof.level is ProofLevel.UNVERIFIED or below
 
     if not base:
         base = remote.default_branch(root)
@@ -243,7 +257,7 @@ def write_pr(
                     base=base,
                     title=draft.title,
                     body=draft.body,
-                    draft=proof.level is ProofLevel.UNVERIFIED,
+                    draft=as_draft,
                 )
             except RemoteError as exc:
                 return _refused(

@@ -5,11 +5,37 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
+class ProofStage(StrEnum):
+    """One configured stage, in the order the runner executes it."""
+
+    BUILD = "BUILD"
+    CHARACTERIZE = "CHARACTERIZE"
+    REPLAY = "REPLAY"
+    TESTS = "TESTS"
+
+
 class ProofLevel(StrEnum):
-    """The strongest statement this card can make. The rest of the ladder is T7."""
+    """The strongest statement this card can make, strongest first."""
 
     TESTS_PASSED = "TESTS_PASSED"
+    CHARACTERIZED = "CHARACTERIZED"
+    REPLAYED = "REPLAYED"
+    TYPES_BUILD_ONLY = "TYPES_BUILD_ONLY"
     UNVERIFIED = "UNVERIFIED"
+
+
+PROOF_RANK: dict[ProofLevel, int] = {
+    ProofLevel.TESTS_PASSED: 4,
+    ProofLevel.CHARACTERIZED: 3,
+    ProofLevel.REPLAYED: 2,
+    ProofLevel.TYPES_BUILD_ONLY: 1,
+    ProofLevel.UNVERIFIED: 0,
+}
+
+
+def proof_rank(level: ProofLevel | str) -> int:
+    """The ladder rank of a level; strings coerce and unknown values raise."""
+    return PROOF_RANK[ProofLevel(level)]
 
 
 class ProofCause(StrEnum):
@@ -18,8 +44,15 @@ class ProofCause(StrEnum):
     NO_PATCH_PROPOSED = "NO_PATCH_PROPOSED"
     PATCH_DID_NOT_APPLY = "PATCH_DID_NOT_APPLY"
     NO_TESTS_FOUND = "NO_TESTS_FOUND"
+    NO_PROOF_COMMAND = "NO_PROOF_COMMAND"
     TESTS_FAILED_BEFORE = "TESTS_FAILED_BEFORE"
     TESTS_FAILED_AFTER = "TESTS_FAILED_AFTER"
+    BUILD_FAILED_BEFORE = "BUILD_FAILED_BEFORE"
+    BUILD_FAILED_AFTER = "BUILD_FAILED_AFTER"
+    CHARACTERIZE_FAILED_BEFORE = "CHARACTERIZE_FAILED_BEFORE"
+    CHARACTERIZE_FAILED_AFTER = "CHARACTERIZE_FAILED_AFTER"
+    REPLAY_FAILED_BEFORE = "REPLAY_FAILED_BEFORE"
+    REPLAY_FAILED_AFTER = "REPLAY_FAILED_AFTER"
     CHECK_TIMED_OUT = "CHECK_TIMED_OUT"
     COPY_FAILED = "COPY_FAILED"
 
@@ -34,21 +67,45 @@ class CheckResult:
     timed_out: bool
     stdout_tail: str = ""
     stderr_tail: str = ""
+    stage: ProofStage = ProofStage.TESTS
 
     def __post_init__(self) -> None:
         if self.kind not in ("baseline", "after"):
             raise ValueError(f"kind must be baseline or after: {self.kind!r}")
+        stage = self.stage
+        if not isinstance(stage, ProofStage):
+            stage = ProofStage(stage)
+        object.__setattr__(self, "stage", stage)
         object.__setattr__(self, "command", tuple(self.command))
 
     def to_dict(self) -> dict[str, object]:
         return {
             "kind": self.kind,
+            "stage": self.stage.value,
             "command": list(self.command),
             "returncode": self.returncode,
             "timed_out": self.timed_out,
             "stdout_tail": self.stdout_tail,
             "stderr_tail": self.stderr_tail,
         }
+
+
+_STAGE_FOR_LEVEL = {
+    ProofLevel.TESTS_PASSED: ProofStage.TESTS,
+    ProofLevel.CHARACTERIZED: ProofStage.CHARACTERIZE,
+    ProofLevel.REPLAYED: ProofStage.REPLAY,
+    ProofLevel.TYPES_BUILD_ONLY: ProofStage.BUILD,
+}
+
+
+def _has_green_after(checks: tuple[CheckResult, ...], stage: ProofStage) -> bool:
+    return any(
+        check.kind == "after"
+        and check.stage is stage
+        and check.returncode == 0
+        and check.timed_out is False
+        for check in checks
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +117,7 @@ class ProofResult:
     baseline: CheckResult | None = None
     after: CheckResult | None = None
     patch_applied: bool = False
+    checks: tuple[CheckResult, ...] = ()
 
     def __post_init__(self) -> None:
         level = self.level
@@ -68,17 +126,34 @@ class ProofResult:
         cause = self.cause
         if cause is not None and not isinstance(cause, ProofCause):
             cause = ProofCause(cause)
-        if level is ProofLevel.TESTS_PASSED:
+        checks = tuple(self.checks)
+        stage = _STAGE_FOR_LEVEL.get(level)
+        if stage is not None:
             if cause is not None:
-                raise ValueError("TESTS_PASSED must not carry a cause")
-            if self.after is None or self.after.returncode != 0 or self.after.timed_out:
-                raise ValueError("TESTS_PASSED needs a green after check")
-            if not self.patch_applied:
-                raise ValueError("TESTS_PASSED needs an applied patch")
+                raise ValueError(f"{level.value} must not carry a cause")
+            if checks:
+                if not self.patch_applied:
+                    raise ValueError(f"{level.value} needs an applied patch")
+                if not _has_green_after(checks, stage):
+                    raise ValueError(
+                        f"{level.value} needs a matching green after check"
+                    )
+            elif level is ProofLevel.TESTS_PASSED:
+                if (
+                    self.after is None
+                    or self.after.returncode != 0
+                    or self.after.timed_out
+                ):
+                    raise ValueError("TESTS_PASSED needs a green after check")
+                if not self.patch_applied:
+                    raise ValueError("TESTS_PASSED needs an applied patch")
+            else:
+                raise ValueError(f"{level.value} needs checks")
         elif cause is None:
             raise ValueError("UNVERIFIED must carry a cause")
         object.__setattr__(self, "level", level)
         object.__setattr__(self, "cause", cause)
+        object.__setattr__(self, "checks", checks)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -87,6 +162,7 @@ class ProofResult:
             "baseline": None if self.baseline is None else self.baseline.to_dict(),
             "after": None if self.after is None else self.after.to_dict(),
             "patch_applied": self.patch_applied,
+            "checks": [check.to_dict() for check in self.checks],
         }
 
     def to_json(self) -> str:

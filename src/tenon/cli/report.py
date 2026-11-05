@@ -7,14 +7,21 @@ from typing import Any, Sequence
 from tenon.detect import Change
 from tenon.locate import LocateReason, LocateResult, Site
 from tenon.propose import Proposal
-from tenon.prove import CheckResult, ProofLevel, ProofResult
+from tenon.prove import (
+    PROOF_RANK,
+    CheckResult,
+    ProofLevel,
+    ProofResult,
+    ProofStage,
+    proof_rank,
+)
 from tenon.pr import PrResult, PrStatus
 
 # Spec AC1: these reasons mean the analysis could not run, not that it found nothing.
 _UNCLEAN_REASONS = frozenset(
     {LocateReason.NO_SDK_IMPORT, LocateReason.OPERATION_NOT_MAPPED}
 )
-_LEVEL_RANK = {ProofLevel.UNVERIFIED: 0, ProofLevel.TESTS_PASSED: 1}
+_LEVEL_RANK = PROOF_RANK
 
 SITE_LINE = "{path}:{line}:{column}  {shape}  {symbol}"
 AMBIGUOUS_LINE = "ambiguous {reason}: {symbol} at {candidates}"
@@ -28,6 +35,7 @@ def _count(value: int, singular: str, plural: str | None = None) -> str:
 PROOF_LINE = "Proof: {level}"
 CAUSE_LINE = "Cause: {cause}"
 COMMAND_LINE = "Command: {command}"
+STAGE_COMMAND_LINE = "{stage}: {command}"
 BASELINE_EXIT_LINE = "Baseline exit: {exit}"
 AFTER_EXIT_LINE = "After exit: {exit}"
 SKIPPED_LINE = "Skipped: {path}:{line}:{column}  {symbol}  {reason}"
@@ -67,7 +75,7 @@ def check_exit(results: Sequence[LocateResult]) -> int:
 
 
 def _meets(level: ProofLevel, require: ProofLevel) -> bool:
-    return _LEVEL_RANK[level] >= _LEVEL_RANK[require]
+    return proof_rank(level) >= proof_rank(require)
 
 
 def fix_exit(changes: int, results: Sequence[FixResult], require: ProofLevel) -> int:
@@ -174,27 +182,33 @@ def _command(proof: ProofResult) -> str:
     return " ".join(check.command) if check is not None else NOT_RUN
 
 
+_LEVEL_COUNT = {
+    ProofLevel.TESTS_PASSED: "passed",
+    ProofLevel.CHARACTERIZED: "characterized",
+    ProofLevel.REPLAYED: "replayed",
+    ProofLevel.TYPES_BUILD_ONLY: "build_only",
+    ProofLevel.UNVERIFIED: "unverified",
+}
+_LEVEL_KEYS = tuple(_LEVEL_COUNT.values())
+
+
 def _fix_counts(results: Sequence[FixResult]) -> dict[str, int]:
-    return {
-        "changes": len(results),
-        "proposals": sum(1 for result in results if result.proposal.edits),
-        "passed": sum(
-            1 for result in results if result.proof.level is ProofLevel.TESTS_PASSED
-        ),
-        "unverified": sum(
-            1 for result in results if result.proof.level is ProofLevel.UNVERIFIED
-        ),
-        "prs_opened": sum(
-            1
-            for result in results
-            if result.pr is not None and result.pr.status is PrStatus.OPENED
-        ),
-        "prs_refused": sum(
-            1
-            for result in results
-            if result.pr is not None and result.pr.status is PrStatus.REFUSED
-        ),
-    }
+    counts = {"changes": len(results)}
+    counts["proposals"] = sum(1 for result in results if result.proposal.edits)
+    counts.update(dict.fromkeys(_LEVEL_KEYS, 0))
+    for result in results:
+        counts[_LEVEL_COUNT[result.proof.level]] += 1
+    counts["prs_opened"] = sum(
+        1
+        for result in results
+        if result.pr is not None and result.pr.status is PrStatus.OPENED
+    )
+    counts["prs_refused"] = sum(
+        1
+        for result in results
+        if result.pr is not None and result.pr.status is PrStatus.REFUSED
+    )
+    return counts
 
 
 def _fix_summary(counts: dict[str, int]) -> str:
@@ -203,11 +217,49 @@ def _fix_summary(counts: dict[str, int]) -> str:
             _count(counts["changes"], "change"),
             _count(counts["proposals"], "proposal"),
             f"{counts['passed']} passed",
+            f"{counts['characterized']} characterized",
+            f"{counts['replayed']} replayed",
+            f"{counts['build_only']} build-only",
             f"{counts['unverified']} unverified",
             _count(counts["prs_opened"], "PR opened", "PRs opened"),
             _count(counts["prs_refused"], "PR refused", "PRs refused"),
         )
     )
+
+
+def _stage_checks(
+    proof: ProofResult,
+) -> list[tuple[ProofStage, dict[str, CheckResult]]]:
+    """The proof's checks grouped by stage, in the runner's order."""
+    grouped: dict[ProofStage, dict[str, CheckResult]] = {}
+    for check in proof.checks:
+        grouped.setdefault(check.stage, {})[check.kind] = check
+    return [(stage, grouped[stage]) for stage in ProofStage if stage in grouped]
+
+
+def _proof_lines(proof: ProofResult) -> list[str]:
+    lines = [PROOF_LINE.format(level=proof.level.value)]
+    if proof.level is ProofLevel.UNVERIFIED:
+        lines.append(CAUSE_LINE.format(cause=proof.cause.value))
+    stages = _stage_checks(proof)
+    if not stages:
+        return lines + [
+            COMMAND_LINE.format(command=_command(proof)),
+            BASELINE_EXIT_LINE.format(exit=_exit(proof.baseline)),
+            AFTER_EXIT_LINE.format(exit=_exit(proof.after)),
+        ]
+    for stage, checks in stages:
+        check = checks["baseline"] if "baseline" in checks else checks["after"]
+        lines.extend(
+            (
+                STAGE_COMMAND_LINE.format(
+                    stage=stage.value, command=" ".join(check.command)
+                ),
+                BASELINE_EXIT_LINE.format(exit=_exit(checks.get("baseline"))),
+                AFTER_EXIT_LINE.format(exit=_exit(checks.get("after"))),
+            )
+        )
+    return lines
 
 
 def _fix_block(result: FixResult) -> str:
@@ -217,17 +269,7 @@ def _fix_block(result: FixResult) -> str:
         lines.append(diff)
     if result.proposal.reason is not None:
         lines.append(NO_PATCH_LINE.format(reason=result.proposal.reason.value))
-    proof = result.proof
-    lines.append(PROOF_LINE.format(level=proof.level.value))
-    if proof.level is ProofLevel.UNVERIFIED:
-        lines.append(CAUSE_LINE.format(cause=proof.cause.value))
-    lines.extend(
-        [
-            COMMAND_LINE.format(command=_command(proof)),
-            BASELINE_EXIT_LINE.format(exit=_exit(proof.baseline)),
-            AFTER_EXIT_LINE.format(exit=_exit(proof.after)),
-        ]
-    )
+    lines.extend(_proof_lines(result.proof))
     if result.proposal.skipped:
         lines.extend(
             SKIPPED_LINE.format(

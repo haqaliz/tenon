@@ -11,7 +11,7 @@ import pytest
 from tenon.cli import main
 from tenon.detect import diff, load
 from tenon.pr import PrDraft, PrRefusal, PrResult, PrStatus
-from tenon.prove import CheckResult, ProofLevel, ProofResult
+from tenon.prove import CheckResult, ProofLevel, ProofPlan, ProofResult
 
 # ``tenon.cli.main`` the submodule is shadowed by the exported function.
 cli_main = importlib.import_module("tenon.cli.main")
@@ -287,8 +287,8 @@ def test_fix_passing_check_prints_diff_and_proof(
     assert a_snapshot(a_repo) == before
 
 
-# Spec AC5: no check command is UNVERIFIED, not a passed proof.
-def test_fix_without_a_check_command_is_unverified(
+# Spec AC5: no proof command is UNVERIFIED, not a passed proof.
+def test_fix_without_a_proof_command_is_unverified(
     a_repo, a_specs, a_no_command_config, capsys
 ):
     assert (
@@ -296,7 +296,7 @@ def test_fix_without_a_check_command_is_unverified(
     )
     out = capsys.readouterr().out
     assert "Proof: UNVERIFIED" in out
-    assert "Cause: NO_TESTS_FOUND" in out
+    assert "Cause: NO_PROOF_COMMAND" in out
 
 
 # Spec AC5: --require changes the exit code only; the label stays UNVERIFIED.
@@ -315,6 +315,192 @@ def test_fix_require_unverified_exits_zero(
         == 0
     )
     assert "Proof: UNVERIFIED" in capsys.readouterr().out
+
+
+# Spec AC1/AC2: a build-only plan meets TYPES_BUILD_ONLY and shows the build.
+def test_fix_build_only_with_build_requirement_exits_zero(
+    a_repo, a_specs, a_no_command_config, a_build, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--build",
+            a_build,
+            "--require",
+            "TYPES_BUILD_ONLY",
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "Proof: TYPES_BUILD_ONLY" in out
+    assert "import acme.billing" in out
+    assert "TESTS_PASSED" not in out
+
+
+# Spec AC3: the same build-only proof does not meet TESTS_PASSED.
+def test_fix_build_only_under_tests_requirement_exits_one(
+    a_repo, a_specs, a_no_command_config, a_build, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--build",
+            a_build,
+            "--require",
+            "TESTS_PASSED",
+        )
+        == 1
+    )
+    assert "Proof: TYPES_BUILD_ONLY" in capsys.readouterr().out
+
+
+# Spec AC4: a green build with a red test fails closed at TESTS_FAILED_AFTER.
+def test_fix_green_build_red_test_is_unverified_after(
+    a_repo, a_specs, a_build, a_test_red_after_patch, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--build",
+            a_build,
+            "--check",
+            a_test_red_after_patch,
+            "--json",
+        )
+        == 1
+    )
+    payload = json.loads(capsys.readouterr().out)
+    proof = payload["results"][0]["proof"]
+    assert proof["level"] == "UNVERIFIED"
+    assert proof["cause"] == "TESTS_FAILED_AFTER"
+    build_checks = [check for check in proof["checks"] if check["stage"] == "BUILD"]
+    test_checks = [check for check in proof["checks"] if check["stage"] == "TESTS"]
+    assert [check["returncode"] for check in build_checks] == [0, 0]
+    assert [check["returncode"] for check in test_checks] == [0, 1]
+
+
+# Spec AC4/AC7: the text keeps the green build visible before the red test.
+def test_fix_green_build_red_test_text_shows_the_build_pass(
+    a_repo, a_specs, a_build, a_test_red_after_patch, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--build",
+            a_build,
+            "--check",
+            a_test_red_after_patch,
+        )
+        == 1
+    )
+    out = capsys.readouterr().out
+    assert "Proof: UNVERIFIED" in out
+    assert "Cause: TESTS_FAILED_AFTER" in out
+    build = out.index("BUILD: ")
+    tests = out.index("TESTS: ")
+    assert build < out.index("import acme.billing", build) < tests
+    assert build < out.index("After exit: 0", build) < tests
+    assert out.index("After exit: 1", tests) > tests
+
+
+# Spec AC7: a build-only run counts build_only and carries the build checks.
+def test_fix_build_only_json_counts_the_level(
+    a_repo, a_specs, a_no_command_config, a_build, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--build",
+            a_build,
+            "--require",
+            "TYPES_BUILD_ONLY",
+            "--json",
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["summary"]["build_only"] == 1
+    assert payload["summary"]["passed"] == 0
+    assert payload["summary"]["characterized"] == 0
+    proof = payload["results"][0]["proof"]
+    assert proof["level"] == "TYPES_BUILD_ONLY"
+    assert [check["stage"] for check in proof["checks"]] == ["BUILD", "BUILD"]
+
+
+# Spec AC1: the four stage flags reach one plan, in plan order.
+def test_fix_stage_flags_reach_one_plan(a_repo, a_specs, monkeypatch):
+    seen = []
+
+    def prove_plan_spy(proposal, repo, plan):
+        seen.append(plan)
+        return a_green_proof()
+
+    monkeypatch.setattr(cli_main, "prove_plan", prove_plan_spy)
+
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--build",
+            "build one",
+            "--characterize",
+            "characterize one",
+            "--replay",
+            "replay one",
+            "--check",
+            "tests one",
+        )
+        == 0
+    )
+    assert seen == [
+        ProofPlan(
+            tests=("tests", "one"),
+            characterize=("characterize", "one"),
+            replay=("replay", "one"),
+            build=("build", "one"),
+        )
+    ]
+
+
+# Spec AC1: a missing stage flag falls back to [tenon], not to empty.
+def test_fix_stage_commands_fall_back_to_the_config(a_repo, a_specs, monkeypatch):
+    (a_repo / "tenon.toml").write_text(
+        '[locate]\nsdk_package = "acme.client"\n'
+        "\n[tenon]\n"
+        'command = ["tests", "from", "config"]\n'
+        'build = ["build", "from", "config"]\n'
+        'characterize = ["characterize", "from", "config"]\n'
+        'replay = ["replay", "from", "config"]\n'
+    )
+    seen = []
+
+    def prove_plan_spy(proposal, repo, plan):
+        seen.append(plan)
+        return a_green_proof()
+
+    monkeypatch.setattr(cli_main, "prove_plan", prove_plan_spy)
+
+    assert a_fix(a_repo, a_specs) == 0
+    assert seen == [
+        ProofPlan(
+            tests=("tests", "from", "config"),
+            characterize=("characterize", "from", "config"),
+            replay=("replay", "from", "config"),
+            build=("build", "from", "config"),
+        )
+    ]
 
 
 # Spec AC5: the JSON proof carries the named cause.
@@ -336,7 +522,7 @@ def test_fix_json_carries_the_unverified_cause(
     assert set(payload) == {"command", "results", "summary"}
     assert payload["command"] == "fix"
     assert payload["results"][0]["proof"]["level"] == "UNVERIFIED"
-    assert payload["results"][0]["proof"]["cause"] == "NO_TESTS_FOUND"
+    assert payload["results"][0]["proof"]["cause"] == "NO_PROOF_COMMAND"
     assert payload["results"][0]["pr"] is None
     assert payload["summary"]["unverified"] == 1
 
@@ -383,7 +569,9 @@ def test_fix_ts_locates_proposes_and_renders_the_diff(
         return real_propose(change, result, repo)
 
     monkeypatch.setattr(cli_main, "propose", propose_spy)
-    monkeypatch.setattr(cli_main, "prove", lambda *args, **kwargs: a_green_proof())
+    monkeypatch.setattr(
+        cli_main, "prove_plan", lambda *args, **kwargs: a_green_proof()
+    )
     before = a_snapshot(a_ts_repo.repo)
 
     assert a_fix(a_ts_repo.repo, a_ts_repo.specs, "--language", "ts") == 0
@@ -461,7 +649,14 @@ def a_recorder(make_result):
     calls = []
 
     def write_pr(
-        proposal, proof, repo, *, remote, allow_unverified=False, unanalyzed=()
+        proposal,
+        proof,
+        repo,
+        *,
+        remote,
+        required=ProofLevel.TESTS_PASSED,
+        allow_below_required=False,
+        unanalyzed=(),
     ):
         calls.append(
             {
@@ -469,7 +664,8 @@ def a_recorder(make_result):
                 "proof": proof,
                 "repo": repo,
                 "remote": remote,
-                "allow_unverified": allow_unverified,
+                "required": required,
+                "allow_below_required": allow_below_required,
                 "unanalyzed": unanalyzed,
             }
         )
@@ -494,19 +690,16 @@ def test_fix_open_pr_opens_one_pr(a_repo, a_specs, monkeypatch, capsys):
     assert call["proof"].level is ProofLevel.TESTS_PASSED
     assert call["repo"] == a_repo
     assert call["remote"] is remote
-    assert call["allow_unverified"] is False
+    assert call["required"] is ProofLevel.TESTS_PASSED
+    assert call["allow_below_required"] is False
     assert call["unanalyzed"] == expected_unanalyzed
 
 
-# Spec AC6: the CLI does not pre-gate UNVERIFIED; the writer refuses and says so.
-def test_fix_open_pr_unverified_is_refused_by_the_writer(
+# Spec AC5: below the requirement with no opt-in, the CLI never calls the writer.
+def test_fix_open_pr_below_required_makes_no_pr_call(
     a_repo, a_specs, a_no_command_config, monkeypatch, capsys
 ):
-    write_pr, calls = a_recorder(
-        lambda proof: a_pr(
-            proof, PrStatus.REFUSED, PrRefusal.UNVERIFIED_NOT_ALLOWED
-        )
-    )
+    write_pr, calls = a_recorder(a_pr)
     monkeypatch.setattr(cli_main, "write_pr", write_pr)
 
     assert (
@@ -521,11 +714,38 @@ def test_fix_open_pr_unverified_is_refused_by_the_writer(
         == 1
     )
 
-    assert "PR refused: UNVERIFIED_NOT_ALLOWED" in capsys.readouterr().out
-    assert calls[0]["allow_unverified"] is False
+    assert calls == []
+    assert "PR:" not in capsys.readouterr().out
 
 
-# Spec AC6: --allow-unverified reaches the writer; --require only moves the exit.
+# Spec AC5/AC6: either opt-in reaches the writer as allow_below_required.
+@pytest.mark.parametrize(
+    "flag", ["--allow-below-required", "--allow-unverified"]
+)
+def test_fix_open_pr_below_required_opt_in_reaches_the_writer(
+    flag, a_repo, a_specs, a_no_command_config, monkeypatch
+):
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--open-pr",
+            flag,
+            remote=object(),
+        )
+        == 1
+    )
+    (call,) = calls
+    assert call["required"] is ProofLevel.TESTS_PASSED
+    assert call["allow_below_required"] is True
+
+
+# Spec AC6: --allow-unverified still works at the requirement with --require.
 def test_fix_open_pr_allow_unverified_is_passed_through(
     a_repo, a_specs, a_no_command_config, monkeypatch
 ):
@@ -546,7 +766,7 @@ def test_fix_open_pr_allow_unverified_is_passed_through(
         )
         == 0
     )
-    assert calls[0]["allow_unverified"] is True
+    assert calls[0]["allow_below_required"] is True
 
 
 # Spec AC6: any refused writer result makes the run a 1 and is rendered.
@@ -645,13 +865,31 @@ def test_missing_spec_exits_two(a_repo, a_specs, tmp_path, capsys):
     assert "Traceback" not in err
 
 
-# Spec AC8/M6: only the shipped proof levels parse; the rest names T7.
-def test_unknown_require_names_t7(a_repo, a_specs, capsys):
+# Spec AC2/M6: an unknown --require names the five ladder levels.
+def test_unknown_require_names_the_five_levels(a_repo, a_specs, capsys):
     assert a_fix(a_repo, a_specs, "--require", "BY_HAND") == 2
 
     err = capsys.readouterr().err
     assert "--require" in err
-    assert "T7" in err
+    assert "TYPES_BUILD_ONLY" in err
+    assert "UNVERIFIED" in err
+
+
+# Spec AC2/AC7: a bad [tenon] require in --json mode is one error object.
+def test_bad_require_in_the_config_json_is_one_error(a_repo, a_specs, capsys):
+    (a_repo / "tenon.toml").write_text(
+        '[locate]\nsdk_package = "acme.client"\n\n[tenon]\nrequire = "BY_HAND"\n'
+    )
+
+    assert a_fix(a_repo, a_specs, "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "config"
+    assert "TYPES_BUILD_ONLY" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
 
 
 # Spec M10: an unexpected failure is an internal 1, not a traceback.
@@ -689,6 +927,27 @@ def a_run_module_check(repo, specs, seed, *extra):
     )
 
 
+def a_run_module_fix(repo, specs, seed, *extra):
+    old, new = specs
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tenon",
+            "fix",
+            str(repo),
+            "--old",
+            str(old),
+            "--new",
+            str(new),
+            *extra,
+            "--json",
+        ],
+        capture_output=True,
+        env={**os.environ, "PYTHONHASHSEED": seed},
+    )
+
+
 # Spec AC10/M12: the same inputs give byte-identical JSON across hash seeds.
 def test_check_json_is_byte_stable_across_hash_seeds(a_repo, a_specs):
     first = a_run_module_check(a_repo, a_specs, "0")
@@ -711,3 +970,25 @@ def test_check_ts_json_is_byte_stable_across_hash_seeds(a_ts_repo):
     assert first.stdout == second.stdout
     assert b"src/billing.ts" in first.stdout
     assert str(a_ts_repo.repo).encode() not in first.stdout
+
+
+# Spec AC7/M12: a build-only fix report is byte-identical across hash seeds.
+def test_fix_build_only_json_is_byte_stable_across_hash_seeds(
+    a_repo, a_specs, a_no_command_config, a_build
+):
+    flags = (
+        "--config",
+        str(a_no_command_config),
+        "--build",
+        a_build,
+        "--require",
+        "TYPES_BUILD_ONLY",
+    )
+    first = a_run_module_fix(a_repo, a_specs, "0", *flags)
+    second = a_run_module_fix(a_repo, a_specs, "1", *flags)
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    assert first.stdout == second.stdout
+    assert b"TYPES_BUILD_ONLY" in first.stdout
+    assert str(a_repo).encode() not in first.stdout
