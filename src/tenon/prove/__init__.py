@@ -1,4 +1,5 @@
 from .copy import CopyError, apply_diff, copy_tree, isolated_copy
+from .plan import ProofPlan
 from .result import (
     PROOF_RANK,
     CheckResult,
@@ -9,7 +10,7 @@ from .result import (
     proof_rank,
     tail,
 )
-from .run import prove, run_check
+from .run import prove, prove_plan, run_check
 
 __all__ = [
     "PROOF_RANK",
@@ -17,6 +18,7 @@ __all__ = [
     "CopyError",
     "ProofCause",
     "ProofLevel",
+    "ProofPlan",
     "ProofResult",
     "ProofStage",
     "apply_diff",
@@ -24,6 +26,7 @@ __all__ = [
     "isolated_copy",
     "proof_rank",
     "prove",
+    "prove_plan",
     "run_check",
     "tail",
 ]

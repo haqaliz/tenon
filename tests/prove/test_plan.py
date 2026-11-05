@@ -17,6 +17,7 @@ from tenon.prove import (
     ProofLevel,
     ProofStage,
     apply_diff,
+    prove,
     run_check,
 )
 from tenon.prove.plan import ProofPlan
@@ -519,3 +520,57 @@ def test_checks_run_in_a_copy_that_is_removed(monkeypatch):
     assert len(seen) == 8
     assert all(PROOF_BASIC not in path.parents for path in seen)
     assert all(not path.exists() for path in seen)
+
+
+# Spec AC8 / PRD M5: the T4 shortcut is exactly a tests-only plan.
+def test_the_prove_shortcut_is_a_tests_only_plan():
+    result = prove(a_rename_proposal(), PROOF_BASIC, list(COMMAND))
+
+    assert result.level is ProofLevel.TESTS_PASSED
+    assert result.cause is None
+    assert result.patch_applied is True
+    assert check_order(result) == [
+        ("baseline", ProofStage.TESTS),
+        ("after", ProofStage.TESTS),
+    ]
+    assert result.baseline is result.checks[0]
+    assert result.after is result.checks[1]
+
+
+# Spec AC8 / PRD M5: the T4 causes survive the delegation.
+def test_the_prove_shortcut_keeps_tests_failed_before():
+    result = prove(a_rename_proposal(), PROOF_BASIC, FAILING)
+
+    assert result.level is ProofLevel.UNVERIFIED
+    assert result.cause is ProofCause.TESTS_FAILED_BEFORE
+    assert check_order(result) == [("baseline", ProofStage.TESTS)]
+    assert result.after is None
+    assert result.patch_applied is False
+
+
+# Spec AC8: the shortcut still names an empty command before copying.
+def test_the_prove_shortcut_empty_command_is_no_tests_found_before_copying(
+    monkeypatch,
+):
+    def unexpected(*args, **kwargs):
+        raise AssertionError("an empty command must not copy")
+
+    monkeypatch.setattr("tenon.prove.copy.copy_tree", unexpected)
+
+    result = prove(a_rename_proposal(), PROOF_BASIC, [])
+
+    assert result.level is ProofLevel.UNVERIFIED
+    assert result.cause is ProofCause.NO_TESTS_FOUND
+    assert result.baseline is None
+    assert result.after is None
+    assert result.checks == ()
+    assert result.patch_applied is False
+
+
+# PRD M3/M4: both new names belong to the public package.
+def test_the_package_exports_the_plan_and_runner():
+    import tenon.prove as package
+
+    assert package.ProofPlan is ProofPlan
+    assert package.prove_plan is prove_plan
+    assert {"ProofPlan", "prove_plan"} <= set(package.__all__)
