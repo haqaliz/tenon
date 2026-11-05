@@ -10,12 +10,23 @@ import pytest
 from tenon.detect import diff, parse
 from tenon.locate import LocateConfig, locate
 from tenon.propose import propose
-from tenon.prove import CheckResult, ProofCause, ProofLevel, ProofResult
+from tenon.prove import CheckResult, ProofCause, ProofLevel, ProofResult, ProofStage
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
 PROOF_BASIC = FIXTURES / "proof-basic"
 ACME = LocateConfig(sdk_package="acme.client")
 CHECK_COMMAND = ("python", "-m", "pytest", "-q")
+STAGE_FOR_LEVEL = {
+    ProofLevel.TESTS_PASSED: ProofStage.TESTS,
+    ProofLevel.CHARACTERIZED: ProofStage.CHARACTERIZE,
+    ProofLevel.REPLAYED: ProofStage.REPLAY,
+    ProofLevel.TYPES_BUILD_ONLY: ProofStage.BUILD,
+}
+COMMAND_FOR_LEVEL = {
+    ProofLevel.CHARACTERIZED: ("python", "-m", "pytest", "tests/characterization", "-q"),
+    ProofLevel.REPLAYED: ("python", "-m", "pytest", "tests/replay", "-q"),
+    ProofLevel.TYPES_BUILD_ONLY: ("python", "-m", "compileall", "-q", "."),
+}
 
 OLD_SPEC = """
 openapi: 3.1.0
@@ -54,6 +65,36 @@ def a_passed_proof():
         after=check("after"),
         patch_applied=True,
     )
+
+
+@pytest.fixture
+def a_proof_at():
+    """A green proof at any level, with the checks the result invariant demands."""
+
+    def build(level, **overrides):
+        stage = STAGE_FOR_LEVEL[level]
+        command = COMMAND_FOR_LEVEL.get(level, CHECK_COMMAND)
+
+        def check(kind):
+            return CheckResult(
+                kind=kind,
+                stage=stage,
+                command=command,
+                returncode=0,
+                timed_out=False,
+            )
+
+        values = {
+            "level": level,
+            "baseline": check("baseline"),
+            "after": check("after"),
+            "patch_applied": True,
+            "checks": (check("baseline"), check("after")),
+        }
+        values.update(overrides)
+        return ProofResult(**values)
+
+    return build
 
 
 @pytest.fixture

@@ -27,13 +27,45 @@ UNVERIFIED_PROOF = (
     "Nothing was proven. This is a flagged suggestion: review the change and run "
     "the check before merging."
 )
+TYPES_BUILD_ONLY_SENTENCE = (
+    "The build or type-check command returned 0 before and after the patch; no "
+    "tests ran."
+)
+TYPES_BUILD_ONLY_PROOF = (
+    "The build or type-check ran green before and after the patch, so the change "
+    "did not break it. No tests ran: this is weak proof, and it does not prove the "
+    "change is correct."
+)
+CHARACTERIZED_SENTENCE = (
+    "The user-supplied characterization command returned 0 before and after the "
+    "patch."
+)
+CHARACTERIZED_PROOF = (
+    "The characterization command ran green before and after the patch. It checks "
+    "current behavior, not the vendor's new API; Tenon did not generate it. It does "
+    "not prove the change is correct."
+)
+REPLAYED_SENTENCE = (
+    "The user-supplied recorded-call replay returned 0 before and after the patch."
+)
+REPLAYED_PROOF = (
+    "The recorded-call replay ran green before and after the patch. The recording "
+    "was supplied, not made by Tenon, so it only proves the replayed calls behaved "
+    "as recorded. It does not prove the change is correct."
+)
 
 _LEVEL_SENTENCES = {
     ProofLevel.TESTS_PASSED: TESTS_PASSED_SENTENCE,
+    ProofLevel.CHARACTERIZED: CHARACTERIZED_SENTENCE,
+    ProofLevel.REPLAYED: REPLAYED_SENTENCE,
+    ProofLevel.TYPES_BUILD_ONLY: TYPES_BUILD_ONLY_SENTENCE,
     ProofLevel.UNVERIFIED: UNVERIFIED_SENTENCE,
 }
 _PROOF_PARAGRAPHS = {
     ProofLevel.TESTS_PASSED: TESTS_PASSED_PROOF,
+    ProofLevel.CHARACTERIZED: CHARACTERIZED_PROOF,
+    ProofLevel.REPLAYED: REPLAYED_PROOF,
+    ProofLevel.TYPES_BUILD_ONLY: TYPES_BUILD_ONLY_PROOF,
     ProofLevel.UNVERIFIED: UNVERIFIED_PROOF,
 }
 
