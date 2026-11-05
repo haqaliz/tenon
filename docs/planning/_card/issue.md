@@ -1,40 +1,39 @@
-# Card: feat/typescript-locator
+# Card: feat/proof-ladder
 
-- **Source:** FALLBACK — no GitHub issue (`gh issue view typescript-locator` is not an issue id; `gh issue list` is empty).
+- **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T6 TypeScript/JavaScript locator** (`docs/technical/CAPABILITY_ROADMAP.md:12`)
-- **Milestone:** M2.1 (`docs/ROADMAP.md`)
-- **State:** shipped 2026-11-05 (`src/tenon/locate/ts_*.py`, 1,006 tests)
-- **Branch:** `feat/typescript-locator/aliz`
-- **Worktree:** `.claude/worktrees/feat-typescript-locator`
+- **Capability:** **T7 Proof ladder** (`docs/technical/CAPABILITY_ROADMAP.md:13`)
+- **Milestone:** M2.2 (`docs/ROADMAP.md`)
+- **Branch:** `feat/proof-ladder/aliz`
+- **Worktree:** `.claude/worktrees/feat-proof-ladder`
 
 ## Brief
 
-T2 locates Python call sites. T6 must do the same for TypeScript/JavaScript: given a T1 `Change` and
-a repository root, return the same `LocateResult` — certain sites with file/line/column, ambiguity
-groups with named reasons, and a named non-result — rooted in imports of the configured npm SDK
-package.
+T4 records only `TESTS_PASSED` and `UNVERIFIED`, with one check command. `CLAUDE.md`'s proof contract
+names four usable levels — `TESTS_PASSED`, `CHARACTERIZED`, `REPLAYED`, `TYPES_BUILD_ONLY` — and the
+CLI `--require` ladder promises the user can choose one. R1 (many repos lack tests) is the biggest
+adoption blocker: without a weaker, honestly labelled level, those repos get `UNVERIFIED` and no PR.
 
-The deep dig found a viable path: `tree-sitter` 0.26 with `tree-sitter-typescript` 0.23 and
-`tree-sitter-javascript` 0.25 installs as wheels and parses TS/TSX/JS without Node. T2's `Hit`,
-`Dynamic`, `ScanResult`, `Query`, `derive` and the entire `resolve` certainty policy are
-language-agnostic; T6 needs a TypeScript scanner that emits the same evidence plus a TS config and a
-`locate_ts` wrapper.
+T7 widens the proof contract and the runner: a `ProofPlan` of stage commands, baseline-first runs,
+a `ProofResult` that names the strongest level that actually passed, the new `ProofCause` values,
+the CLI `--require` ladder and exit codes, and the PR title/body/draft gate for weak proof.
+
+The hard rule does not change: execution decides. A model may propose a patch; only a command that
+ran and exited 0 after a green baseline may label it. Weak proof is labelled weak, never promoted.
 
 ## Constraints carried in from the repo
 
-- `CLAUDE.md` §1–2: execution decides; a location is certain only when the call chain is rooted in an
-  SDK import; ambiguity is reported, never guessed.
-- Same contract as T2 (`docs/technical/CAPABILITY_ROADMAP.md` T6): reuse `Site`, `SiteShape`,
-  `AmbiguousGroup`, `LocateResult`, `LocateReason` and the existing certainty policy.
-- `docs/technical/ARCHITECTURE.md` open question: "Language-server or tree-sitter for TypeScript
-  location; decide at T6." The dig recommends tree-sitter in Python.
-- Determinism: byte-stable JSON, ordered by `(path, line, column)`.
-- Offline: committed fixture repos; no network, no Node, no `tsc`, no type inference.
-- R8: each language behind its own fixtures.
+- `CLAUDE.md` §1–2: execution decides; honest levels; `UNVERIFIED` is never presented as verified.
+- `CLAUDE.md` §5: no merge, no default branch; T5's guardrails stay.
+- `docs/technical/ARCHITECTURE.md`: `--require TESTS_PASSED|CHARACTERIZED|REPLAYED|TYPES_BUILD_ONLY`;
+  a required level not reached means a flagged PR, not a verified one.
+- `src/tenon/prove/`: T4's baseline-first, isolated copy, capped tails and closed cause set; T7 extends
+  the contract without weakening those properties.
+- `src/tenon/cli/` and `src/tenon/pr/` consume `ProofLevel`; both must learn the new levels.
+- Offline tests: fixture commands only; no network, no model, no real API call.
 
 ## Scope fence
 
-Not this card: new proposer rules for TS (T3 still edits `keyword`/`dict_key`/`attribute` spans),
-T7 proof levels, MCP/probe (T8), the benchmark (T9), and raw-HTTP call sites with no SDK import.
+Not this card unless the interview chooses it: generating characterization tests, recording real
+traffic, T8 MCP/probe, T9 benchmark, new proposer rules.
