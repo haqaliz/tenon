@@ -1,4 +1,5 @@
 from .config import CliConfig, load_cli_config, overrides, resolve_config_path
+from .main import main
 from .report import (
     FixResult,
     check_exit,
@@ -16,6 +17,7 @@ __all__ = [
     "check_exit",
     "fix_exit",
     "load_cli_config",
+    "main",
     "overrides",
     "render_check_json",
     "render_check_text",

@@ -5,6 +5,9 @@ description = "Keep your code fitted to the APIs it depends on."
 requires-python = ">=3.11"
 dependencies = ["pyyaml>=6"]
 
+[project.scripts]
+tenon = "tenon.cli:main"
+
 [dependency-groups]
 dev = ["pytest>=8"]
 
