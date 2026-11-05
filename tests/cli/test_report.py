@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tenon.cli.report import (
+    _LEVEL_RANK,
     FixResult,
     check_exit,
     fix_exit,
@@ -28,7 +29,15 @@ from tenon.locate import (
     SiteShape,
 )
 from tenon.propose import Edit, Proposal, ProposalReason, SkipReason, Skipped
-from tenon.prove import CheckResult, ProofCause, ProofLevel, ProofResult
+from tenon.prove import (
+    PROOF_RANK,
+    CheckResult,
+    ProofCause,
+    ProofLevel,
+    ProofResult,
+    ProofStage,
+    proof_rank,
+)
 from tenon.pr import PrDraft, PrRefusal, PrResult, PrStatus
 
 POINTER = "#/components/schemas/Charge/properties"
@@ -144,6 +153,55 @@ def an_unverified_proof(cause=ProofCause.NO_TESTS_FOUND, **overrides):
     }
     values.update(overrides)
     return ProofResult(**values)
+
+
+STAGE_FOR_LEVEL = {
+    ProofLevel.TESTS_PASSED: ProofStage.TESTS,
+    ProofLevel.CHARACTERIZED: ProofStage.CHARACTERIZE,
+    ProofLevel.REPLAYED: ProofStage.REPLAY,
+    ProofLevel.TYPES_BUILD_ONLY: ProofStage.BUILD,
+}
+
+
+def a_proof_for(level):
+    """A green proof of ``level`` with the matching stage's baseline/after checks."""
+    stage = STAGE_FOR_LEVEL[level]
+    baseline = a_check(kind="baseline", stage=stage)
+    after = a_check(kind="after", stage=stage)
+    return a_passed_proof(
+        level=level,
+        baseline=baseline,
+        after=after,
+        checks=(baseline, after),
+    )
+
+
+def a_two_stage_proof(*, test_after=0, cause=None):
+    """A green build plus a tests stage; a cause makes the result UNVERIFIED."""
+    build_baseline = a_check(
+        kind="baseline", command=("python", "-c", "import acme"), stage=ProofStage.BUILD
+    )
+    test_baseline = a_check(kind="baseline", command=COMMAND, stage=ProofStage.TESTS)
+    build_after = a_check(
+        kind="after", command=("python", "-c", "import acme"), stage=ProofStage.BUILD
+    )
+    test_after_check = a_check(
+        kind="after", command=COMMAND, returncode=test_after, stage=ProofStage.TESTS
+    )
+    checks = (build_baseline, test_baseline, build_after, test_after_check)
+    if cause is not None:
+        return an_unverified_proof(
+            cause=cause,
+            baseline=test_baseline,
+            after=test_after_check,
+            patch_applied=True,
+            checks=checks,
+        )
+    return a_passed_proof(
+        baseline=test_baseline,
+        after=test_after_check,
+        checks=checks,
+    )
 
 
 def a_draft(**overrides):
@@ -290,6 +348,27 @@ def test_fix_exit_requires_every_requested_pr_to_open():
     assert fix_exit(2, results, ProofLevel.TESTS_PASSED) == 1
 
 
+# Spec AC7/M9: the report ranks with the shipped five-level ladder.
+def test_level_rank_is_the_shipped_ladder():
+    assert _LEVEL_RANK == PROOF_RANK
+    assert {level: proof_rank(level) for level in ProofLevel} == PROOF_RANK
+
+
+# Spec AC7/M9: every proof level is compared with every requirement by rank.
+@pytest.mark.parametrize("level", list(ProofLevel))
+@pytest.mark.parametrize("require", list(ProofLevel))
+def test_fix_exit_compares_every_level_with_every_requirement(level, require):
+    proof = (
+        an_unverified_proof()
+        if level is ProofLevel.UNVERIFIED
+        else a_proof_for(level)
+    )
+    result = a_fix_result(proof=proof)
+    expected = 0 if proof_rank(level) >= proof_rank(require) else 1
+
+    assert fix_exit(1, [result], require) == expected
+
+
 # Spec: the PR field is optional and defaults to no request.
 def test_fix_result_defaults_to_no_pr_request():
     result = FixResult(
@@ -428,7 +507,7 @@ Baseline exit: 0
 After exit: 0
 Skipped: none
 
-1 change, 1 proposal, 1 passed, 0 unverified, 0 PRs opened, 0 PRs refused
+1 change, 1 proposal, 1 passed, 0 characterized, 0 replayed, 0 build-only, 0 unverified, 0 PRs opened, 0 PRs refused
 """
 
 
@@ -461,8 +540,8 @@ def test_fix_text_names_the_unverified_cause_and_missing_checks():
         "After exit: not run\n"
         "Skipped: none\n"
         "\n"
-        "1 change, 0 proposals, 0 passed, 1 unverified, 0 PRs opened, "
-        "0 PRs refused\n"
+        "1 change, 0 proposals, 0 passed, 0 characterized, 0 replayed, "
+        "0 build-only, 1 unverified, 0 PRs opened, 0 PRs refused\n"
     )
 
 
@@ -523,6 +602,42 @@ def test_fix_text_renders_a_timeout_as_timed_out():
     assert "After exit: 0\n" in text
 
 
+# Spec AC7/S2: every configured stage is grouped in runner order with both exits.
+def test_fix_text_shows_every_stage_command_and_exits():
+    text = render_fix_text([a_fix_result(proof=a_two_stage_proof())])
+
+    build = text.index("BUILD: python -c import acme")
+    build_baseline = text.index("Baseline exit: 0", build)
+    build_after = text.index("After exit: 0", build_baseline)
+    tests = text.index("TESTS: python -m pytest -q")
+    tests_baseline = text.index("Baseline exit: 0", tests)
+    tests_after = text.index("After exit: 0", tests_baseline)
+
+    assert (
+        build
+        < build_baseline
+        < build_after
+        < tests
+        < tests_baseline
+        < tests_after
+    )
+    assert text.count("Baseline exit:") == 2
+    assert text.count("After exit:") == 2
+
+
+# Spec AC4/AC7: a red test after a green build shows both exits and the cause.
+def test_fix_text_shows_the_green_build_before_a_red_test():
+    proof = a_two_stage_proof(test_after=1, cause=ProofCause.TESTS_FAILED_AFTER)
+    text = render_fix_text([a_fix_result(proof=proof)])
+
+    assert "Proof: UNVERIFIED\n" in text
+    assert "Cause: TESTS_FAILED_AFTER\n" in text
+    build = text.index("BUILD: python -c import acme")
+    tests = text.index("TESTS: python -m pytest -q")
+    assert build < text.index("After exit: 0", build) < tests
+    assert text.index("After exit: 1", tests) > tests
+
+
 # Spec AC4 / S1: the summary counts every result and every PR outcome.
 def test_fix_text_summary_counts_results_and_prs():
     results = [
@@ -533,8 +648,28 @@ def test_fix_text_summary_counts_results_and_prs():
     text = render_fix_text(results)
 
     assert text.endswith(
-        "2 changes, 2 proposals, 1 passed, 1 unverified, 1 PR opened, "
-        "1 PR refused\n"
+        "2 changes, 2 proposals, 1 passed, 0 characterized, 0 replayed, "
+        "0 build-only, 1 unverified, 1 PR opened, 1 PR refused\n"
+    )
+
+
+# Spec AC7: every level has its own count in the one summary line.
+def test_fix_text_summary_counts_every_level():
+    results = [
+        a_fix_result(proof=a_proof_for(level))
+        for level in (
+            ProofLevel.TESTS_PASSED,
+            ProofLevel.CHARACTERIZED,
+            ProofLevel.REPLAYED,
+            ProofLevel.TYPES_BUILD_ONLY,
+        )
+    ] + [a_fix_result(proof=an_unverified_proof())]
+
+    text = render_fix_text(results)
+
+    assert text.endswith(
+        "5 changes, 5 proposals, 1 passed, 1 characterized, 1 replayed, "
+        "1 build-only, 1 unverified, 0 PRs opened, 0 PRs refused\n"
     )
 
 
@@ -639,6 +774,9 @@ def test_fix_json_is_one_object_with_the_shipped_dicts():
                     "changes": 1,
                     "proposals": 1,
                     "passed": 1,
+                    "characterized": 0,
+                    "replayed": 0,
+                    "build_only": 0,
                     "unverified": 0,
                     "prs_opened": 1,
                     "prs_refused": 0,
@@ -672,10 +810,30 @@ def test_fix_json_renders_null_and_refused_prs():
         "changes",
         "proposals",
         "passed",
+        "characterized",
+        "replayed",
+        "build_only",
         "unverified",
         "prs_opened",
         "prs_refused",
     }
+
+
+# Spec AC7: the JSON proof carries every stage check and its level count.
+def test_fix_json_carries_every_stage_check_and_level_count():
+    result = a_fix_result(proof=a_two_stage_proof())
+
+    payload = json.loads(render_fix_json([result]))
+
+    proof = payload["results"][0]["proof"]
+    assert [check["stage"] for check in proof["checks"]] == [
+        "BUILD",
+        "TESTS",
+        "BUILD",
+        "TESTS",
+    ]
+    assert payload["summary"]["passed"] == 1
+    assert payload["summary"]["build_only"] == 0
 
 
 # Spec AC5: zero results produce zero counts, not missing keys.
@@ -692,6 +850,9 @@ def test_json_summaries_are_zero_without_results():
         "changes": 0,
         "proposals": 0,
         "passed": 0,
+        "characterized": 0,
+        "replayed": 0,
+        "build_only": 0,
         "unverified": 0,
         "prs_opened": 0,
         "prs_refused": 0,

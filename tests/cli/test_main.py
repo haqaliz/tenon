@@ -386,6 +386,59 @@ def test_fix_green_build_red_test_is_unverified_after(
     assert [check["returncode"] for check in test_checks] == [0, 1]
 
 
+# Spec AC4/AC7: the text keeps the green build visible before the red test.
+def test_fix_green_build_red_test_text_shows_the_build_pass(
+    a_repo, a_specs, a_build, a_test_red_after_patch, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--build",
+            a_build,
+            "--check",
+            a_test_red_after_patch,
+        )
+        == 1
+    )
+    out = capsys.readouterr().out
+    assert "Proof: UNVERIFIED" in out
+    assert "Cause: TESTS_FAILED_AFTER" in out
+    build = out.index("BUILD: ")
+    tests = out.index("TESTS: ")
+    assert build < out.index("import acme.billing", build) < tests
+    assert build < out.index("After exit: 0", build) < tests
+    assert out.index("After exit: 1", tests) > tests
+
+
+# Spec AC7: a build-only run counts build_only and carries the build checks.
+def test_fix_build_only_json_counts_the_level(
+    a_repo, a_specs, a_no_command_config, a_build, capsys
+):
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--config",
+            str(a_no_command_config),
+            "--build",
+            a_build,
+            "--require",
+            "TYPES_BUILD_ONLY",
+            "--json",
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["summary"]["build_only"] == 1
+    assert payload["summary"]["passed"] == 0
+    assert payload["summary"]["characterized"] == 0
+    proof = payload["results"][0]["proof"]
+    assert proof["level"] == "TYPES_BUILD_ONLY"
+    assert [check["stage"] for check in proof["checks"]] == ["BUILD", "BUILD"]
+
+
 # Spec AC1: the four stage flags reach one plan, in plan order.
 def test_fix_stage_flags_reach_one_plan(a_repo, a_specs, monkeypatch):
     seen = []
@@ -825,6 +878,27 @@ def a_run_module_check(repo, specs, seed, *extra):
     )
 
 
+def a_run_module_fix(repo, specs, seed, *extra):
+    old, new = specs
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tenon",
+            "fix",
+            str(repo),
+            "--old",
+            str(old),
+            "--new",
+            str(new),
+            *extra,
+            "--json",
+        ],
+        capture_output=True,
+        env={**os.environ, "PYTHONHASHSEED": seed},
+    )
+
+
 # Spec AC10/M12: the same inputs give byte-identical JSON across hash seeds.
 def test_check_json_is_byte_stable_across_hash_seeds(a_repo, a_specs):
     first = a_run_module_check(a_repo, a_specs, "0")
@@ -847,3 +921,25 @@ def test_check_ts_json_is_byte_stable_across_hash_seeds(a_ts_repo):
     assert first.stdout == second.stdout
     assert b"src/billing.ts" in first.stdout
     assert str(a_ts_repo.repo).encode() not in first.stdout
+
+
+# Spec AC7/M12: a build-only fix report is byte-identical across hash seeds.
+def test_fix_build_only_json_is_byte_stable_across_hash_seeds(
+    a_repo, a_specs, a_no_command_config, a_build
+):
+    flags = (
+        "--config",
+        str(a_no_command_config),
+        "--build",
+        a_build,
+        "--require",
+        "TYPES_BUILD_ONLY",
+    )
+    first = a_run_module_fix(a_repo, a_specs, "0", *flags)
+    second = a_run_module_fix(a_repo, a_specs, "1", *flags)
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    assert first.stdout == second.stdout
+    assert b"TYPES_BUILD_ONLY" in first.stdout
+    assert str(a_repo).encode() not in first.stdout
