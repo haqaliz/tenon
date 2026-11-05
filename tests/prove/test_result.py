@@ -43,6 +43,34 @@ def test_check_result_rejects_an_unknown_kind():
         a_check(kind="during")
 
 
+# Spec AC3: a check without a stage is a tests check, so old constructors agree.
+def test_check_result_without_a_stage_is_tests():
+    assert a_check().stage is ProofStage.TESTS
+
+
+# Spec AC3: a string stage coerces to the enum.
+def test_check_result_coerces_a_string_stage():
+    assert a_check(stage="REPLAY").stage is ProofStage.REPLAY
+
+
+def test_check_result_rejects_an_unknown_stage():
+    with pytest.raises(ValueError):
+        a_check(stage="PROBE")
+
+
+# Spec AC3: every check dictionary has the old keys plus the stage.
+def test_check_result_to_dict_has_the_contract_keys():
+    assert set(a_check().to_dict()) == {
+        "kind",
+        "stage",
+        "command",
+        "returncode",
+        "timed_out",
+        "stdout_tail",
+        "stderr_tail",
+    }
+
+
 # Spec AC7: a timeout has no return code, and a killed process may still have one.
 def test_check_result_accepts_a_timeout_without_a_return_code():
     check = a_check(returncode=None, timed_out=True)
@@ -297,6 +325,7 @@ def test_to_dict_has_the_contract_keys_and_a_nested_check_record():
     assert parsed["cause"] is None
     assert parsed["after"] == {
         "kind": "after",
+        "stage": "TESTS",
         "command": ["python", "-m", "pytest", "-q"],
         "returncode": 0,
         "timed_out": False,

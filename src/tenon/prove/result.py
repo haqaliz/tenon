@@ -67,15 +67,21 @@ class CheckResult:
     timed_out: bool
     stdout_tail: str = ""
     stderr_tail: str = ""
+    stage: ProofStage = ProofStage.TESTS
 
     def __post_init__(self) -> None:
         if self.kind not in ("baseline", "after"):
             raise ValueError(f"kind must be baseline or after: {self.kind!r}")
+        stage = self.stage
+        if not isinstance(stage, ProofStage):
+            stage = ProofStage(stage)
+        object.__setattr__(self, "stage", stage)
         object.__setattr__(self, "command", tuple(self.command))
 
     def to_dict(self) -> dict[str, object]:
         return {
             "kind": self.kind,
+            "stage": self.stage.value,
             "command": list(self.command),
             "returncode": self.returncode,
             "timed_out": self.timed_out,
