@@ -2,7 +2,7 @@ import re
 
 import pytest
 
-from tenon.cli import CliConfig, load_cli_config, overrides
+from tenon.cli import CliConfig, load_cli_config, overrides, resolve_config_path
 from tenon.locate import LocateConfig
 from tenon.prove import ProofLevel
 
@@ -87,7 +87,10 @@ def test_full_file_round_trips(tmp_path):
         ),
         ('[locate]\nsdk_package = "stripe"\nfields = ["x"]\n', "fields"),
         ('tenon = true\n[locate]\nsdk_package = "stripe"\n', "[tenon]"),
-        ('[locate]\nsdk_package = "stripe"\n\n[tenon]\ncommand = "pytest"\n', "command"),
+        (
+            '[locate]\nsdk_package = "stripe"\n\n[tenon]\ncommand = "pytest"\n',
+            "command",
+        ),
         (
             '[locate]\nsdk_package = "stripe"\n\n[tenon]\ncommand = ["pytest", ""]\n',
             "command",
@@ -211,3 +214,42 @@ def test_overrides_replaces_breaking_only(config, flag, expected):
 def test_overrides_rejects_bad_flags(kwargs, key):
     with pytest.raises(ValueError, match=re.escape(key)):
         overrides(a_config(), **kwargs)
+
+
+# Spec AC6: --config wins even when the repo has its own tenon.toml.
+def test_resolve_config_path_prefers_the_explicit_file(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "tenon.toml").write_text('[locate]\nsdk_package = "stripe"\n')
+    explicit = tmp_path / "explicit.toml"
+    explicit.write_text('[locate]\nsdk_package = "chargebee"\n')
+
+    assert resolve_config_path(repo, str(explicit)) == explicit
+
+
+# Spec AC6: otherwise <repo>/tenon.toml is found when present.
+def test_resolve_config_path_finds_the_repo_file(tmp_path):
+    path = tmp_path / "tenon.toml"
+    path.write_text('[locate]\nsdk_package = "stripe"\n')
+
+    assert resolve_config_path(tmp_path, None) == path
+
+
+# Spec AC6: an absent file returns None, not a crash.
+def test_resolve_config_path_returns_none_when_absent(tmp_path):
+    assert resolve_config_path(tmp_path, None) is None
+
+
+# Spec AC6: the caller builds the empty config from --sdk-package.
+def test_empty_config_uses_the_sdk_package_flag(tmp_path):
+    assert resolve_config_path(tmp_path, None) is None
+
+    assert CliConfig(locate=LocateConfig(sdk_package="stripe")) == a_config()
+
+
+# Spec AC6: no file and no package from either source is a ValueError.
+def test_empty_config_without_an_sdk_package_is_refused(tmp_path):
+    assert resolve_config_path(tmp_path, None) is None
+
+    with pytest.raises(ValueError, match="sdk_package"):
+        CliConfig(locate=LocateConfig(sdk_package=""))

@@ -74,7 +74,9 @@ def load_cli_config(path: str | Path) -> CliConfig:
     if not isinstance(command, list) or not all(
         isinstance(item, str) and item for item in command
     ):
-        raise ValueError(f"{path}: [tenon] command must be an array of non-empty strings")
+        raise ValueError(
+            f"{path}: [tenon] command must be an array of non-empty strings"
+        )
     breaking_only = tenon.get("breaking_only", False)
     if not isinstance(breaking_only, bool):
         raise ValueError(f"{path}: [tenon] breaking_only must be a bool")
@@ -86,7 +88,9 @@ def load_cli_config(path: str | Path) -> CliConfig:
             fields=fields,
         ),
         command=tuple(command),
-        require=a_level(tenon.get("require", ProofLevel.TESTS_PASSED), f"{path}: [tenon] require"),
+        require=a_level(
+            tenon.get("require", ProofLevel.TESTS_PASSED), f"{path}: [tenon] require"
+        ),
         breaking_only=breaking_only,
     )
 
@@ -125,3 +129,11 @@ def overrides(
         require=config.require if require is None else a_level(require, "--require"),
         breaking_only=config.breaking_only if breaking_only is None else breaking_only,
     )
+
+
+def resolve_config_path(repo: str | Path, explicit: str | None) -> Path | None:
+    """The explicit file, else ``<repo>/tenon.toml``, else None."""
+    if explicit is not None:
+        return Path(explicit)
+    candidate = Path(repo) / "tenon.toml"
+    return candidate if candidate.is_file() else None
