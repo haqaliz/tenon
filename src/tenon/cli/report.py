@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from tenon.detect import Change
-from tenon.locate import LocateReason, LocateResult
+from tenon.locate import LocateReason, LocateResult, Site
 from tenon.propose import Proposal
-from tenon.prove import ProofLevel, ProofResult
+from tenon.prove import CheckResult, ProofLevel, ProofResult
 from tenon.pr import PrResult, PrStatus
 
 # Spec AC1: these reasons mean the analysis could not run, not that it found nothing.
@@ -42,7 +42,6 @@ ERROR_TEXT_POINTER = "tenon: {kind}: at {pointer}: {message}"
 ERROR_TEXT_CODE_POINTER = "tenon: {kind}: {code} at {pointer}: {message}"
 
 _SCALARS = (str, int, float, bool, type(None))
-
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +104,7 @@ def _change_line(change: Change) -> str:
     return line
 
 
-def _place(site: Any) -> str:
+def _place(site: Site) -> str:
     return f"{site.path}:{site.line}:{site.column}"
 
 
@@ -149,7 +148,7 @@ def render_check_text(results: Sequence[LocateResult]) -> str:
     return "\n\n".join([*blocks, summary]) + "\n"
 
 
-def _exit(check: Any) -> str:
+def _exit(check: CheckResult | None) -> str:
     if check is None:
         return NOT_RUN
     if check.timed_out:
@@ -310,6 +309,4 @@ def render_error(
     else:
         line = ERROR_TEXT.format(kind=kind, message=message)
     return line + "\n"
-
-
 

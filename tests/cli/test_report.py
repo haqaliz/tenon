@@ -1,6 +1,10 @@
 """Exit codes, text reports and JSON envelopes for the CLI report surface."""
 
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -785,5 +789,171 @@ def test_error_output_has_no_traceback(json_mode):
 
     assert "Traceback" not in text
     assert "File " not in text
+
+
+# Spec AC6: the same inputs render the same bytes twice.
+def test_renderers_are_deterministic_for_the_same_inputs():
+    locate = a_locate(certain=(a_site(),))
+    fix = a_fix_result(pr=an_opened_pr())
+
+    assert render_check_text([locate]) == render_check_text([locate])
+    assert render_fix_text([fix]) == render_fix_text([fix])
+    assert render_check_json([locate]) == render_check_json([locate])
+    assert render_fix_json([fix]) == render_fix_json([fix])
+
+
+DETERMINISM_SCRIPT = """
+from tenon.cli.report import (
+    FixResult,
+    render_check_json,
+    render_check_text,
+    render_fix_json,
+    render_fix_text,
+)
+from tenon.detect import Change, ChangeKind, Location
+from tenon.locate import LocateResult, Site, SiteShape
+from tenon.propose import Edit, Proposal
+from tenon.prove import CheckResult, ProofLevel, ProofResult
+from tenon.pr import PrDraft, PrResult, PrStatus
+
+change = Change(
+    kind=ChangeKind.RENAMED,
+    location=Location(
+        pointer="#/components/schemas/Charge/properties",
+        method="post",
+        path="/v1/checkout/sessions",
+    ),
+    before={"b": 2, "a": 1},
+    after=["z", {"d": 4, "c": 3}],
+)
+site = Site(
+    path="acme/billing.py",
+    line=7,
+    column=30,
+    shape=SiteShape.KEYWORD,
+    symbol="amount",
+)
+locate = LocateResult(change=change, certain=(site,), ambiguous=())
+edit = Edit(
+    path="acme/billing.py",
+    line=7,
+    column=30,
+    shape=SiteShape.KEYWORD,
+    old="amount",
+    new="amount_cents",
+)
+proposal = Proposal(
+    change=change,
+    edits=(edit,),
+    skipped=(),
+    diff="--- a/acme/billing.py\\n+++ b/acme/billing.py\\n",
+)
+check = CheckResult(
+    kind="baseline",
+    command=("python", "-m", "pytest", "-q"),
+    returncode=0,
+    timed_out=False,
+)
+proof = ProofResult(
+    level=ProofLevel.TESTS_PASSED,
+    baseline=check,
+    after=CheckResult(
+        kind="after",
+        command=("python", "-m", "pytest", "-q"),
+        returncode=0,
+        timed_out=False,
+    ),
+    patch_applied=True,
+)
+draft = PrDraft(
+    title="[TESTS_PASSED] tenon: renamed",
+    body="body",
+    branch="tenon/renamed-1234abcd",
+    commit_message="tenon: renamed",
+)
+pr = PrResult(
+    status=PrStatus.OPENED,
+    level=ProofLevel.TESTS_PASSED,
+    draft=draft,
+    url="https://github.com/example/repo/pull/7",
+)
+result = FixResult(
+    change=change,
+    locate=locate,
+    proposal=proposal,
+    proof=proof,
+    pr=pr,
+)
+print(render_check_json([locate]), end="")
+print(render_check_text([locate]), end="")
+print(render_fix_json([result]), end="")
+print(render_fix_text([result]), end="")
+"""
+
+
+def render_with_hash_seed(seed):
+    result = subprocess.run(
+        [sys.executable, "-c", DETERMINISM_SCRIPT],
+        env={**os.environ, "PYTHONHASHSEED": seed},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+# Spec AC6: byte-identical across hash seeds.
+def test_reports_are_byte_stable_across_hash_seeds():
+    assert render_with_hash_seed("0") == render_with_hash_seed("1")
+
+
+# Spec AC8: no absolute path, timestamp, dataclass repr or enum repr leaks.
+def test_reports_have_no_environment_leaks():
+    fixture_root = str(Path(__file__).resolve().parent.parent / "fixtures" / "repos")
+    locate = a_locate(certain=(a_site(),), ambiguous=(an_ambiguous_group(),))
+    fix = a_fix_result(pr=a_refused_pr())
+    texts = (
+        render_check_text([locate]),
+        render_fix_text([fix]),
+        render_check_json([locate]),
+        render_fix_json([fix]),
+    )
+
+    for text in texts:
+        for leak in (
+            fixture_root,
+            "2026-",
+            "ProofResult(",
+            "PrResult(",
+            "LocateResult(",
+            "ProofLevel.",
+            "PrStatus.",
+            "ChangeKind.",
+            "SiteShape.",
+            "Proposal(",
+        ):
+            assert leak not in text
+
+
+# Plan file 3: the report surface is re-exported from the package.
+def test_report_surface_is_exported_from_tenon_cli():
+    import tenon.cli as cli
+
+    names = {
+        "FixResult",
+        "check_exit",
+        "fix_exit",
+        "render_check_text",
+        "render_fix_text",
+        "render_check_json",
+        "render_fix_json",
+        "render_error",
+    }
+
+    assert names <= set(cli.__all__)
+    for name in names:
+        assert getattr(cli, name) is globals()[name]
+
+
 
 
