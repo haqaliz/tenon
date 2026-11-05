@@ -5,8 +5,16 @@ import sys
 
 import pytest
 
-from tenon.prove import CheckResult, ProofCause, ProofLevel, ProofResult, tail
-from tenon.prove.result import PROOF_RANK, ProofStage, proof_rank
+from tenon.prove import (
+    PROOF_RANK,
+    CheckResult,
+    ProofCause,
+    ProofLevel,
+    ProofResult,
+    ProofStage,
+    proof_rank,
+    tail,
+)
 
 
 def a_check(**overrides):
