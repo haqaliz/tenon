@@ -3,12 +3,14 @@
 import json
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
 PROOF_BASIC = FIXTURES / "proof-basic"
+TS_BASIC = FIXTURES / "ts-sdk-basic"
 
 # The M0.3 rename; the fixture call is ``client.charges.create(amount=amount)``.
 OLD_SPEC = """\
@@ -80,6 +82,20 @@ def a_config(command: bool = True) -> str:
     return text
 
 
+def a_ts_copy(destination: Path) -> Path:
+    shutil.copytree(
+        TS_BASIC, destination, ignore=shutil.ignore_patterns("__pycache__")
+    )
+    return destination
+
+
+@dataclass(frozen=True)
+class TsRepo:
+    repo: Path
+    specs: tuple[Path, Path]
+    site: tuple[str, int, int]
+
+
 def a_write_specs(directory: Path, old: str, new: str) -> tuple[Path, Path]:
     old_path = directory / "old.yaml"
     new_path = directory / "new.yaml"
@@ -98,6 +114,19 @@ def a_repo(tmp_path):
 @pytest.fixture
 def a_repo_without_config(tmp_path):
     return a_copy(tmp_path / "repo")
+
+
+@pytest.fixture
+def a_ts_repo(tmp_path):
+    repo = a_ts_copy(tmp_path / "repo")
+    (repo / "tenon.toml").write_text(
+        '[locate]\nlanguage = "ts"\nsdk_package = "stripe"\n'
+    )
+    return TsRepo(
+        repo=repo,
+        specs=a_write_specs(tmp_path, OLD_SPEC, NEW_SPEC),
+        site=("src/billing.ts", 5, 25),
+    )
 
 
 @pytest.fixture

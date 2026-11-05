@@ -160,6 +160,106 @@ def test_missing_config_without_sdk_package_is_usage(a_repo_without_config, a_sp
     assert "sdk-package" in capsys.readouterr().err
 
 
+# Spec AC3: [locate] language = "ts" is enough; no flag is needed.
+def test_check_ts_language_from_the_config(a_ts_repo, capsys):
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs) == 1
+
+    out = capsys.readouterr().out
+    assert "src/billing.ts:5:25" in out
+    assert "amount" in out
+    assert "1 change, 1 certain site, 0 ambiguity groups" in out
+
+
+# Spec AC3: --language ts overrides a file written for Python.
+def test_check_language_flag_overrides_a_python_config(a_ts_repo, capsys):
+    (a_ts_repo.repo / "tenon.toml").write_text(
+        '[locate]\nsdk_package = "stripe"\n'
+    )
+
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--language", "ts") == 1
+    assert "src/billing.ts:5:25" in capsys.readouterr().out
+
+
+# Spec AC3: the TS check uses the shipped JSON envelope.
+def test_check_ts_json_has_one_exact_envelope(a_ts_repo, capsys):
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--json") == 1
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+
+    assert set(payload) == {"command", "results", "summary"}
+    assert payload["command"] == "check"
+    assert payload["summary"] == {"changes": 1, "certain": 1, "ambiguous": 0}
+    (result,) = payload["results"]
+    assert result["certain"][0]["path"] == "src/billing.ts"
+    assert result["certain"][0]["line"] == 5
+    assert result["certain"][0]["column"] == 25
+    assert result["certain"][0]["symbol"] == "amount"
+    assert result["reason"] is None
+    assert out.count("\n") == 1
+
+
+# Spec AC3: a TS change with no matching site is a clean 0.
+def test_check_ts_without_a_site_exits_zero(a_ts_repo, capsys):
+    (a_ts_repo.repo / "src" / "billing.ts").write_text(
+        'import Stripe from "stripe";\n'
+        "\n"
+        'export const client = new Stripe("sk_test");\n'
+        "\n"
+        'client.charges.delete("ch_1");\n'
+    )
+
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs) == 0
+    assert "NO_SITES" in capsys.readouterr().out
+
+
+# Spec AC5: --language python validates the file's npm package as Python.
+def test_language_python_rejects_a_scoped_npm_package(a_ts_repo, capsys):
+    (a_ts_repo.repo / "tenon.toml").write_text(
+        '[locate]\nlanguage = "ts"\nsdk_package = "@scope/pkg"\n'
+    )
+
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--language", "python") == 2
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    assert "Traceback" not in err
+
+
+# Spec AC5: argparse rejects an unknown --language before any analysis.
+def test_unknown_language_flag_is_usage(a_ts_repo, capsys):
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--language", "ruby") == 2
+
+    captured = capsys.readouterr()
+    assert "--language" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC5: a missing file builds the TS default from --sdk-package.
+def test_missing_config_with_language_ts_uses_sdk_package(a_ts_repo, capsys):
+    (a_ts_repo.repo / "tenon.toml").unlink()
+
+    assert (
+        a_check(
+            a_ts_repo.repo,
+            a_ts_repo.specs,
+            "--language",
+            "ts",
+            "--sdk-package",
+            "stripe",
+        )
+        == 1
+    )
+    assert "src/billing.ts" in capsys.readouterr().out
+
+
+# Spec AC5: --language ts without any package is still a usage error.
+def test_missing_config_with_language_ts_without_package_is_usage(a_ts_repo, capsys):
+    (a_ts_repo.repo / "tenon.toml").unlink()
+
+    assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--language", "ts") == 2
+    assert "sdk-package" in capsys.readouterr().err
+
+
 def a_fix(repo, specs, *extra, remote=None):
     old, new = specs
     return main(
