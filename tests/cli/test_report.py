@@ -1,12 +1,17 @@
 """Exit codes, text reports and JSON envelopes for the CLI report surface."""
 
+import json
+
 import pytest
 
 from tenon.cli.report import (
     FixResult,
     check_exit,
     fix_exit,
+    render_check_json,
     render_check_text,
+    render_error,
+    render_fix_json,
     render_fix_text,
 )
 from tenon.detect import Change, ChangeKind, Location
@@ -556,4 +561,229 @@ def test_fix_text_keeps_the_input_order():
     text = render_fix_text([first, second])
 
     assert text.index("endpoint_removed") < text.index("renamed")
+
+
+def a_json(**overrides):
+    values = {
+        "sort_keys": True,
+        "ensure_ascii": False,
+        "separators": (",", ":"),
+    }
+    values.update(overrides)
+    return json.dumps(**values)
+
+
+def assert_json_primitives(value):
+    if isinstance(value, dict):
+        assert all(isinstance(key, str) for key in value)
+        for item in value.values():
+            assert_json_primitives(item)
+        return
+    if isinstance(value, list):
+        for item in value:
+            assert_json_primitives(item)
+        return
+    assert value is None or isinstance(value, (str, int, float, bool))
+
+
+# Spec AC5: the check envelope composes the shipped LocateResult dictionaries.
+def test_check_json_is_one_object_with_the_shipped_dicts():
+    results = [
+        a_locate(certain=(a_site(),)),
+        a_locate(change=an_untouched_change(), reason=LocateReason.NO_SITES),
+    ]
+    expected = (
+        a_json(
+            obj={
+                "command": "check",
+                "results": [result.to_dict() for result in results],
+                "summary": {"changes": 2, "certain": 1, "ambiguous": 0},
+            }
+        )
+        + "\n"
+    )
+
+    assert render_check_json(results) == expected
+
+
+# Spec AC5: the check envelope has exactly the three stated keys.
+def test_check_json_has_the_exact_top_level_keys():
+    payload = json.loads(render_check_json([a_locate(reason=LocateReason.NO_SITES)]))
+
+    assert set(payload) == {"command", "results", "summary"}
+    assert set(payload["summary"]) == {"changes", "certain", "ambiguous"}
+
+
+# Spec AC5: the fix envelope composes every shipped result dictionary.
+def test_fix_json_is_one_object_with_the_shipped_dicts():
+    result = a_fix_result(pr=an_opened_pr())
+    expected = (
+        a_json(
+            obj={
+                "command": "fix",
+                "results": [
+                    {
+                        "change": result.change.to_dict(),
+                        "locate": result.locate.to_dict(),
+                        "proposal": result.proposal.to_dict(),
+                        "proof": result.proof.to_dict(),
+                        "pr": result.pr.to_dict(),
+                    }
+                ],
+                "summary": {
+                    "changes": 1,
+                    "proposals": 1,
+                    "passed": 1,
+                    "unverified": 0,
+                    "prs_opened": 1,
+                    "prs_refused": 0,
+                },
+            }
+        )
+        + "\n"
+    )
+
+    assert render_fix_json([result]) == expected
+
+
+# Spec AC5: a missing PR is null, and a refused PR keeps its shipped dictionary.
+def test_fix_json_renders_null_and_refused_prs():
+    no_pr = a_fix_result()
+    refused = a_fix_result(pr=a_refused_pr(), proof=an_unverified_proof())
+
+    payload = json.loads(render_fix_json([no_pr, refused]))
+
+    assert set(payload) == {"command", "results", "summary"}
+    assert payload["results"][0]["pr"] is None
+    assert payload["results"][1]["pr"] == refused.pr.to_dict()
+    assert set(payload["results"][0]) == {
+        "change",
+        "locate",
+        "proposal",
+        "proof",
+        "pr",
+    }
+    assert set(payload["summary"]) == {
+        "changes",
+        "proposals",
+        "passed",
+        "unverified",
+        "prs_opened",
+        "prs_refused",
+    }
+
+
+# Spec AC5: zero results produce zero counts, not missing keys.
+def test_json_summaries_are_zero_without_results():
+    check_payload = json.loads(render_check_json([]))
+    fix_payload = json.loads(render_fix_json([]))
+
+    assert check_payload["summary"] == {
+        "changes": 0,
+        "certain": 0,
+        "ambiguous": 0,
+    }
+    assert fix_payload["summary"] == {
+        "changes": 0,
+        "proposals": 0,
+        "passed": 0,
+        "unverified": 0,
+        "prs_opened": 0,
+        "prs_refused": 0,
+    }
+
+
+# Spec AC5: one line, one trailing newline, only JSON primitives.
+def test_json_envelopes_are_one_line_of_primitives():
+    check_text = render_check_json([a_locate(certain=(a_site(),))])
+    fix_text = render_fix_json([a_fix_result(pr=an_opened_pr())])
+
+    for text in (check_text, fix_text):
+        assert text.endswith("\n")
+        assert text.count("\n") == 1
+        assert_json_primitives(json.loads(text))
+        assert "ProofResult(" not in text
+        assert "PrResult(" not in text
+        assert "LocateResult(" not in text
+        assert "ProofLevel." not in text
+        assert "PrStatus." not in text
+
+
+# Spec AC7: the JSON error is one object with the four stated keys.
+def test_error_json_is_one_object_with_the_four_keys():
+    text = render_error(
+        "spec",
+        "not a spec",
+        code="NOT_A_SPEC",
+        pointer="#/components/schemas/Charge",
+        json_mode=True,
+    )
+
+    assert text == (
+        a_json(
+            obj={
+                "error": {
+                    "kind": "spec",
+                    "code": "NOT_A_SPEC",
+                    "pointer": "#/components/schemas/Charge",
+                    "message": "not a spec",
+                }
+            }
+        )
+        + "\n"
+    )
+    assert text.count("\n") == 1
+
+
+# Spec AC7: an error without a code or pointer still carries both keys as null.
+def test_error_json_keeps_code_and_pointer_null():
+    payload = json.loads(render_error("usage", "bad input", json_mode=True))
+
+    assert payload == {
+        "error": {
+            "kind": "usage",
+            "code": None,
+            "pointer": None,
+            "message": "bad input",
+        }
+    }
+
+
+# Spec AC7: text mode is one stderr-ready line.
+def test_error_text_is_one_line():
+    assert render_error("usage", "bad input") == "tenon: usage: bad input\n"
+
+
+# Spec AC7: the code and pointer are named when present.
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        (
+            {"code": "NOT_A_SPEC"},
+            "tenon: spec: NOT_A_SPEC: not a spec\n",
+        ),
+        (
+            {"pointer": "#/components/schemas/Charge"},
+            "tenon: spec: at #/components/schemas/Charge: not a spec\n",
+        ),
+        (
+            {"code": "NOT_A_SPEC", "pointer": "#/components/schemas/Charge"},
+            "tenon: spec: NOT_A_SPEC at #/components/schemas/Charge: not a spec\n",
+        ),
+    ],
+)
+def test_error_text_names_the_code_and_pointer(kwargs, expected):
+    assert render_error("spec", "not a spec", **kwargs) == expected
+
+
+# Spec AC7: neither error mode contains a traceback.
+@pytest.mark.parametrize("json_mode", [False, True])
+def test_error_output_has_no_traceback(json_mode):
+    text = render_error(
+        "internal", "boom", code="X", pointer="#/x", json_mode=json_mode
+    )
+
+    assert "Traceback" not in text
+    assert "File " not in text
+
 

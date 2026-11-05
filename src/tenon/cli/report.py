@@ -36,6 +36,10 @@ PR_REFUSED_LINE = "PR refused: {refusal}"
 PR_REFUSED_DETAIL_LINE = "PR refused: {refusal}: {detail}"
 NOT_RUN = "not run"
 TIMED_OUT = "timed out"
+ERROR_TEXT = "tenon: {kind}: {message}"
+ERROR_TEXT_CODE = "tenon: {kind}: {code}: {message}"
+ERROR_TEXT_POINTER = "tenon: {kind}: at {pointer}: {message}"
+ERROR_TEXT_CODE_POINTER = "tenon: {kind}: {code} at {pointer}: {message}"
 
 _SCALARS = (str, int, float, bool, type(None))
 
@@ -233,5 +237,79 @@ def render_fix_text(results: Sequence[FixResult]) -> str:
     blocks = [_fix_block(result) for result in results]
     summary = FIX_SUMMARY.format(**_fix_counts(results))
     return "\n\n".join([*blocks, summary]) + "\n"
+
+
+def _canonical_json(payload: Any) -> str:
+    return (
+        json.dumps(
+            payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
+        + "\n"
+    )
+
+
+def render_check_json(results: Sequence[LocateResult]) -> str:
+    """One byte-stable check envelope composing the shipped dictionaries."""
+    return _canonical_json(
+        {
+            "command": "check",
+            "results": [result.to_dict() for result in results],
+            "summary": _check_counts(results),
+        }
+    )
+
+
+def render_fix_json(results: Sequence[FixResult]) -> str:
+    """One byte-stable fix envelope composing the shipped dictionaries."""
+    return _canonical_json(
+        {
+            "command": "fix",
+            "results": [
+                {
+                    "change": result.change.to_dict(),
+                    "locate": result.locate.to_dict(),
+                    "proposal": result.proposal.to_dict(),
+                    "proof": result.proof.to_dict(),
+                    "pr": None if result.pr is None else result.pr.to_dict(),
+                }
+                for result in results
+            ],
+            "summary": _fix_counts(results),
+        }
+    )
+
+
+def render_error(
+    kind: str,
+    message: str,
+    *,
+    code: str | None = None,
+    pointer: str | None = None,
+    json_mode: bool = False,
+) -> str:
+    """One error object in JSON mode, or one stderr-ready line. Never a traceback."""
+    if json_mode:
+        return _canonical_json(
+            {
+                "error": {
+                    "kind": kind,
+                    "code": code,
+                    "pointer": pointer,
+                    "message": message,
+                }
+            }
+        )
+    if code is not None and pointer is not None:
+        line = ERROR_TEXT_CODE_POINTER.format(
+            kind=kind, code=code, pointer=pointer, message=message
+        )
+    elif code is not None:
+        line = ERROR_TEXT_CODE.format(kind=kind, code=code, message=message)
+    elif pointer is not None:
+        line = ERROR_TEXT_POINTER.format(kind=kind, pointer=pointer, message=message)
+    else:
+        line = ERROR_TEXT.format(kind=kind, message=message)
+    return line + "\n"
+
 
 
