@@ -1,5 +1,6 @@
 from .diff import diff
 from .ingest import load, parse
+from .mcp_ingest import load_mcp, parse_mcp
 from .record import (
     Change,
     ChangeKind,
@@ -22,5 +23,7 @@ __all__ = [
     "UnanalyzedReason",
     "diff",
     "load",
+    "load_mcp",
     "parse",
+    "parse_mcp",
 ]

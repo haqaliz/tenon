@@ -1,5 +1,8 @@
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -232,3 +235,52 @@ def test_load_mcp_preserves_a_cycle_marker():
         ]
         == node["properties"]["next"]
     )
+
+
+# Spec AC5: the same bytes serialize identically across hash seeds.
+SUBPROCESS_SCRIPT = f"""
+import json
+from pathlib import Path
+
+from tenon.detect.mcp_ingest import load_mcp
+
+document = load_mcp(Path({str(FIXTURES / "tools-v1.json")!r}))
+print(json.dumps(document, sort_keys=True), end="")
+"""
+
+
+def a_document_with_hash_seed(seed):
+    result = subprocess.run(
+        [sys.executable, "-c", SUBPROCESS_SCRIPT],
+        env={**os.environ, "PYTHONHASHSEED": seed},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def test_the_mcp_document_is_byte_stable_across_hash_seeds():
+    assert a_document_with_hash_seed("0") == a_document_with_hash_seed("1")
+
+
+# Spec AC5: tool order does not change the normalized JSON.
+def test_the_mcp_document_is_stable_across_tool_order():
+    raw = json.loads((FIXTURES / "tools-v1.json").read_text(encoding="utf-8"))
+    raw["tools"].reverse()
+
+    reordered = parse_mcp(json.dumps(raw), "<inline>")
+    original = load_mcp(FIXTURES / "tools-v1.json")
+
+    assert json.dumps(reordered, sort_keys=True) == json.dumps(original, sort_keys=True)
+
+
+# Spec AC6: the package exports the MCP loaders; load/parse/diff stay as shipped.
+def test_tenon_detect_exports_the_mcp_loaders():
+    import tenon.detect
+
+    assert tenon.detect.parse_mcp is parse_mcp
+    assert tenon.detect.load_mcp is load_mcp
+    assert callable(tenon.detect.load)
+    assert callable(tenon.detect.parse)
+    assert callable(tenon.detect.diff)
