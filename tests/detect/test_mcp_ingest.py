@@ -174,3 +174,61 @@ def test_load_mcp_refuses_non_utf8(tmp_path):
 
     assert caught.value.code is RefusalCode.UNPARSEABLE
     assert str(path) in caught.value.message
+
+
+# Spec AC4: a local $ref resolves through the normalized document.
+def test_load_mcp_resolves_a_local_ref():
+    document = load_mcp(FIXTURES / "tools-ref.json")
+
+    schema = document["tools"]["read_file"]["inputSchema"]
+    assert schema["properties"]["path"] == {"type": "string", "minLength": 1}
+    assert schema["properties"]["path"] is schema["$defs"]["Path"]
+
+
+# Spec AC4: a non-local $ref is EXTERNAL_REF at the pointer where it was found.
+def test_load_mcp_refuses_an_external_ref():
+    with pytest.raises(SpecRefusal) as caught:
+        load_mcp(FIXTURES / "tools-ref-external.json")
+
+    assert caught.value.code is RefusalCode.EXTERNAL_REF
+    assert caught.value.pointer == "#/tools/fetch/inputSchema/properties/url/$ref"
+    assert "example.com" in caught.value.message
+    assert "tools-ref-external.json" in caught.value.message
+
+
+# Spec AC4: a local $ref that does not resolve is UNRESOLVED_REF.
+def test_parse_mcp_refuses_an_unresolved_ref():
+    refusal = a_refusal(
+        json.dumps(
+            {
+                "tools": [
+                    {
+                        "name": "x",
+                        "inputSchema": {
+                            "$ref": "#/tools/x/inputSchema/$defs/Missing"
+                        },
+                    }
+                ]
+            }
+        )
+    )
+
+    assert refusal.code is RefusalCode.UNRESOLVED_REF
+    assert refusal.pointer == "#/tools/x/inputSchema/$defs/Missing"
+    assert "<inline>" in refusal.message
+
+
+# Spec AC4: a cycle is left as a marker, not expanded and not a crash.
+def test_load_mcp_preserves_a_cycle_marker():
+    document = load_mcp(FIXTURES / "tools-ref-cycle.json")
+
+    node = document["tools"]["walk"]["inputSchema"]["$defs"]["Node"]
+    assert node["properties"]["next"] == {
+        "$ref": "#/tools/walk/inputSchema/$defs/Node"
+    }
+    assert (
+        document["tools"]["walk"]["inputSchema"]["properties"]["node"]["properties"][
+            "next"
+        ]
+        == node["properties"]["next"]
+    )

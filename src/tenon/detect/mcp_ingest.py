@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from .ingest import _escape
+from .ingest import _escape, resolve_refs
 from .record import RefusalCode, SpecRefusal
 
 
@@ -72,7 +72,12 @@ def parse_mcp(text: str, source: str) -> dict:
                     message=f"{source}: {key} is not a mapping",
                 )
         normalized[name] = tool
-    return {"tools": normalized}
+    try:
+        return resolve_refs({"tools": normalized})
+    except SpecRefusal as refusal:
+        raise SpecRefusal(
+            refusal.code, refusal.pointer, message=f"{source}: {refusal.message}"
+        ) from None
 
 
 def load_mcp(path: str | Path) -> dict:
