@@ -6,6 +6,7 @@
 - **Capability:** **T8 MCP diffs and probe mode** — second slice: **MCP tool-call locator**
   (`docs/technical/CAPABILITY_ROADMAP.md:14`)
 - **Milestone:** M2.3 (`docs/ROADMAP.md`), second slice
+- **State:** shipped 2026-11-07 (`src/tenon/locate/mcp_*.py`, 1,342 tests)
 - **Branch:** `feat/mcp-locator/aliz`
 - **Worktree:** `.claude/worktrees/feat-mcp-locator`
 

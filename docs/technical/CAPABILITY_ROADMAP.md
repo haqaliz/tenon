@@ -11,7 +11,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging | **Shipped 2026-11-05** |
 | **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | | **Shipped 2026-11-05** |
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | **Shipped 2026-11-06** |
-| **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Partial 2026-11-07** — MCP diffs shipped; probe not started |
+| **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Partial 2026-11-07** — MCP diffs + tool-call locator shipped; probe not started |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | Not started |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | Not started |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | Not started |
@@ -145,11 +145,23 @@ add/remove/required/type/enum; `ADDITIONAL_PROPERTIES_CHANGED` (the 14th kind); 
 cautious property rename inference; `oneOf`/`anyOf`/cycles recorded in `unanalyzed`. 1,253 tests,
 offline. No probe, locator or CLI source switch yet.
 
-Known limits: engine-only; no MCP tool-call locator, so `tenon check` cannot yet find
-`call_tool("name", {...})` sites; no probe/transport/network; real schemas that lean on
-`oneOf`/`$ref` will be largely `unanalyzed`; `ADDITIONAL_PROPERTIES_CHANGED` is
-`UNSUPPORTED_CHANGE_KIND` downstream; pagination (`nextCursor`) is ignored; output-schema required
-semantics are simplified.
+Known limits: engine-only at this level (T8b adds the Python `call_tool` locator); no
+probe/transport/network; real schemas that lean on `oneOf`/`$ref` will be largely `unanalyzed`;
+`ADDITIONAL_PROPERTIES_CHANGED` is `UNSUPPORTED_CHANGE_KIND` downstream; pagination (`nextCursor`)
+is ignored; output-schema required semantics are simplified.
+
+### T8b as built (2026-11-07)
+
+`src/tenon/locate/mcp_*.py`: a Python `ast` scanner and `locate_mcp` for the high-level MCP SDK
+`call_tool` pattern. A site is certain only when the receiver is an MCP `ClientSession`
+import/alias/`with` binding and the tool name is a literal matching the change; argument keys use
+the shipped `dict_key`/`keyword` spans; dynamic tool names/payloads and unrooted receivers are named
+ambiguity groups. `tenon check` / `tenon fix` accept `--source mcp` and `[locate] source = "mcp"`;
+the MCP diff/locator feed the existing propose/prove/PR stages. 1,342 tests, offline.
+
+Known limits: Python only; high-level `call_tool` only (no `send_request`, framework wrappers, or a
+session passed through a parameter); no TypeScript MCP locator; output-schema changes locate the tool
+call only, not result-field dataflow; a second-hop receiver alias is `ALIAS_CHAIN`.
 
 
 

@@ -14,13 +14,14 @@ affected calls, and proves the fix against your own checks before it opens a pul
 
 **T1 (change detection), T2 (Python call-site location), T3 (patch proposal), T4 (proof runner),
 T5 (PR writer), T6 (TypeScript/JavaScript call-site location), T7 (proof ladder), T8a (MCP
-tool-schema diffs) and the `tenon check` / `tenon fix` CLI are shipped.** `src/tenon/detect/` diffs
-two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed `Change` records;
-`src/tenon/locate/` turns one of those records into call sites with file, line and column, and keeps
-anything it cannot prove in a separate ambiguity list — Python via `ast`, TypeScript/JavaScript via
-tree-sitter, no Node analysis runtime; `src/tenon/propose/` turns the certain sites into a candidate
-diff and never applies it; `src/tenon/prove/` applies that diff to a copy and runs every configured
-proof stage before and after, recording the strongest level that actually passed (`TESTS_PASSED`,
+tool-schema diffs), T8b (Python MCP tool-call location) and the `tenon check` / `tenon fix` CLI are
+shipped.** `src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents —
+into typed `Change` records; `src/tenon/locate/` turns one of those records into call sites with
+file, line and column, and keeps anything it cannot prove in a separate ambiguity list — Python via
+`ast`, TypeScript/JavaScript via tree-sitter, and MCP `call_tool` sites via `locate_mcp`; no Node
+analysis runtime; `src/tenon/propose/` turns the certain sites into a candidate diff and never
+applies it; `src/tenon/prove/` applies that diff to a copy and runs every configured proof stage
+before and after, recording the strongest level that actually passed (`TESTS_PASSED`,
 `CHARACTERIZED`, `REPLAYED`, `TYPES_BUILD_ONLY`) or `UNVERIFIED` with a reason; `src/tenon/pr/`
 renders a deterministic PR whose title and body state that level, then clones a clean checkout,
 commits the exact diff to a new branch and opens the PR through your own `git` and `gh`;
@@ -37,12 +38,15 @@ uv run tenon fix path/to/repo --old v1.yaml --new v2.yaml \
     --check "python -m pytest -q"
 uv run tenon fix path/to/no-test-repo --old v1.yaml --new v2.yaml \
     --build "python -m compileall -q ." --require TYPES_BUILD_ONLY
+uv run tenon check path/to/mcp-repo --source mcp \
+    --old tools-v1.json --new tools-v2.json
 ```
 
 `check` exits 0 when no affected site exists and 1 when one does; `fix` prints the diff and the proof,
 and `--open-pr` opens a PR whose title states the level. `--require` chooses the level a run must
-reach; `--build`/`--characterize`/`--replay` add the weaker stages. `--json` is byte-stable. Repeated
-inputs can live in `tenon.toml` under `[locate]` (`language`, `sdk_package`, mappings) and `[tenon]`.
+reach; `--build`/`--characterize`/`--replay` add the weaker stages; `--source mcp` selects the MCP
+loader/differ/locator. `--json` is byte-stable. Repeated inputs can live in `tenon.toml` under
+`[locate]` (`source`, `language`, `sdk_package`, mappings) and `[tenon]`.
 
 ```python
 from tenon.detect import diff, load
@@ -69,6 +73,7 @@ MCP `tools/list` documents use the same records:
 
 ```python
 from tenon.detect import diff_mcp, load_mcp
+from tenon.locate import McpLocateConfig, locate_mcp
 
 changes = diff_mcp(
     load_mcp("tools-v1.json"),
@@ -76,9 +81,13 @@ changes = diff_mcp(
 ).changes
 changes[0].kind     # endpoint_removed, property_required_added, enum_narrowed, ...
 changes[0].location # method="tool", path=<tool name>, pointer="#/tools/<tool>/..."
+site = locate_mcp(changes[0], "path/to/repo", McpLocateConfig(client_package="mcp"))
+site.certain        # call_tool("name", {"amount": ...}) keys, rooted in ClientSession
 ```
 
-MCP input is engine-only for now; `tenon check` / `tenon fix` still take OpenAPI documents.
+`tenon check --source mcp` and `tenon fix --source mcp` use the same MCP diff and locator. The
+Python locator covers the high-level `ClientSession.call_tool` pattern; TypeScript and low-level
+`send_request` calls are follow-ups.
 
 ## What Tenon is
 
@@ -107,7 +116,8 @@ label.
 ## Scope
 
 Languages in order: Python, TypeScript/JavaScript, then Go, Rust, C#. Change sources: OpenAPI and MCP
-tools/list diffs (both shipped), SDK metadata later. Consumer side first, provider side later.
+tools/list diffs, with the Python MCP tool-call locator; SDK metadata later. Consumer side first,
+provider side later.
 
 ## Docs
 

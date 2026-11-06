@@ -3,7 +3,7 @@
 - **Slug:** `mcp-locator`
 - **Capability:** T8 in `docs/technical/CAPABILITY_ROADMAP.md` — **second slice, MCP tool-call locator**
 - **Milestone:** M2.3 in `docs/ROADMAP.md` (Phase 2), second slice
-- **Status:** draft for review
+- **Status:** implemented 2026-11-07 (`src/tenon/locate/mcp_*.py`, 1,342 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement
