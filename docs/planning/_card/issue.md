@@ -1,41 +1,38 @@
-# Card: feat/mcp-locator
+# Card: feat/mcp-probe
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T8 MCP diffs and probe mode** — second slice: **MCP tool-call locator**
+- **Capability:** **T8 MCP diffs and probe mode** — final slice: **`tenon probe`**
   (`docs/technical/CAPABILITY_ROADMAP.md:14`)
-- **Milestone:** M2.3 (`docs/ROADMAP.md`), second slice
-- **State:** shipped 2026-11-07 (`src/tenon/locate/mcp_*.py`, 1,342 tests)
-- **Branch:** `feat/mcp-locator/aliz`
-- **Worktree:** `.claude/worktrees/feat-mcp-locator`
+- **Milestone:** M2.3 (`docs/ROADMAP.md`), final slice
+- **Branch:** `feat/mcp-probe/aliz`
+- **Worktree:** `.claude/worktrees/feat-mcp-probe`
 
 ## Brief
 
-T8a emits typed `Change` records for MCP tools, but nothing finds the consumer code that calls those
-tools. A tool removed, an argument renamed or a required argument added is reported; the user still
-has to grep `call_tool("name", ...)` by hand.
+T8a/T8b diff MCP tools and locate their call sites. The product's second mode is readiness: point
+Tenon at an MCP server, run tasks through a user-supplied agent, and report what actually worked.
 
-T8b adds the MCP tool-call locator for Python: given a T8a `Change` and a repository, find
-`session.call_tool("tool", arguments={...})` sites, the argument keys, and the sites the locator
-cannot prove. It returns the same `LocateResult` — certain `Site`s, ambiguity groups with named
-reasons, or a named non-result — so T3's existing rename rule, T4's proof runner, T5's PR writer and
-the CLI work unchanged. A `--source mcp` switch lets `tenon check` / `tenon fix` use the MCP loader,
-differ and locator.
+T8c adds `tenon probe`: start an MCP server over stdio with a small stdlib JSON-RPC client, list its
+tools, run each task through `--agent CMD` (a JSON request in, a JSON plan out), execute the planned
+`tools/call` requests, evaluate the task expectations, and print a text or byte-stable JSON report.
+Exit 0 when every task worked, 1 when one failed, 2 on usage/connection/config errors.
 
-The hard rules do not change: a site is certain only when the receiver is rooted in an MCP client
-import/alias and the tool name is a literal that matches the changed tool; a dynamic tool name,
-dynamic arguments or an unrooted receiver is an ambiguity group, never a guess.
+No model ships. Tenon makes no network call; the server and agent are the user's local commands. The
+report is an observation, not a proof level or a PR.
 
 ## Constraints carried in from the repo
 
-- `CLAUDE.md` §1–2: execution decides; ambiguity is reported, never guessed.
-- T2's `Site`/`SiteShape`/`AmbiguousGroup`/`LocateResult` and certainty policy; T3 edits `keyword`/
-  `dict_key`/`attribute` spans; no new proposer rule unless the MCP shape needs one.
-- T8a's `Change` records: `location.method="tool"`, `path=<tool>`, pointer under `#/tools/<tool>/...`.
-- Offline: committed fixture repos; no MCP server, network, agent or model.
+- `CLAUDE.md` §1–2: execution decides; no "verified" claim without a check. The probe says "worked
+  in this run", not "usable".
+- `CLAUDE.md` §3: machine-readable sources; the probe reads the live `tools/list`, not prose.
+- `CLAUDE.md` §4: no code egress by default; no model/provider/key in the probe.
+- `VISION.md` readiness mode: an agent runs against the server; the report is the lead-gen hook.
+- Offline: a fake stdio server and fake agent are committed fixtures; no network.
+- No new dependency: stdlib `json`/`subprocess`/`selectors`.
 
 ## Scope fence
 
-Not this card: the TypeScript MCP locator, `tenon probe`/transport/agent, low-level
-`send_request("tools/call", ...)` (unless the interview chooses it), output-schema dataflow, T9.
+Not this card: HTTP/SSE, the official `mcp` SDK, an OpenAPI/API probe, a built-in model, PR/proof,
+T9 corpus. Those are later cards.
