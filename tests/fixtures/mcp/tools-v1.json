@@ -1,0 +1,35 @@
+{
+  "tools": [
+    {
+      "name": "read_file",
+      "description": "Read a UTF-8 file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "max_bytes": {"type": "integer"}
+        },
+        "required": ["path"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {"type": "string"}
+        },
+        "required": ["content"]
+      },
+      "annotations": {"readOnlyHint": true}
+    },
+    {
+      "name": "list_files",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"}
+        }
+      }
+    }
+  ],
+  "nextCursor": "page-2",
+  "serverInfo": {"name": "files", "version": "1.0.0"}
+}

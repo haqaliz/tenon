@@ -1,0 +1,11 @@
+[
+  {
+    "name": "fetch",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "url": {"$ref": "https://example.com/schemas.json#/Url"}
+      }
+    }
+  }
+]

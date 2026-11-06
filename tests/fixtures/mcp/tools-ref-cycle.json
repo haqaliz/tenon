@@ -1,0 +1,21 @@
+{
+  "tools": [
+    {
+      "name": "walk",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "node": {"$ref": "#/tools/walk/inputSchema/$defs/Node"}
+        },
+        "$defs": {
+          "Node": {
+            "type": "object",
+            "properties": {
+              "next": {"$ref": "#/tools/walk/inputSchema/$defs/Node"}
+            }
+          }
+        }
+      }
+    }
+  ]
+}

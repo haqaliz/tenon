@@ -30,10 +30,11 @@ KINDS = [
     "schema_removed",
     "schema_added",
     "renamed",
+    "additional_properties_changed",
 ]
 
 
-def test_change_kind_is_the_closed_thirteen():
+def test_change_kind_is_the_closed_fourteen():
     assert [kind.value for kind in ChangeKind] == KINDS
 
 

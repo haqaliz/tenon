@@ -1,0 +1,17 @@
+{
+  "tools": [
+    {
+      "name": "read_file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {"$ref": "#/tools/read_file/inputSchema/$defs/Path"}
+        },
+        "required": ["path"],
+        "$defs": {
+          "Path": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  ]
+}

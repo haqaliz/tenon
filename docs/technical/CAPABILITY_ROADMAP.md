@@ -11,7 +11,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging | **Shipped 2026-11-05** |
 | **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | | **Shipped 2026-11-05** |
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | **Shipped 2026-11-06** |
-| **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | Not started |
+| **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Partial 2026-11-07** — MCP diffs shipped; probe not started |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | Not started |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | Not started |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | Not started |
@@ -134,6 +134,22 @@ not generate the tests or record the traffic, so the label is only as strong as 
 says so). All stages share one timeout; a red weaker stage fails the whole result even when a stronger
 stage is green; per-stage timeouts and generators/recorders are later cards. A `TYPES_BUILD_ONLY` PR
 is a normal PR only when the user requires that level; otherwise it is a refusal or an opted-in draft.
+
+### T8a as built (2026-11-07)
+
+`src/tenon/detect/mcp_ingest.py` loads a saved `tools/list` result (envelope or bare array),
+normalizes it to a name-keyed mapping, validates tool names/schemas, resolves local `$ref`s and
+refuses bad input by name. `mcp_diff.py` emits the shipped `Change`/`DiffResult` records: tool
+added/removed as synthetic `method="tool"` operations; input/output schema property
+add/remove/required/type/enum; `ADDITIONAL_PROPERTIES_CHANGED` (the 14th kind); nested objects/arrays;
+cautious property rename inference; `oneOf`/`anyOf`/cycles recorded in `unanalyzed`. 1,253 tests,
+offline. No probe, locator or CLI source switch yet.
+
+Known limits: engine-only; no MCP tool-call locator, so `tenon check` cannot yet find
+`call_tool("name", {...})` sites; no probe/transport/network; real schemas that lean on
+`oneOf`/`$ref` will be largely `unanalyzed`; `ADDITIONAL_PROPERTIES_CHANGED` is
+`UNSUPPORTED_CHANGE_KIND` downstream; pagination (`nextCursor`) is ignored; output-schema required
+semantics are simplified.
 
 
 

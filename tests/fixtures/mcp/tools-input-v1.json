@@ -1,0 +1,17 @@
+{
+  "tools": [
+    {
+      "name": "read_file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "max_bytes": {"type": "integer"},
+          "mode": {"type": "string", "enum": ["read", "write", "append"]},
+          "limit": {"type": "integer"}
+        },
+        "required": ["path", "limit"]
+      }
+    }
+  ]
+}

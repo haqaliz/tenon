@@ -1,0 +1,17 @@
+{
+  "tools": [
+    {
+      "name": "read_file",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "bytes": {"type": "string"},
+          "checksum": {"type": "string"},
+          "size": {"type": "string"},
+          "mode": {"type": "string", "enum": ["fast", "safe"]}
+        },
+        "required": ["checksum", "size"]
+      }
+    }
+  ]
+}

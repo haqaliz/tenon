@@ -1,0 +1,13 @@
+{
+  "tools": [
+    {
+      "name": "read_file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"}
+        }
+      }
+    }
+  ]
+}
