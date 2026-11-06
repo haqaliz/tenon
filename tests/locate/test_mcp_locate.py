@@ -8,13 +8,14 @@ from tenon.detect import Change, ChangeKind, Location
 from tenon.locate.mcp_config import McpLocateConfig
 from tenon.locate.mcp_locate import locate_mcp
 from tenon.locate.mcp_scan import McpScan
-from tenon.locate.result import LocateReason
+from tenon.locate.result import LocateReason, Site, SiteShape
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
 MCP_BASIC = FIXTURES / "mcp-basic"
 MCP_ALIAS = FIXTURES / "mcp-alias"
 MCP_DECOY = FIXTURES / "mcp-decoy"
 MCP_DYNAMIC = FIXTURES / "mcp-dynamic"
+PROPERTIES = "#/tools/create_charge/inputSchema/properties"
 
 
 def a_change(
@@ -32,6 +33,18 @@ def a_change(
         before=before,
         after=after,
     )
+
+
+def a_payload(name, type_="integer", fmt=None):
+    return {"type": type_, "format": fmt, "name": name}
+
+
+def a_line(repo, path, line):
+    return (repo / path).read_text(encoding="utf-8").split("\n")[line - 1]
+
+
+def a_site(repo, path, line, column, shape, symbol):
+    return Site(path, line, column, shape, symbol, a_line(repo, path, line))
 
 
 # Phase 1: the config and the tool gate.
@@ -104,3 +117,148 @@ def test_a_tool_change_scans_the_repository(monkeypatch):
 
     assert calls == [(MCP_BASIC, "mcp.client")]
     assert result.reason is LocateReason.NO_SDK_IMPORT
+
+
+# Phase 2: certain calls and field keys.
+# Spec AC2: a rooted async-with call is a certain call site at the method name.
+def test_a_rooted_tool_call_is_certain():
+    change = a_change()
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert result.certain == (
+        a_site(MCP_BASIC, "client.py", 6, 23, SiteShape.CALL, "call_tool"),
+    )
+    assert result.ambiguous == ()
+    assert result.reason is None
+    assert result.change is change
+
+
+# Spec AC2: an added tool locates the same rooted call.
+def test_an_added_tool_call_is_certain():
+    result = locate_mcp(
+        a_change(ChangeKind.ENDPOINT_ADDED), MCP_BASIC, McpLocateConfig()
+    )
+
+    assert [(site.line, site.shape) for site in result.certain] == [
+        (6, SiteShape.CALL)
+    ]
+
+
+# Spec AC2: an endpoint change matches only the changed tool.
+def test_an_endpoint_change_matches_only_the_named_tool():
+    result = locate_mcp(a_change(), MCP_BASIC, McpLocateConfig())
+
+    assert [(site.line, site.symbol) for site in result.certain] == [
+        (6, "call_tool")
+    ]
+    assert result.ambiguous == ()
+
+
+# Spec AC3: a removed field is certain exactly at the rooted dict key.
+def test_a_removed_field_returns_the_rooted_dict_key():
+    change = a_change(
+        ChangeKind.PROPERTY_REMOVED, pointer=PROPERTIES, before=a_payload("amount")
+    )
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert result.certain == (
+        a_site(MCP_BASIC, "client.py", 6, 61, SiteShape.DICT_KEY, "amount"),
+    )
+    assert all(site.shape is not SiteShape.CALL for site in result.certain)
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+# Spec AC3: a renamed field uses the before name, the spelling in the code.
+def test_a_renamed_field_uses_the_before_name():
+    change = a_change(
+        ChangeKind.RENAMED,
+        pointer=PROPERTIES,
+        before="amount",
+        after="amount_cents",
+    )
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert [(site.column, site.shape, site.symbol) for site in result.certain] == [
+        (61, SiteShape.DICT_KEY, "amount")
+    ]
+
+
+# Spec AC3: a type change locates the key, not the call.
+def test_a_type_changed_field_returns_the_rooted_key():
+    change = a_change(
+        ChangeKind.PROPERTY_TYPE_CHANGED,
+        pointer=PROPERTIES,
+        before=a_payload("amount", "integer"),
+        after=a_payload("amount", "string"),
+    )
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert [(site.shape, site.symbol) for site in result.certain] == [
+        (SiteShape.DICT_KEY, "amount")
+    ]
+
+
+# Spec AC3: a narrowed enum uses the name carried by the payload.
+def test_an_enum_narrowed_field_returns_the_rooted_key():
+    change = a_change(
+        ChangeKind.ENUM_NARROWED,
+        pointer=PROPERTIES,
+        before={"enum": ["usd", "eur"], "name": "currency"},
+        after={"enum": ["usd"], "name": "currency"},
+    )
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert result.certain == (
+        a_site(MCP_BASIC, "client.py", 6, 79, SiteShape.DICT_KEY, "currency"),
+    )
+
+
+# Spec AC3: a required-added field that is present is just its key.
+def test_a_required_added_field_with_the_key_returns_the_key():
+    change = a_change(
+        ChangeKind.PROPERTY_REQUIRED_ADDED,
+        pointer=PROPERTIES,
+        after=a_payload("amount"),
+    )
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert [(site.shape, site.symbol) for site in result.certain] == [
+        (SiteShape.DICT_KEY, "amount")
+    ]
+
+
+# Spec AC3: a required-added field with no key says "add it at the call".
+def test_a_required_added_field_absent_returns_the_call_sites():
+    change = a_change(
+        ChangeKind.PROPERTY_REQUIRED_ADDED,
+        pointer=PROPERTIES,
+        after=a_payload("path", "string"),
+    )
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert result.certain == (
+        a_site(MCP_BASIC, "client.py", 6, 23, SiteShape.CALL, "call_tool"),
+    )
+
+
+# Spec AC3: a dict(...) argument is a certain keyword site.
+def test_a_dict_call_keyword_is_certain():
+    change = a_change(
+        ChangeKind.PROPERTY_REMOVED, pointer=PROPERTIES, before=a_payload("amount")
+    )
+
+    result = locate_mcp(change, MCP_DYNAMIC, McpLocateConfig())
+
+    assert result.certain == (
+        a_site(MCP_DYNAMIC, "app.py", 8, 55, SiteShape.KEYWORD, "amount"),
+        a_site(MCP_DYNAMIC, "app.py", 12, 24, SiteShape.DICT_KEY, "amount"),
+    )
+    assert result.reason is None
