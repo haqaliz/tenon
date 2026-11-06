@@ -4,11 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from tenon.detect import Change, ChangeKind, Location
+from tenon.detect import Change, ChangeKind, Location, diff_mcp
 from tenon.locate.mcp_config import McpLocateConfig
 from tenon.locate.mcp_locate import locate_mcp
 from tenon.locate.mcp_scan import McpScan
-from tenon.locate.result import LocateReason, Site, SiteShape
+from tenon.locate.result import (
+    AmbiguityReason,
+    LocateReason,
+    Site,
+    SiteShape,
+)
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
 MCP_BASIC = FIXTURES / "mcp-basic"
@@ -45,6 +50,11 @@ def a_line(repo, path, line):
 
 def a_site(repo, path, line, column, shape, symbol):
     return Site(path, line, column, shape, symbol, a_line(repo, path, line))
+
+
+def a_group(result, reason):
+    [group] = [group for group in result.ambiguous if group.reason is reason]
+    return group
 
 
 # Phase 1: the config and the tool gate.
@@ -261,4 +271,170 @@ def test_a_dict_call_keyword_is_certain():
         a_site(MCP_DYNAMIC, "app.py", 8, 55, SiteShape.KEYWORD, "amount"),
         a_site(MCP_DYNAMIC, "app.py", 12, 24, SiteShape.DICT_KEY, "amount"),
     )
+    assert result.reason is None
+
+
+# Phase 3: ambiguity, reasons and output.
+# Spec AC4: a variable tool name is a DYNAMIC_GETATTR group holding the call.
+def test_a_dynamic_tool_call_is_dynamic_getattr():
+    result = locate_mcp(
+        a_change(tool="other_tool", pointer="#/tools/other_tool"),
+        MCP_DYNAMIC,
+        McpLocateConfig(),
+    )
+
+    assert result.certain == ()
+    assert result.reason is None
+    group = a_group(result, AmbiguityReason.DYNAMIC_GETATTR)
+    assert group.symbol == "other_tool"
+    assert group.candidates == (
+        a_site(MCP_DYNAMIC, "app.py", 6, 23, SiteShape.CALL, "call_tool"),
+    )
+
+
+# Spec AC4: a variable or ** payload is DYNAMIC_KWARGS with the rooted calls.
+def test_a_variable_or_star_payload_is_dynamic_kwargs():
+    change = a_change(
+        ChangeKind.PROPERTY_REMOVED, pointer=PROPERTIES, before=a_payload("amount")
+    )
+
+    result = locate_mcp(change, MCP_DYNAMIC, McpLocateConfig())
+
+    group = a_group(result, AmbiguityReason.DYNAMIC_KWARGS)
+    assert group.symbol == "amount"
+    assert group.candidates == (
+        a_site(MCP_DYNAMIC, "app.py", 7, 23, SiteShape.CALL, "call_tool"),
+        a_site(MCP_DYNAMIC, "app.py", 8, 23, SiteShape.CALL, "call_tool"),
+        a_site(MCP_DYNAMIC, "app.py", 9, 23, SiteShape.CALL, "call_tool"),
+        a_site(MCP_DYNAMIC, "app.py", 10, 23, SiteShape.CALL, "call_tool"),
+        a_site(MCP_DYNAMIC, "app.py", 14, 23, SiteShape.CALL, "call_tool"),
+    )
+    assert result.reason is None
+
+
+# Spec AC4: an unrooted call is a group with the call and its candidate key.
+def test_an_unrooted_matching_call_is_an_unrooted_receiver():
+    change = a_change(
+        ChangeKind.PROPERTY_REMOVED, pointer=PROPERTIES, before=a_payload("amount")
+    )
+
+    result = locate_mcp(change, MCP_DECOY, McpLocateConfig())
+
+    assert result.certain == (
+        a_site(MCP_DECOY, "app.py", 12, 51, SiteShape.DICT_KEY, "amount"),
+    )
+    group = a_group(result, AmbiguityReason.UNROOTED_RECEIVER)
+    assert group.symbol == "amount"
+    assert group.candidates == (
+        a_site(MCP_DECOY, "app.py", 10, 19, SiteShape.CALL, "call_tool"),
+        a_site(MCP_DECOY, "app.py", 10, 47, SiteShape.DICT_KEY, "amount"),
+    )
+    assert result.reason is None
+
+
+# Spec AC4: an unrooted endpoint call is only a candidate.
+def test_an_unrooted_endpoint_call_is_a_candidate_only():
+    result = locate_mcp(a_change(), MCP_DECOY, McpLocateConfig())
+
+    assert result.certain == (
+        a_site(MCP_DECOY, "app.py", 12, 23, SiteShape.CALL, "call_tool"),
+    )
+    group = a_group(result, AmbiguityReason.UNROOTED_RECEIVER)
+    assert group.symbol == "create_charge"
+    assert group.candidates == (
+        a_site(MCP_DECOY, "app.py", 10, 19, SiteShape.CALL, "call_tool"),
+    )
+
+
+# Spec AC4: a second-hop alias is ALIAS_CHAIN, never an unrooted receiver.
+def test_a_second_hop_alias_is_an_alias_chain():
+    change = a_change(
+        ChangeKind.PROPERTY_REMOVED, pointer=PROPERTIES, before=a_payload("amount")
+    )
+
+    result = locate_mcp(change, MCP_ALIAS, McpLocateConfig())
+
+    assert result.certain == (
+        a_site(MCP_ALIAS, "app.py", 6, 47, SiteShape.DICT_KEY, "amount"),
+        a_site(MCP_ALIAS, "app.py", 7, 62, SiteShape.DICT_KEY, "amount"),
+    )
+    group = a_group(result, AmbiguityReason.ALIAS_CHAIN)
+    assert group.symbol == "amount"
+    assert group.candidates == (
+        a_site(MCP_ALIAS, "app.py", 9, 17, SiteShape.CALL, "call_tool"),
+        a_site(MCP_ALIAS, "app.py", 9, 45, SiteShape.DICT_KEY, "amount"),
+    )
+    assert all(
+        group.reason is not AmbiguityReason.UNROOTED_RECEIVER
+        for group in result.ambiguous
+    )
+
+
+# Spec AC5: a repository with no client import is named, not empty.
+def test_a_repository_without_the_client_package_has_no_import(tmp_path):
+    (tmp_path / "app.py").write_text("print('hello')\n", encoding="utf-8")
+
+    result = locate_mcp(a_change(), tmp_path, McpLocateConfig())
+
+    assert result.reason is LocateReason.NO_SDK_IMPORT
+    assert result.certain == ()
+    assert result.ambiguous == ()
+
+
+# Spec AC5: a tool nobody calls is NO_SITES.
+def test_a_change_with_no_matching_tool_is_no_sites():
+    result = locate_mcp(
+        a_change(tool="delete_everything", pointer="#/tools/delete_everything"),
+        MCP_BASIC,
+        McpLocateConfig(),
+    )
+
+    assert result.reason is LocateReason.NO_SITES
+    assert result.certain == ()
+    assert result.ambiguous == ()
+
+
+# Spec AC5: a schema-level kind is not this locator's.
+def test_a_schema_kind_is_unsupported():
+    change = a_change(
+        ChangeKind.SCHEMA_ADDED, pointer="#/tools/create_charge/inputSchema"
+    )
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert result.reason is LocateReason.UNSUPPORTED_CHANGE_KIND
+
+
+def a_output_document(receipt_type):
+    return {
+        "tools": {
+            "create_charge": {
+                "name": "create_charge",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"amount": {"type": "integer"}},
+                },
+                "outputSchema": {
+                    "type": "object",
+                    "properties": {"receipt": {"type": receipt_type}},
+                },
+            }
+        }
+    }
+
+
+# Spec AC6: an output-schema property change stops at the call site.
+def test_an_output_schema_property_change_returns_the_call_site_only():
+    [change] = diff_mcp(
+        a_output_document("string"), a_output_document("integer")
+    ).changes
+    assert "/outputSchema" in change.location.pointer
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert result.certain == (
+        a_site(MCP_BASIC, "client.py", 6, 23, SiteShape.CALL, "call_tool"),
+    )
+    assert all(site.shape is SiteShape.CALL for site in result.certain)
+    assert result.ambiguous == ()
     assert result.reason is None
