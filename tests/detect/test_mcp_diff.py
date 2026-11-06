@@ -1,7 +1,12 @@
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
-from tenon.detect import ChangeKind, Location, diff
+import pytest
+
+from tenon.detect import ChangeKind, Location, UnanalyzedReason, diff
 from tenon.detect.mcp_diff import diff_mcp
 from tenon.detect.mcp_ingest import load_mcp, parse_mcp
 
@@ -23,6 +28,10 @@ def a_tool(name, input_schema=None, output_schema=None):
 
 def of_kind(result, kind):
     return [change for change in result.changes if change.kind is kind]
+
+
+def unanalyzed(result):
+    return [(entry.pointer, entry.reason) for entry in result.unanalyzed]
 
 
 def a_payload(name, type_, fmt=None):
@@ -592,3 +601,187 @@ def test_a_removed_and_added_tool_is_never_a_rename():
     ]
     assert ChangeKind.RENAMED not in {change.kind for change in changes}
     assert all(change.confidence == "certain" for change in changes)
+
+
+# Spec AC7: a plain allOf merge is walked like one object schema.
+def test_a_plain_all_of_merge_is_walked():
+    old = load_mcp(FIXTURES / "tools-composition-v1.json")
+    new = load_mcp(FIXTURES / "tools-composition-v2.json")
+
+    result = diff_mcp(old, new)
+
+    assert [
+        (change.kind, change.location.pointer, change.before, change.after)
+        for change in result.changes
+    ] == [
+        (
+            ChangeKind.PROPERTY_TYPE_CHANGED,
+            "#/tools/pay/inputSchema/properties",
+            a_payload("id", "string"),
+            a_payload("id", "integer"),
+        )
+    ]
+    assert result.unanalyzed == ()
+
+
+# Spec AC7: union keywords are skipped and recorded at the schema pointer.
+@pytest.mark.parametrize("keyword", ["oneOf", "anyOf"])
+def test_a_union_keyword_is_recorded_as_unanalyzed(keyword):
+    old = a_document(
+        a_tool(
+            "choose",
+            input_schema={keyword: [{"type": "string"}, {"type": "integer"}]},
+        )
+    )
+    new = a_document(a_tool("choose", input_schema={"type": "string"}))
+
+    result = diff_mcp(old, new)
+
+    assert result.changes == ()
+    assert unanalyzed(result) == [
+        (
+            "#/tools/choose/inputSchema",
+            UnanalyzedReason.UNSUPPORTED_COMPOSITION,
+        )
+    ]
+
+
+# Spec AC7: a discriminator is skipped and recorded at the schema pointer.
+def test_a_discriminator_is_recorded_as_unanalyzed():
+    schema = {
+        "type": "object",
+        "discriminator": {"propertyName": "kind"},
+        "properties": {"kind": {"type": "string"}},
+    }
+
+    result = diff_mcp(
+        a_document(a_tool("pay", input_schema=schema)),
+        a_document(a_tool("pay", input_schema=schema)),
+    )
+
+    assert result.changes == ()
+    assert unanalyzed(result) == [
+        ("#/tools/pay/inputSchema", UnanalyzedReason.UNSUPPORTED_COMPOSITION)
+    ]
+
+
+# Spec AC7: a non-merge allOf member is skipped at its own pointer.
+def test_a_non_merge_all_of_is_recorded_as_unanalyzed():
+    old = a_document(
+        a_tool(
+            "pay",
+            input_schema={
+                "allOf": [
+                    {"type": "object"},
+                    {"type": "array", "items": {"type": "string"}},
+                ]
+            },
+        )
+    )
+    new = a_document(a_tool("pay", input_schema={"type": "object"}))
+
+    result = diff_mcp(old, new)
+
+    assert result.changes == ()
+    assert unanalyzed(result) == [
+        (
+            "#/tools/pay/inputSchema/allOf/1",
+            UnanalyzedReason.UNSUPPORTED_COMPOSITION,
+        )
+    ]
+
+
+# Spec AC7: composition in an output schema is recorded too.
+def test_composition_in_an_output_schema_is_recorded():
+    old = a_document(
+        a_tool(
+            "choose",
+            output_schema={"anyOf": [{"type": "string"}, {"type": "integer"}]},
+        )
+    )
+    new = a_document(a_tool("choose", output_schema={"type": "string"}))
+
+    result = diff_mcp(old, new)
+
+    assert result.changes == ()
+    assert unanalyzed(result) == [
+        (
+            "#/tools/choose/outputSchema",
+            UnanalyzedReason.UNSUPPORTED_COMPOSITION,
+        )
+    ]
+
+
+# Spec AC7: a cyclic $ref marker is recorded, never followed or skipped silently.
+def test_a_cyclic_ref_marker_is_recorded():
+    old = load_mcp(FIXTURES / "tools-ref-cycle.json")
+    new = load_mcp(FIXTURES / "tools-ref-cycle.json")
+
+    result = diff_mcp(old, new)
+
+    assert result.changes == ()
+    assert unanalyzed(result) == [
+        (
+            "#/tools/walk/inputSchema/properties/node/properties/next",
+            UnanalyzedReason.CYCLIC_REF,
+        )
+    ]
+
+
+# Spec AC8: property insertion order does not change the result.
+def test_schema_property_order_is_irrelevant():
+    def a_schema(*names):
+        return {
+            "type": "object",
+            "properties": {name: {"type": "string"} for name in names},
+        }
+
+    old_a = a_document(a_tool("x", input_schema=a_schema("keep", "gone")))
+    old_b = a_document(a_tool("x", input_schema=a_schema("gone", "keep")))
+    new = a_document(
+        a_tool("x", input_schema={"type": "object", "properties": {"keep": {}}})
+    )
+
+    assert diff_mcp(old_a, new).to_json() == diff_mcp(old_b, new).to_json()
+
+
+# Spec AC8: the diff JSON is byte-identical across hash seeds.
+SUBPROCESS_SCRIPT = f"""
+from pathlib import Path
+
+from tenon.detect.mcp_diff import diff_mcp
+from tenon.detect.mcp_ingest import load_mcp
+
+fixtures = Path({str(FIXTURES)!r})
+print(
+    diff_mcp(
+        load_mcp(fixtures / "tools-nested-v1.json"),
+        load_mcp(fixtures / "tools-nested-v2.json"),
+    ).to_json(),
+    end="",
+)
+"""
+
+
+def a_diff_json_with_hash_seed(seed):
+    result = subprocess.run(
+        [sys.executable, "-c", SUBPROCESS_SCRIPT],
+        env={**os.environ, "PYTHONHASHSEED": seed},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def test_diff_json_is_byte_stable_across_hash_seeds():
+    assert a_diff_json_with_hash_seed("0") == a_diff_json_with_hash_seed("1")
+
+
+# Spec AC8/M8: the package exports the MCP differ; diff stays as shipped.
+def test_tenon_detect_exports_diff_mcp():
+    import tenon.detect
+    from tenon.detect.mcp_diff import diff_mcp as module_diff_mcp
+
+    assert tenon.detect.diff_mcp is module_diff_mcp
+    assert callable(tenon.detect.diff)

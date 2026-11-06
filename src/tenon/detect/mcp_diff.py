@@ -4,6 +4,7 @@ from .diff import (
     _canonical,
     _enum_payload,
     _escape,
+    _flatten,
     _render_type,
     _required,
     _type_basis,
@@ -32,7 +33,7 @@ def diff_mcp(old: dict, new: dict) -> DiffResult:
         if name not in old_tools:
             changes.append(_tool_change(ChangeKind.ENDPOINT_ADDED, name))
             continue
-        _diff_tool(old_tools[name], new_tools[name], name, changes)
+        _diff_tool(old_tools[name], new_tools[name], name, context, changes)
     return DiffResult(infer_renames(changes), context.unanalyzed)
 
 
@@ -58,6 +59,7 @@ def _diff_tool(
     old_tool: dict,
     new_tool: dict,
     name: str,
+    context: "_McpContext",
     changes: list[Change],
 ) -> None:
     base = f"#/tools/{_escape(name)}"
@@ -71,6 +73,7 @@ def _diff_tool(
                 new_schema,
                 f"{base}/{key}",
                 location,
+                context,
                 changes,
                 required_added=required_added,
             )
@@ -81,39 +84,54 @@ def _diff_schema(
     new: object,
     pointer: str,
     location: Location,
+    context: "_McpContext",
     changes: list[Change],
     *,
     name: str | None = None,
     enclosing: str | None = None,
     required_added: bool = True,
 ) -> None:
-    old_schema = old if isinstance(old, dict) else {}
-    new_schema = new if isinstance(new, dict) else {}
-    record_pointer = enclosing or pointer
-    _diff_schema_header(
-        old_schema, new_schema, name, record_pointer, location, changes
-    )
-    _diff_additional_properties(old_schema, new_schema, pointer, location, changes)
-    _diff_properties(
-        old_schema,
-        new_schema,
-        f"{pointer}/properties",
-        location,
-        changes,
-        required_added=required_added,
-    )
-    old_items = old_schema.get("items")
-    new_items = new_schema.get("items")
-    if isinstance(old_items, dict) and isinstance(new_items, dict):
-        _diff_schema(
-            old_items,
-            new_items,
-            f"{pointer}/items",
+    pair = (id(old), id(new))
+    if pair in context.active:
+        context.record(pointer, UnanalyzedReason.CYCLIC_REF)
+        return
+    context.active.add(pair)
+    try:
+        old_schema = _flatten(old if isinstance(old, dict) else {}, pointer, context)
+        new_schema = _flatten(new if isinstance(new, dict) else {}, pointer, context)
+        if old_schema is None or new_schema is None:
+            return
+        record_pointer = enclosing or pointer
+        _diff_schema_header(
+            old_schema, new_schema, name, record_pointer, location, changes
+        )
+        _diff_additional_properties(
+            old_schema, new_schema, pointer, location, changes
+        )
+        _diff_properties(
+            old_schema,
+            new_schema,
+            f"{pointer}/properties",
             location,
+            context,
             changes,
-            enclosing=pointer,
             required_added=required_added,
         )
+        old_items = old_schema.get("items")
+        new_items = new_schema.get("items")
+        if isinstance(old_items, dict) and isinstance(new_items, dict):
+            _diff_schema(
+                old_items,
+                new_items,
+                f"{pointer}/items",
+                location,
+                context,
+                changes,
+                enclosing=pointer,
+                required_added=required_added,
+            )
+    finally:
+        context.active.discard(pair)
 
 
 def _diff_schema_header(
@@ -181,6 +199,7 @@ def _diff_properties(
     new_schema: dict,
     pointer: str,
     location: Location,
+    context: "_McpContext",
     changes: list[Change],
     *,
     required_added: bool,
@@ -235,6 +254,7 @@ def _diff_properties(
             new_property,
             f"{pointer}/{_escape(prop)}",
             location,
+            context,
             changes,
             name=prop,
             enclosing=pointer,

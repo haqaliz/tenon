@@ -1,0 +1,23 @@
+{
+  "tools": [
+    {
+      "name": "pay",
+      "inputSchema": {
+        "allOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {"type": "integer"}
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "name": {"type": "string"}
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
