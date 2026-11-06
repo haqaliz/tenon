@@ -1,6 +1,7 @@
 """The MCP stdio client: handshake, tools, calls and named connection errors."""
 
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -115,6 +116,64 @@ def test_an_unknown_tool_raises_probe_error(client):
     assert caught.value.reason == "server_error"
     assert "-32602" in caught.value.detail
     assert "unknown tool: nope" in caught.value.detail
+
+
+# Spec AC4: a server that exits without a response is a named server exit.
+def test_a_server_that_exits_raises_probe_error(client):
+    client.start(a_server("--exit-after-first"), timeout=5)
+
+    with pytest.raises(ProbeError) as caught:
+        client.initialize()
+
+    assert caught.value.reason == "server_exit"
+    assert "exit" in caught.value.detail
+
+
+# Spec AC4: a malformed line is invalid JSON with a capped detail, not a crash.
+def test_a_malformed_line_is_invalid_json_with_a_capped_detail(client):
+    client.start(a_server("--malformed"), timeout=5)
+
+    with pytest.raises(ProbeError) as caught:
+        client.initialize()
+
+    assert caught.value.reason == "invalid_json"
+    assert len(caught.value.detail) <= 2000
+
+
+# Spec AC4: a response with an unexpected id is a protocol error.
+def test_a_mismatched_response_id_is_a_protocol_error(client):
+    client.start(a_server("--wrong-id"), timeout=5)
+
+    with pytest.raises(ProbeError) as caught:
+        client.initialize()
+
+    assert caught.value.reason == "protocol_error"
+
+
+# Spec AC4: a silent server times out, is killed, and nothing hangs.
+def test_a_timeout_raises_probe_error_and_kills_the_server(client):
+    client.start(a_server("--silent"), timeout=0.2)
+    process = client._process
+    started = time.monotonic()
+
+    with pytest.raises(ProbeError) as caught:
+        client.initialize()
+
+    assert caught.value.reason == "timeout"
+    assert time.monotonic() - started < 5
+    assert process.poll() is not None
+
+
+# Spec AC5: an unknown server request is answered -32601; the client keeps working.
+def test_an_unknown_server_request_is_answered_and_the_client_keeps_working(client):
+    client.start(a_server("--ask-client"), timeout=2)
+    client.initialize()
+
+    tools = client.list_tools()
+
+    assert [tool["name"] for tool in tools] == ["echo", "fail"]
+    result = client.call_tool("echo", {"text": "after"})
+    assert result["content"][0]["text"] == "echo:after"
 
 
 # Spec AC6: close stops the process and keeps a capped stderr tail.

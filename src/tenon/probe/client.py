@@ -4,6 +4,7 @@ import json
 import queue
 import subprocess
 import threading
+import time
 from collections import deque
 from importlib.metadata import PackageNotFoundError, version
 from typing import Sequence
@@ -196,33 +197,91 @@ class McpStdioClient:
         except (OSError, ValueError) as exc:
             raise ProbeError(CLOSED_PIPE, str(exc)) from exc
 
-    def _receive(self) -> dict:
+    def _receive(self, request_id: int, method: str) -> dict:
+        """The response matching ``request_id``; notifications are skipped.
+
+        Any other response id is a protocol error: the client never guesses
+        which request an answer belongs to.
+        """
+        deadline = time.monotonic() + self._timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._stop()
+                message = f"{method}: no response within {self._timeout}s"
+                raise ProbeError(TIMEOUT, message)
+            try:
+                line = self._lines.get(timeout=remaining)
+            except queue.Empty:
+                self._stop()
+                message = f"{method}: no response within {self._timeout}s"
+                raise ProbeError(TIMEOUT, message) from None
+            if line is None:
+                raise ProbeError(SERVER_EXIT, self._server_exit_detail(method))
+            message = self._parse(line)
+            if "method" in message:
+                if "id" in message:
+                    self._answer_server_request(message)
+                continue
+            if "id" not in message:
+                raise ProbeError(
+                    PROTOCOL_ERROR, f"{method}: a response arrived without an id"
+                )
+            if message["id"] != request_id:
+                raise ProbeError(
+                    PROTOCOL_ERROR,
+                    f"{method}: response id {message['id']!r}, expected {request_id}",
+                )
+            return message
+
+    def _parse(self, line: str) -> dict:
         try:
-            line = self._lines.get(timeout=self._timeout)
-        except queue.Empty:
-            raise ProbeError(TIMEOUT, f"no response within {self._timeout}s") from None
-        if line is None:
-            raise ProbeError(CLOSED_PIPE, "the server closed its stdout")
-        message = json.loads(line)
+            message = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ProbeError(
+                INVALID_JSON, f"invalid JSON: {exc.msg}: {line.strip()}"
+            ) from None
         if not isinstance(message, dict):
             raise ProbeError(PROTOCOL_ERROR, "the message is not an object")
-        if "method" in message:
-            return self._receive()  # a notification carries no response
         return message
+
+    def _answer_server_request(self, message: dict) -> None:
+        """The client offers no server-side methods; answer -32601 and go on."""
+        self._send(
+            {
+                "jsonrpc": "2.0",
+                "id": message["id"],
+                "error": {"code": -32601, "message": "method not found"},
+            }
+        )
+
+    def _server_exit_detail(self, method: str) -> str:
+        process = self._process
+        code = None if process is None else process.poll()
+        if process is not None and code is None:
+            try:
+                code = process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                code = None
+        detail = f"{method}: the server exited (code {code})"
+        if self.stderr_tail:
+            detail = f"{detail}: {self.stderr_tail}"
+        return detail
 
     def _request(self, method: str, params: dict) -> dict:
         if self._process is None:
             raise ProbeError(CLOSED_PIPE, "the MCP session is not running")
-        self._next_id += 1
+        request_id = self._next_id + 1
         self._send(
             {
                 "jsonrpc": "2.0",
-                "id": self._next_id,
+                "id": request_id,
                 "method": method,
                 "params": params,
             }
         )
-        response = self._receive()
+        self._next_id = request_id
+        response = self._receive(request_id, method)
         error = response.get("error")
         if error is not None:
             raise ProbeError(SERVER_ERROR, _error_detail(error))
