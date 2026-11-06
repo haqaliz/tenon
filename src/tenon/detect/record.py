@@ -27,6 +27,7 @@ class ChangeKind(StrEnum):
     SCHEMA_REMOVED = "schema_removed"
     SCHEMA_ADDED = "schema_added"
     RENAMED = "renamed"
+    ADDITIONAL_PROPERTIES_CHANGED = "additional_properties_changed"
 
 
 @dataclass(frozen=True, slots=True)

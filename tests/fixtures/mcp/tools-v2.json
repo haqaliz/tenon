@@ -1,0 +1,38 @@
+{
+  "tools": [
+    {
+      "name": "write_file",
+      "description": "Write a UTF-8 file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "content": {"type": "string"}
+        },
+        "required": ["path", "content"]
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Read a UTF-8 file.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "max_bytes": {"type": "integer"}
+        },
+        "required": ["path"]
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {"type": "string"}
+        },
+        "required": ["content"]
+      },
+      "annotations": {"readOnlyHint": true}
+    }
+  ],
+  "nextCursor": "page-3",
+  "serverInfo": {"name": "files", "version": "2.0.0"}
+}
