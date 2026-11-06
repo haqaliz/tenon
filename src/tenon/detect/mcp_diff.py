@@ -32,7 +32,7 @@ def diff_mcp(old: dict, new: dict) -> DiffResult:
         if name not in old_tools:
             changes.append(_tool_change(ChangeKind.ENDPOINT_ADDED, name))
             continue
-        _diff_input_schema(old_tools[name], new_tools[name], name, context, changes)
+        _diff_tool(old_tools[name], new_tools[name], name, changes)
     return DiffResult(infer_renames(changes), context.unanalyzed)
 
 
@@ -54,94 +54,60 @@ def _tool_change(kind: ChangeKind, name: str) -> Change:
     )
 
 
-def _diff_input_schema(
+def _diff_tool(
     old_tool: dict,
     new_tool: dict,
     name: str,
-    context: "_McpContext",
     changes: list[Change],
 ) -> None:
-    old_schema = old_tool.get("inputSchema") if isinstance(old_tool, dict) else None
-    new_schema = new_tool.get("inputSchema") if isinstance(new_tool, dict) else None
-    if not isinstance(old_schema, dict) or not isinstance(new_schema, dict):
-        return
-    location = Location(
-        pointer=f"#/tools/{_escape(name)}", method="tool", path=name
-    )
-    _diff_properties(
-        old_schema,
-        new_schema,
-        f"#/tools/{_escape(name)}/inputSchema/properties",
-        location,
-        changes,
-    )
-
-
-def _diff_properties(
-    old_schema: dict,
-    new_schema: dict,
-    pointer: str,
-    location: Location,
-    changes: list[Change],
-) -> None:
-    old_properties = _properties_of(old_schema)
-    new_properties = _properties_of(new_schema)
-    old_required = _required(old_schema)
-    new_required = _required(new_schema)
-
-    for prop in sorted(old_properties):
-        if prop not in new_properties:
-            changes.append(
-                Change(
-                    kind=ChangeKind.PROPERTY_REMOVED,
-                    location=_record_location(location, pointer),
-                    before=_render_type(prop, None, _type_basis(old_properties[prop])),
-                    breaking=True,
-                )
+    base = f"#/tools/{_escape(name)}"
+    location = Location(pointer=base, method="tool", path=name)
+    for key, required_added in (("inputSchema", True), ("outputSchema", False)):
+        old_schema = old_tool.get(key) if isinstance(old_tool, dict) else None
+        new_schema = new_tool.get(key) if isinstance(new_tool, dict) else None
+        if isinstance(old_schema, dict) and isinstance(new_schema, dict):
+            _diff_schema(
+                old_schema,
+                new_schema,
+                f"{base}/{key}",
+                location,
+                changes,
+                required_added=required_added,
             )
 
-    for prop in sorted(new_properties):
-        if prop not in old_properties:
-            required = prop in new_required
-            changes.append(
-                Change(
-                    kind=(
-                        ChangeKind.PROPERTY_REQUIRED_ADDED
-                        if required
-                        else ChangeKind.PROPERTY_ADDED
-                    ),
-                    location=_record_location(location, pointer),
-                    after=_render_type(prop, None, _type_basis(new_properties[prop])),
-                    breaking=required,
-                )
-            )
-            continue
 
-        old_property = old_properties[prop]
-        new_property = new_properties[prop]
-        if prop in new_required and prop not in old_required:
-            changes.append(
-                Change(
-                    kind=ChangeKind.PROPERTY_REQUIRED_ADDED,
-                    location=_record_location(location, pointer),
-                    before=_render_type(prop, None, _type_basis(old_property)),
-                    after=_render_type(prop, None, _type_basis(new_property)),
-                    breaking=True,
-                )
-            )
-        _diff_property(old_property, new_property, prop, pointer, location, changes)
-
-
-def _diff_property(
+def _diff_schema(
     old: object,
     new: object,
-    name: str,
     pointer: str,
     location: Location,
     changes: list[Change],
+    *,
+    name: str | None = None,
+    required_added: bool = True,
 ) -> None:
     old_schema = old if isinstance(old, dict) else {}
     new_schema = new if isinstance(new, dict) else {}
+    _diff_schema_header(old_schema, new_schema, name, pointer, location, changes)
+    _diff_additional_properties(old_schema, new_schema, pointer, location, changes)
+    _diff_properties(
+        old_schema,
+        new_schema,
+        f"{pointer}/properties",
+        location,
+        changes,
+        required_added=required_added,
+    )
+
+
+def _diff_schema_header(
+    old_schema: dict,
+    new_schema: dict,
+    name: str | None,
+    pointer: str,
+    location: Location,
+    changes: list[Change],
+) -> None:
     old_basis = _type_basis(old_schema)
     new_basis = _type_basis(new_schema)
     if old_basis != new_basis:
@@ -170,6 +136,103 @@ def _diff_property(
                     breaking=True,
                 )
             )
+
+
+def _diff_additional_properties(
+    old_schema: dict,
+    new_schema: dict,
+    pointer: str,
+    location: Location,
+    changes: list[Change],
+) -> None:
+    old_value = old_schema.get("additionalProperties")
+    new_value = new_schema.get("additionalProperties")
+    if _canonical(old_value) == _canonical(new_value):
+        return
+    changes.append(
+        Change(
+            kind=ChangeKind.ADDITIONAL_PROPERTIES_CHANGED,
+            location=_record_location(location, pointer),
+            before=old_value,
+            after=new_value,
+            breaking=new_value is False and old_value is not False,
+        )
+    )
+
+
+def _diff_properties(
+    old_schema: dict,
+    new_schema: dict,
+    pointer: str,
+    location: Location,
+    changes: list[Change],
+    *,
+    required_added: bool,
+) -> None:
+    old_properties = _properties_of(old_schema)
+    new_properties = _properties_of(new_schema)
+    old_required = _required(old_schema)
+    new_required = _required(new_schema)
+
+    for prop in sorted(old_properties):
+        if prop not in new_properties:
+            changes.append(
+                Change(
+                    kind=ChangeKind.PROPERTY_REMOVED,
+                    location=_record_location(location, pointer),
+                    before=_render_type(prop, None, _type_basis(old_properties[prop])),
+                    breaking=True,
+                )
+            )
+
+    for prop in sorted(new_properties):
+        if prop not in old_properties:
+            required = required_added and prop in new_required
+            changes.append(
+                Change(
+                    kind=(
+                        ChangeKind.PROPERTY_REQUIRED_ADDED
+                        if required
+                        else ChangeKind.PROPERTY_ADDED
+                    ),
+                    location=_record_location(location, pointer),
+                    after=_render_type(prop, None, _type_basis(new_properties[prop])),
+                    breaking=required,
+                )
+            )
+            continue
+
+        old_property = old_properties[prop]
+        new_property = new_properties[prop]
+        if required_added and prop in new_required and prop not in old_required:
+            changes.append(
+                Change(
+                    kind=ChangeKind.PROPERTY_REQUIRED_ADDED,
+                    location=_record_location(location, pointer),
+                    before=_render_type(prop, None, _type_basis(old_property)),
+                    after=_render_type(prop, None, _type_basis(new_property)),
+                    breaking=True,
+                )
+            )
+        _diff_property(old_property, new_property, prop, pointer, location, changes)
+
+
+def _diff_property(
+    old: object,
+    new: object,
+    name: str,
+    pointer: str,
+    location: Location,
+    changes: list[Change],
+) -> None:
+    _diff_schema_header(
+        old if isinstance(old, dict) else {},
+        new if isinstance(new, dict) else {},
+        name,
+        pointer,
+        location,
+        changes,
+    )
 
 
 def _properties_of(schema: object) -> dict:

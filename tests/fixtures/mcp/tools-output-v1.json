@@ -1,0 +1,16 @@
+{
+  "tools": [
+    {
+      "name": "read_file",
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "content": {"type": "string"},
+          "size": {"type": "integer"},
+          "mode": {"type": "string", "enum": ["fast", "safe", "strict"]}
+        },
+        "required": ["content"]
+      }
+    }
+  ]
+}

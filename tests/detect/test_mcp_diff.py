@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from tenon.detect import ChangeKind, Location
+from tenon.detect import ChangeKind, Location, diff
 from tenon.detect.mcp_diff import diff_mcp
 from tenon.detect.mcp_ingest import load_mcp, parse_mcp
 
@@ -30,6 +30,8 @@ def a_payload(name, type_, fmt=None):
 
 
 INPUT = "#/tools/read_file/inputSchema/properties"
+OUTPUT = "#/tools/read_file/outputSchema/properties"
+ADDITIONAL = "#/tools/read_file/inputSchema"
 
 
 # Spec AC1: a removed tool is a breaking endpoint removal.
@@ -234,3 +236,211 @@ def test_a_widened_or_reordered_input_enum_is_not_a_change():
         )
 
         assert of_kind(diff_mcp(old, new), ChangeKind.ENUM_NARROWED) == []
+
+
+# Spec AC3: a removed output property is breaking.
+def test_a_removed_output_property_is_breaking():
+    old = load_mcp(FIXTURES / "tools-output-v1.json")
+    new = load_mcp(FIXTURES / "tools-output-v2.json")
+
+    removed = of_kind(diff_mcp(old, new), ChangeKind.PROPERTY_REMOVED)
+
+    assert len(removed) == 1
+    change = removed[0]
+    assert change.location == Location(pointer=OUTPUT, method="tool", path="read_file")
+    assert change.before == a_payload("content", "string")
+    assert change.after is None
+    assert change.breaking is True
+
+
+# Spec AC3: added output properties are not breaking.
+def test_added_output_properties_are_not_breaking():
+    old = load_mcp(FIXTURES / "tools-output-v1.json")
+    new = load_mcp(FIXTURES / "tools-output-v2.json")
+
+    added = of_kind(diff_mcp(old, new), ChangeKind.PROPERTY_ADDED)
+
+    assert [(change.before, change.after, change.breaking) for change in added] == [
+        (None, a_payload("bytes", "string"), False),
+        (None, a_payload("checksum", "string"), False),
+    ]
+    assert {change.location.pointer for change in added} == {OUTPUT}
+
+
+# Spec AC3: a new required output property is an addition, never required-added.
+def test_a_new_required_output_property_is_not_required_added():
+    old = load_mcp(FIXTURES / "tools-output-v1.json")
+    new = load_mcp(FIXTURES / "tools-output-v2.json")
+
+    result = diff_mcp(old, new)
+
+    assert of_kind(result, ChangeKind.PROPERTY_REQUIRED_ADDED) == []
+    checksum = [
+        change
+        for change in of_kind(result, ChangeKind.PROPERTY_ADDED)
+        if change.after == a_payload("checksum", "string")
+    ]
+    assert len(checksum) == 1
+    assert checksum[0].breaking is False
+
+
+# Spec AC3: a changed output property type is breaking.
+def test_a_changed_output_property_type_is_breaking():
+    old = load_mcp(FIXTURES / "tools-output-v1.json")
+    new = load_mcp(FIXTURES / "tools-output-v2.json")
+
+    changed = of_kind(diff_mcp(old, new), ChangeKind.PROPERTY_TYPE_CHANGED)
+
+    assert len(changed) == 1
+    change = changed[0]
+    assert change.location == Location(pointer=OUTPUT, method="tool", path="read_file")
+    assert change.before == a_payload("size", "integer")
+    assert change.after == a_payload("size", "string")
+    assert change.breaking is True
+
+
+# Spec AC3: a narrowed output enum is breaking.
+def test_a_narrowed_output_enum_is_breaking():
+    old = load_mcp(FIXTURES / "tools-output-v1.json")
+    new = load_mcp(FIXTURES / "tools-output-v2.json")
+
+    narrowed = of_kind(diff_mcp(old, new), ChangeKind.ENUM_NARROWED)
+
+    assert len(narrowed) == 1
+    change = narrowed[0]
+    assert change.location == Location(pointer=OUTPUT, method="tool", path="read_file")
+    assert change.before == {
+        "name": "mode",
+        "enum": ["fast", "safe", "strict"],
+    }
+    assert change.after == {"name": "mode", "enum": ["fast", "safe"]}
+    assert change.breaking is True
+
+
+# Spec AC4: open/absent to closed is a breaking additionalProperties change.
+def test_closing_additional_properties_is_breaking():
+    old = load_mcp(FIXTURES / "tools-additional-v1.json")
+    new = load_mcp(FIXTURES / "tools-additional-v2.json")
+
+    changes = of_kind(
+        diff_mcp(old, new), ChangeKind.ADDITIONAL_PROPERTIES_CHANGED
+    )
+
+    assert len(changes) == 1
+    change = changes[0]
+    assert change.location == Location(pointer=ADDITIONAL, method="tool", path="read_file")
+    assert change.before is None
+    assert change.after is False
+    assert change.breaking is True
+
+
+# Spec AC4: closed to open is a non-breaking widening.
+def test_widening_additional_properties_is_not_breaking():
+    old = load_mcp(FIXTURES / "tools-additional-v2.json")
+    new = load_mcp(FIXTURES / "tools-additional-v1.json")
+
+    changes = of_kind(
+        diff_mcp(old, new), ChangeKind.ADDITIONAL_PROPERTIES_CHANGED
+    )
+
+    assert len(changes) == 1
+    change = changes[0]
+    assert change.before is False
+    assert change.after is None
+    assert change.breaking is False
+
+
+# Spec AC4: true to false is a closing and therefore breaking.
+def test_true_to_false_additional_properties_is_breaking():
+    old = a_document(
+        a_tool(
+            "read_file",
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "additionalProperties": True,
+            },
+        )
+    )
+    new = a_document(
+        a_tool(
+            "read_file",
+            input_schema={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "additionalProperties": False,
+            },
+        )
+    )
+
+    changes = of_kind(
+        diff_mcp(old, new), ChangeKind.ADDITIONAL_PROPERTIES_CHANGED
+    )
+
+    assert len(changes) == 1
+    assert changes[0].before is True
+    assert changes[0].after is False
+    assert changes[0].breaking is True
+
+
+# Spec AC4: equal additionalProperties emits nothing.
+def test_equal_additional_properties_is_not_recorded():
+    for fixture in ("tools-additional-v1.json", "tools-additional-v2.json"):
+        document = load_mcp(FIXTURES / fixture)
+        assert diff_mcp(document, load_mcp(FIXTURES / fixture)).changes == ()
+
+
+# Spec AC4: output schemas compare additionalProperties at their own pointer.
+def test_additional_properties_on_an_output_schema_is_recorded():
+    old = a_document(
+        a_tool("read_file", output_schema={"type": "object", "properties": {}})
+    )
+    new = a_document(
+        a_tool(
+            "read_file",
+            output_schema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        )
+    )
+
+    changes = of_kind(
+        diff_mcp(old, new), ChangeKind.ADDITIONAL_PROPERTIES_CHANGED
+    )
+
+    assert len(changes) == 1
+    assert changes[0].location.pointer == "#/tools/read_file/outputSchema"
+    assert changes[0].before is None
+    assert changes[0].after is False
+    assert changes[0].breaking is True
+
+
+# Spec AC9: the new kind belongs to the MCP differ; OpenAPI never emits it.
+def test_the_openapi_differ_never_emits_the_mcp_only_kind():
+    def a_spec(additional=None):
+        schema = {"type": "object", "properties": {"id": {"type": "string"}}}
+        if additional is not None:
+            schema["additionalProperties"] = additional
+        return {
+            "openapi": "3.0.3",
+            "paths": {
+                "/x": {
+                    "get": {
+                        "responses": {
+                            "200": {
+                                "description": "OK",
+                                "content": {"application/json": {"schema": schema}},
+                            }
+                        }
+                    }
+                }
+            },
+        }
+
+    result = diff(a_spec(), a_spec(False))
+
+    assert ChangeKind.ADDITIONAL_PROPERTIES_CHANGED not in {
+        change.kind for change in result.changes
+    }
