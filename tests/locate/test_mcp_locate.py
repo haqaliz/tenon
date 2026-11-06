@@ -168,6 +168,22 @@ def test_an_endpoint_change_matches_only_the_named_tool():
     assert result.ambiguous == ()
 
 
+# Spec AC3: additional properties is a call-site change.
+def test_an_additional_properties_change_returns_the_call_sites():
+    change = a_change(
+        ChangeKind.ADDITIONAL_PROPERTIES_CHANGED,
+        pointer="#/tools/create_charge/inputSchema",
+        before=True,
+        after=False,
+    )
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert result.certain == (
+        a_site(MCP_BASIC, "client.py", 6, 23, SiteShape.CALL, "call_tool"),
+    )
+
+
 # Spec AC3: a removed field is certain exactly at the rooted dict key.
 def test_a_removed_field_returns_the_rooted_dict_key():
     change = a_change(
@@ -182,6 +198,19 @@ def test_a_removed_field_returns_the_rooted_dict_key():
     assert all(site.shape is not SiteShape.CALL for site in result.certain)
     assert result.ambiguous == ()
     assert result.reason is None
+
+
+# Spec AC3: an added field is certain at the rooted key too.
+def test_an_added_field_returns_the_rooted_key():
+    change = a_change(
+        ChangeKind.PROPERTY_ADDED, pointer=PROPERTIES, after=a_payload("amount")
+    )
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert [(site.shape, site.symbol) for site in result.certain] == [
+        (SiteShape.DICT_KEY, "amount")
+    ]
 
 
 # Spec AC3: a renamed field uses the before name, the spelling in the code.
@@ -254,6 +283,17 @@ def test_a_required_added_field_absent_returns_the_call_sites():
         pointer=PROPERTIES,
         after=a_payload("path", "string"),
     )
+
+    result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
+
+    assert result.certain == (
+        a_site(MCP_BASIC, "client.py", 6, 23, SiteShape.CALL, "call_tool"),
+    )
+
+
+# Spec edge case: a field kind with no payload name is a call-site change.
+def test_a_field_kind_without_a_payload_name_is_a_call_site_change():
+    change = a_change(ChangeKind.PROPERTY_REMOVED, pointer=PROPERTIES)
 
     result = locate_mcp(change, MCP_BASIC, McpLocateConfig())
 
