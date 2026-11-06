@@ -151,10 +151,16 @@ def _dynamic(
     kind: DynamicKind,
     tool: str | None,
     symbol: str | None = None,
+    leaf: bool = False,
 ) -> McpDynamic:
     line = source.lines[node.lineno - 1]
+    byte_col = (
+        node.end_col_offset - len(symbol.encode("utf-8"))
+        if leaf and symbol
+        else node.col_offset
+    )
     return McpDynamic(
-        source.path, node.lineno, _column(line, node.col_offset), kind, tool, symbol
+        source.path, node.lineno, _column(line, byte_col), kind, tool, symbol
     )
 
 
@@ -204,6 +210,20 @@ def _rooted_sessions(
     return rooted, dynamics
 
 
+def _tool_name(node: ast.Call) -> str | None:
+    """The literal tool name from the first positional or the ``name=`` keyword."""
+    expression: ast.expr | None = None
+    if node.args and not isinstance(node.args[0], ast.Starred):
+        expression = node.args[0]
+    else:
+        expression = next(
+            (keyword.value for keyword in node.keywords if keyword.arg == "name"), None
+        )
+    if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+        return expression.value
+    return None
+
+
 class _Visitor(ast.NodeVisitor):
     """Emit call evidence and dynamics for MCP ``call_tool`` calls."""
 
@@ -228,7 +248,13 @@ class _Visitor(ast.NodeVisitor):
         return _is_client_session(receiver, self._roots, self._classes)
 
     def _emit(
-        self, node: ast.AST, symbol: str, rooted: bool, leaf: bool = False
+        self,
+        node: ast.AST,
+        shape: SiteShape,
+        symbol: str,
+        tool: str | None,
+        rooted: bool,
+        leaf: bool = False,
     ) -> None:
         line = self._source.lines[node.lineno - 1]
         byte_col = (
@@ -241,20 +267,64 @@ class _Visitor(ast.NodeVisitor):
                 self._source.path,
                 node.lineno,
                 _column(line, byte_col),
-                SiteShape.CALL,
+                shape,
                 symbol,
-                None,
+                tool,
                 rooted,
                 line,
             )
         )
 
+    def _arguments(self, node: ast.Call, tool: str | None, rooted: bool) -> None:
+        argument: ast.expr | None = None
+        if len(node.args) >= 2 and not isinstance(node.args[1], ast.Starred):
+            argument = node.args[1]
+        else:
+            argument = next(
+                (
+                    keyword.value
+                    for keyword in node.keywords
+                    if keyword.arg == "arguments"
+                ),
+                None,
+            )
+        if isinstance(argument, ast.Dict):
+            for key in argument.keys:
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    self._emit(key, SiteShape.DICT_KEY, key.value, tool, rooted)
+        elif (
+            isinstance(argument, ast.Call)
+            and isinstance(argument.func, ast.Name)
+            and argument.func.id == "dict"
+        ):
+            for keyword in argument.keywords:
+                if keyword.arg is not None:
+                    self._emit(
+                        keyword, SiteShape.KEYWORD, keyword.arg, tool, rooted
+                    )
+
     def visit_Call(self, node: ast.Call) -> None:
         if isinstance(node.func, ast.Attribute) and node.func.attr == "call_tool":
+            rooted = self._is_rooted(node.func.value)
+            tool = _tool_name(node)
             self._emit(
                 node.func,
+                SiteShape.CALL,
                 "call_tool",
-                self._is_rooted(node.func.value),
+                tool,
+                rooted,
                 leaf=True,
             )
+            if tool is None:
+                self.dynamics.append(
+                    _dynamic(
+                        self._source,
+                        node.func,
+                        DynamicKind.GETATTR,
+                        None,
+                        "call_tool",
+                        leaf=True,
+                    )
+                )
+            self._arguments(node, tool, rooted)
         self.generic_visit(node)

@@ -163,4 +163,71 @@ def test_a_second_hop_alias_is_an_alias_chain():
 
 
 # Phase 3: call_tool, tool name and argument keys.
+# Spec AC3/AC4: the exact call, literal tool and dict keys at the quote.
+def test_the_async_with_call_carries_the_literal_tool_and_dict_keys():
+    result = scan_mcp(MCP_BASIC, "mcp")
+
+    assert result.hits == (
+        a_hit(MCP_BASIC, "client.py", 6, 23, SiteShape.CALL, "call_tool", "create_charge", True),
+        a_hit(MCP_BASIC, "client.py", 6, 61, SiteShape.DICT_KEY, "amount", "create_charge", True),
+        a_hit(MCP_BASIC, "client.py", 6, 79, SiteShape.DICT_KEY, "currency", "create_charge", True),
+        a_hit(MCP_BASIC, "client.py", 11, 17, SiteShape.CALL, "call_tool", "other_tool", True),
+        a_hit(MCP_BASIC, "client.py", 11, 42, SiteShape.DICT_KEY, "amount", "other_tool", True),
+    )
+    assert result.hits[0].line_text == (
+        '        await session.call_tool("create_charge", arguments='
+        '{"amount": amount, "currency": "usd"})'
+    )
+
+
+# Spec AC3/AC4: name= supplies the tool; a second positional dict is the arguments.
+def test_a_name_keyword_and_a_second_positional_dict_are_recorded():
+    result = scan_mcp(MCP_ALIAS, "mcp")
+
+    assert result.hits == (
+        a_hit(MCP_ALIAS, "app.py", 6, 19, SiteShape.CALL, "call_tool", "create_charge", True),
+        a_hit(MCP_ALIAS, "app.py", 6, 47, SiteShape.DICT_KEY, "amount", "create_charge", True),
+        a_hit(MCP_ALIAS, "app.py", 7, 19, SiteShape.CALL, "call_tool", "create_charge", True),
+        a_hit(MCP_ALIAS, "app.py", 7, 62, SiteShape.DICT_KEY, "amount", "create_charge", True),
+        a_hit(MCP_ALIAS, "app.py", 9, 17, SiteShape.CALL, "call_tool", "create_charge", False),
+        a_hit(MCP_ALIAS, "app.py", 9, 45, SiteShape.DICT_KEY, "amount", "create_charge", False),
+    )
+
+
+# Spec AC3: a variable tool name is a GETATTR dynamic, not a literal.
+def test_a_variable_tool_name_is_a_getattr_dynamic():
+    result = scan_mcp(MCP_DYNAMIC, "mcp")
+
+    [call] = [hit for hit in a_call_hits(result) if hit.line == 6]
+
+    assert call.tool is None
+    assert McpDynamic("app.py", 6, 23, DynamicKind.GETATTR, None, "call_tool") in (
+        result.dynamics
+    )
+
+
+# Spec AC4: dict(...) emits keyword hits at the argument name.
+def test_a_dict_call_emits_keyword_hits():
+    result = scan_mcp(MCP_DYNAMIC, "mcp")
+
+    assert (
+        a_hit(MCP_DYNAMIC, "app.py", 8, 55, SiteShape.KEYWORD, "amount", "create_charge", True)
+        in result.hits
+    )
+
+
+# Spec AC4: a nested object under a key is not walked.
+def test_a_nested_object_key_is_not_walked():
+    result = scan_mcp(MCP_DYNAMIC, "mcp")
+
+    keys = [
+        (hit.line, hit.symbol, hit.column)
+        for hit in result.hits
+        if hit.shape is SiteShape.DICT_KEY
+    ]
+
+    assert keys == [(6, "amount", 40), (12, "amount", 24), (12, "currency", 49)]
+    assert all(hit.symbol != "nested" for hit in result.hits)
+
+
 # Phase 4: dynamics, columns, determinism.
