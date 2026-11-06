@@ -9,7 +9,7 @@ import sys
 import pytest
 
 from tenon.cli import main
-from tenon.detect import diff, load
+from tenon.detect import diff, diff_mcp, load, load_mcp
 from tenon.pr import PrDraft, PrRefusal, PrResult, PrStatus
 from tenon.prove import CheckResult, ProofLevel, ProofPlan, ProofResult
 
@@ -294,6 +294,57 @@ def test_check_mcp_source_from_the_config(a_mcp_repo, a_mcp_specs, capsys):
 def test_check_mcp_clean_change_exits_zero(a_mcp_repo, a_mcp_clean_specs, capsys):
     assert a_check(a_mcp_repo, a_mcp_clean_specs, "--source", "mcp") == 0
     assert "0 changes" in capsys.readouterr().out
+
+
+# Spec AC5: MCP with TypeScript is one named error.
+def test_language_ts_with_source_mcp_is_named(a_mcp_repo, a_mcp_specs, capsys):
+    assert (
+        a_check(a_mcp_repo, a_mcp_specs, "--source", "mcp", "--language", "ts")
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "mcp" in err
+    assert "python" in err
+    assert "Traceback" not in err
+
+
+# Spec AC5: the MCP+TS error in JSON mode is one object.
+def test_language_ts_with_source_mcp_json_is_one_error(
+    a_mcp_repo, a_mcp_specs, capsys
+):
+    assert (
+        a_check(
+            a_mcp_repo,
+            a_mcp_specs,
+            "--source",
+            "mcp",
+            "--language",
+            "ts",
+            "--json",
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "config"
+    assert "mcp" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC2/AC5: --source overrides the default, and a missing tenon.toml
+# still uses the default mcp client package.
+def test_check_mcp_flag_overrides_the_default_source(
+    a_mcp_repo_without_config, a_mcp_specs, capsys
+):
+    assert (
+        a_check(a_mcp_repo_without_config, a_mcp_specs, "--source", "mcp")
+        == 1
+    )
+    assert "amount" in capsys.readouterr().out
 
 
 def a_fix(repo, specs, *extra, remote=None):
@@ -623,6 +674,51 @@ def test_fix_ts_locates_proposes_and_renders_the_diff(
     assert a_snapshot(a_ts_repo.repo) == before
 
 
+# Spec AC4: fix --source mcp locates the MCP key, proposes and renders the diff.
+def test_fix_mcp_locates_proposes_and_renders_the_diff(
+    a_mcp_repo, a_mcp_specs, a_snapshot, monkeypatch, capsys
+):
+    located = []
+    real_propose = cli_main.propose
+
+    def propose_spy(change, result, repo):
+        located.append(result)
+        return real_propose(change, result, repo)
+
+    monkeypatch.setattr(cli_main, "propose", propose_spy)
+    monkeypatch.setattr(
+        cli_main, "prove_plan", lambda *args, **kwargs: a_green_proof()
+    )
+    before = a_snapshot(a_mcp_repo)
+
+    assert a_fix(a_mcp_repo, a_mcp_specs, "--source", "mcp") == 0
+
+    out = capsys.readouterr().out
+    assert (
+        '-            "create_charge", arguments={"amount": 100}' in out
+    )
+    assert (
+        '+            "create_charge", arguments={"amount_cents": 100}' in out
+    )
+    assert "Proof: TESTS_PASSED" in out
+    assert [
+        (site.path, site.line, site.column) for site in located[0].certain
+    ] == [("app.py", 7, 41)]
+    assert a_snapshot(a_mcp_repo) == before
+
+
+# Spec AC4: fix with the source from the config needs no flag.
+def test_fix_mcp_source_from_the_config(
+    a_mcp_repo, a_mcp_specs, monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        cli_main, "prove_plan", lambda *args, **kwargs: a_green_proof()
+    )
+
+    assert a_fix(a_mcp_repo, a_mcp_specs) == 0
+    assert "amount_cents" in capsys.readouterr().out
+
+
 # Spec AC5: --language ts with a package npm cannot accept is a named config error.
 def test_language_ts_rejects_an_invalid_npm_package(a_ts_repo, capsys):
     (a_ts_repo.repo / "tenon.toml").write_text(
@@ -728,6 +824,35 @@ def test_fix_open_pr_opens_one_pr(a_repo, a_specs, monkeypatch, capsys):
     assert call["remote"] is remote
     assert call["required"] is ProofLevel.TESTS_PASSED
     assert call["allow_below_required"] is False
+    assert call["unanalyzed"] == expected_unanalyzed
+
+
+# Spec AC3/AC5: the MCP diff's unanalyzed list reaches the PR writer.
+def test_fix_mcp_open_pr_passes_the_unanalyzed_list(
+    a_mcp_repo, a_mcp_unanalyzed_specs, monkeypatch, capsys
+):
+    old, new = a_mcp_unanalyzed_specs
+    expected_unanalyzed = diff_mcp(load_mcp(old), load_mcp(new)).unanalyzed
+    assert expected_unanalyzed
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+    monkeypatch.setattr(
+        cli_main, "prove_plan", lambda *args, **kwargs: a_green_proof()
+    )
+
+    assert (
+        a_fix(
+            a_mcp_repo,
+            a_mcp_unanalyzed_specs,
+            "--source",
+            "mcp",
+            "--open-pr",
+            remote=object(),
+        )
+        == 0
+    )
+
+    (call,) = calls
     assert call["unanalyzed"] == expected_unanalyzed
 
 

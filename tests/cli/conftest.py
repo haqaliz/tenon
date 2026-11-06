@@ -156,6 +156,16 @@ def a_mcp_repo():
 
 
 @pytest.fixture
+def a_mcp_repo_without_config(tmp_path):
+    """The MCP fixture repo with no tenon.toml, copied out of the tree."""
+    repo = shutil.copytree(
+        MCP_CLI, tmp_path / "repo", ignore=shutil.ignore_patterns("__pycache__")
+    )
+    (repo / "tenon.toml").unlink()
+    return repo
+
+
+@pytest.fixture
 def a_mcp_specs():
     """The create_charge ``amount`` -> ``amount_cents`` rename."""
     return (
@@ -169,6 +179,15 @@ def a_mcp_clean_specs():
     """The same MCP document on both sides: no change."""
     path = MCP_SPECS / "tools-amount-v1.json"
     return (path, path)
+
+
+@pytest.fixture
+def a_mcp_unanalyzed_specs():
+    """One added tool next to a cyclic schema the differ records."""
+    return (
+        MCP_SPECS / "tools-ref-cycle.json",
+        MCP_SPECS / "tools-ref-cycle-added.json",
+    )
 
 
 @pytest.fixture

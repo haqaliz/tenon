@@ -71,8 +71,8 @@ def _require(value: str) -> str:
 
 def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("repo", help="repository to analyze")
-    parser.add_argument("--old", required=True, help="old OpenAPI document")
-    parser.add_argument("--new", required=True, help="new OpenAPI document")
+    parser.add_argument("--old", required=True, help="old API document")
+    parser.add_argument("--new", required=True, help="new API document")
     parser.add_argument("--config", default=None, help="path to tenon.toml")
     parser.add_argument(
         "--language",
@@ -154,12 +154,7 @@ def _config(args: argparse.Namespace) -> CliConfig:
     elif args.source == "mcp" or args.sdk_package is not None:
         if args.source == "mcp":
             # Spec AC5: a missing config still has the default MCP package.
-            config = CliConfig(
-                locate=McpLocateConfig(
-                    client_package=args.sdk_package or "mcp"
-                ),
-                source="mcp",
-            )
+            config = CliConfig(locate=McpLocateConfig(), source="mcp")
         else:
             language = args.language or "python"
             locate_type = TsLocateConfig if language == "ts" else LocateConfig

@@ -229,17 +229,10 @@ def overrides(
                     else sdk_package
                 ),
                 operations={
-                    **(
-                        config.locate.operations
-                        if openapi
-                        else {}
-                    ),
+                    **(config.locate.operations if openapi else {}),
                     **operations_over,
                 },
-                fields={
-                    **(config.locate.fields if openapi else {}),
-                    **fields_over,
-                },
+                fields={**(config.locate.fields if openapi else {}), **fields_over},
             )
 
     if command is not None:
