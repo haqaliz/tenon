@@ -1,9 +1,10 @@
 # Tenon: Architecture
 
 Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR), T6
-(locate, TypeScript/JavaScript), T7 (proof ladder) and the `tenon check` / `tenon fix` CLI are
-implemented** under `src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`,
-`src/tenon/prove/`, `src/tenon/pr/` and `src/tenon/cli/`. The probe and the later stages are not.
+(locate, TypeScript/JavaScript), T7 (proof ladder), T8a (MCP tool-schema diffs) and the `tenon check`
+/ `tenon fix` CLI are implemented** under `src/tenon/detect/`, `src/tenon/locate/`,
+`src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/` and `src/tenon/cli/`. The probe and the
+later stages are not.
 
 ## Pipeline
 
@@ -30,7 +31,7 @@ API change source (OpenAPI v1 -> v2 | MCP schema | SDK metadata)
 
 ```text
 src/tenon/
-  detect/     T1: spec parsers, differ, Change records      <- built
+  detect/     T1/T8a: spec parsers, differ, Change records <- built (OpenAPI + MCP)
   locate/     T2/T6: per-language call-site finders       <- built (Python + TS/JS)
   propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
   prove/      T4/T7: working-copy runner, proof ladder  <- built (all five levels)
@@ -44,7 +45,9 @@ tests/        offline; fixture repos and specs; no network, no model calls
 ## Key decisions
 
 - **Change record is the unit.** Everything downstream consumes typed Change records, so adding a
-  source (MCP, SDK metadata) does not touch locate or prove.
+  source (MCP, SDK metadata) does not touch locate or prove. T8a reuses the record for MCP tools with
+  a synthetic `method="tool"` operation; the only taxonomy extension is
+  `ADDITIONAL_PROPERTIES_CHANGED`.
 - **One certainty policy, per-language scanners.** T2 and T6 both emit `Hit`/`Dynamic`/`ScanResult`
   evidence and call the same `resolve` rule table. Python parses with `ast`, TypeScript/JavaScript
   with tree-sitter; neither runs the scanned code, needs Node, or infers types.
@@ -89,12 +92,18 @@ levels; the strongest configured stage that is green is the result.
 `tenon.toml` provides `[locate]` (`language`, `sdk_package`, mappings) and `[tenon]` defaults; flags
 override. Exit 2 on usage or bad input. Never a traceback.
 
+MCP input is engine-only for now: `load_mcp` / `diff_mcp` return the same `Change` records, but
+`tenon check` / `tenon fix` still take OpenAPI documents. A tool-call locator and a source switch are
+T8b/T8c.
+
 ## Open questions
 
 - T6 follow-ups: `tsconfig`/workspace path aliases, JSX attribute sites, and a T4 copy policy for
   `node_modules` so a real TS `npm test` can run in the proof copy.
 - T7 follow-ups: generation of characterization tests, recording/replaying real traffic, and
   per-stage timeouts. The current commands are user-supplied and share one timeout.
+- T8b/T8c follow-ups: an MCP tool-call locator (`call_tool("name", {...})` in Python/TS), a
+  `tenon check` source switch, the probe transport/agent, and more JSON Schema composition coverage.
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.

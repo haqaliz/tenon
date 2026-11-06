@@ -3,7 +3,7 @@
 - **Slug:** `mcp-diffs`
 - **Capability:** T8 in `docs/technical/CAPABILITY_ROADMAP.md` — **first slice, MCP diffs**
 - **Milestone:** M2.3 in `docs/ROADMAP.md` (Phase 2), first slice
-- **Status:** draft for review
+- **Status:** implemented (first slice) 2026-11-07 (`src/tenon/detect/mcp_*.py`, 1,253 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

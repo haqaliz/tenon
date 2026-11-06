@@ -6,6 +6,7 @@
 - **Capability:** **T8 MCP diffs and probe mode** — first slice: **MCP tool-schema diffs**
   (`docs/technical/CAPABILITY_ROADMAP.md:14`)
 - **Milestone:** M2.3 (`docs/ROADMAP.md`), first slice
+- **State:** shipped 2026-11-07 (`src/tenon/detect/mcp_*.py`, 1,253 tests)
 - **Branch:** `feat/mcp-diffs/aliz`
 - **Worktree:** `.claude/worktrees/feat-mcp-diffs`
 
