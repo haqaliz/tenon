@@ -10,8 +10,10 @@ from pathlib import Path
 import pytest
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
+MCP_SPECS = Path(__file__).parent.parent / "fixtures" / "mcp"
 PROOF_BASIC = FIXTURES / "proof-basic"
 TS_BASIC = FIXTURES / "ts-sdk-basic"
+MCP_CLI = FIXTURES / "mcp-cli"
 
 # The M0.3 rename; the fixture call is ``client.charges.create(amount=amount)``.
 OLD_SPEC = """\
@@ -144,6 +146,47 @@ def a_ts_repo(tmp_path):
         repo=repo,
         specs=a_write_specs(tmp_path, OLD_SPEC, NEW_SPEC),
         site=("src/billing.ts", 5, 25),
+    )
+
+
+@pytest.fixture
+def a_mcp_repo():
+    """The committed MCP fixture repo; the CLI only reads it."""
+    return MCP_CLI
+
+
+@pytest.fixture
+def a_mcp_repo_without_config(tmp_path):
+    """The MCP fixture repo with no tenon.toml, copied out of the tree."""
+    repo = shutil.copytree(
+        MCP_CLI, tmp_path / "repo", ignore=shutil.ignore_patterns("__pycache__")
+    )
+    (repo / "tenon.toml").unlink()
+    return repo
+
+
+@pytest.fixture
+def a_mcp_specs():
+    """The create_charge ``amount`` -> ``amount_cents`` rename."""
+    return (
+        MCP_SPECS / "tools-amount-v1.json",
+        MCP_SPECS / "tools-amount-v2.json",
+    )
+
+
+@pytest.fixture
+def a_mcp_clean_specs():
+    """The same MCP document on both sides: no change."""
+    path = MCP_SPECS / "tools-amount-v1.json"
+    return (path, path)
+
+
+@pytest.fixture
+def a_mcp_unanalyzed_specs():
+    """One added tool next to a cyclic schema the differ records."""
+    return (
+        MCP_SPECS / "tools-ref-cycle.json",
+        MCP_SPECS / "tools-ref-cycle-added.json",
     )
 
 

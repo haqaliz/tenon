@@ -3,7 +3,7 @@ import re
 import pytest
 
 from tenon.cli import CliConfig, load_cli_config, overrides, resolve_config_path
-from tenon.locate import LocateConfig, TsLocateConfig
+from tenon.locate import LocateConfig, McpLocateConfig, TsLocateConfig
 from tenon.prove import ProofLevel
 
 
@@ -19,14 +19,19 @@ def a_config(
     require=ProofLevel.TESTS_PASSED,
     breaking_only=False,
     language="python",
+    source="openapi",
 ):
-    locate_type = TsLocateConfig if language == "ts" else LocateConfig
-    return CliConfig(
-        locate=locate_type(
+    if source == "mcp":
+        locate = McpLocateConfig(client_package=sdk_package)
+    else:
+        locate_type = TsLocateConfig if language == "ts" else LocateConfig
+        locate = locate_type(
             sdk_package=sdk_package,
             operations=operations or {},
             fields=fields or {},
-        ),
+        )
+    return CliConfig(
+        locate=locate,
         command=command,
         build=build,
         characterize=characterize,
@@ -34,6 +39,7 @@ def a_config(
         require=require,
         breaking_only=breaking_only,
         language=language,
+        source=source,
     )
 
 
@@ -101,6 +107,108 @@ def test_language_argument_overrides_the_file(
 
     assert config.language == argument
     assert isinstance(config.locate, expected_type)
+
+
+# Spec AC1: no source key and no flag is the shipped OpenAPI path.
+def test_minimal_file_defaults_to_the_openapi_source(tmp_path):
+    path = a_file(tmp_path, '[locate]\nsdk_package = "stripe"\n')
+
+    config = load_cli_config(path)
+
+    assert config.source == "openapi"
+    assert isinstance(config.locate, LocateConfig)
+
+
+# Spec AC2: the file selects MCP and builds the MCP locate config.
+def test_file_selects_mcp_and_builds_the_mcp_config(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nsource = "mcp"\nsdk_package = "mcp"\n',
+    )
+
+    config = load_cli_config(path)
+
+    assert config.source == "mcp"
+    assert config.language == "python"
+    assert config.locate == McpLocateConfig(client_package="mcp")
+
+
+# Spec AC2/AC5: the MCP client package defaults to mcp.
+def test_mcp_source_defaults_the_client_package_to_mcp(tmp_path):
+    path = a_file(tmp_path, '[locate]\nsource = "mcp"\n')
+
+    assert load_cli_config(path).locate == McpLocateConfig()
+
+
+# Spec AC2: --source overrides the file in both directions.
+@pytest.mark.parametrize(
+    ("file_text", "argument", "expected_type"),
+    [
+        ('[locate]\nsdk_package = "stripe"\n', "mcp", McpLocateConfig),
+        (
+            '[locate]\nsource = "mcp"\nsdk_package = "mcp"\n',
+            "openapi",
+            LocateConfig,
+        ),
+    ],
+)
+def test_source_argument_overrides_the_file(
+    tmp_path, file_text, argument, expected_type
+):
+    path = a_file(tmp_path, file_text)
+
+    config = load_cli_config(path, source=argument)
+
+    assert config.source == argument
+    assert isinstance(config.locate, expected_type)
+
+
+# Spec AC5: MCP is Python-only, named with the source key.
+def test_mcp_source_rejects_ts_in_the_file(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nsource = "mcp"\nlanguage = "ts"\nsdk_package = "mcp"\n',
+    )
+
+    with pytest.raises(ValueError, match="mcp.*python"):
+        load_cli_config(path)
+
+
+def test_mcp_source_rejects_the_ts_argument(tmp_path):
+    path = a_file(tmp_path, '[locate]\nsource = "mcp"\nsdk_package = "mcp"\n')
+
+    with pytest.raises(ValueError, match="mcp.*python"):
+        load_cli_config(path, language="ts")
+
+
+# Spec AC2: an unknown source is refused by name.
+@pytest.mark.parametrize("source", ["graphql", "OpenAPI", ""])
+def test_load_cli_config_rejects_an_unknown_source(tmp_path, source):
+    path = a_file(
+        tmp_path, f'[locate]\nsource = "{source}"\nsdk_package = "stripe"\n'
+    )
+
+    with pytest.raises(ValueError, match=re.escape("[locate] source")):
+        load_cli_config(path)
+
+
+def test_load_cli_config_rejects_an_unknown_source_argument(tmp_path):
+    path = a_file(tmp_path, '[locate]\nsdk_package = "stripe"\n')
+
+    with pytest.raises(ValueError, match=re.escape("[locate] source")):
+        load_cli_config(path, source="graphql")
+
+
+# Spec AC2: the OpenAPI-only tables are accepted and ignored in MCP mode.
+def test_mcp_source_ignores_the_operation_tables(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nsource = "mcp"\nsdk_package = "mcp"\n'
+        '\n[locate.operations]\n"POST /v1/charges" = "charges.create"\n'
+        '\n[locate.fields]\n"Charge.amount" = "amount_cents"\n',
+    )
+
+    assert load_cli_config(path).locate == McpLocateConfig(client_package="mcp")
 
 
 # Spec AC2: the shared operation and field tables apply to TypeScript too.
@@ -330,6 +438,42 @@ def test_overrides_rejects_a_package_the_new_language_cannot_use():
 def test_overrides_rejects_an_unknown_language():
     with pytest.raises(ValueError, match=re.escape("--language")):
         overrides(a_config(), language="ruby")
+
+
+# Spec AC2: a source change rebuilds the locate config and keeps the package.
+def test_overrides_changes_the_source_to_mcp():
+    result = overrides(a_config(sdk_package="stripe"), source="mcp")
+
+    assert result.source == "mcp"
+    assert result.locate == McpLocateConfig(client_package="stripe")
+
+
+def test_overrides_changes_the_source_back_to_openapi():
+    result = overrides(
+        a_config(sdk_package="acme.mcp", source="mcp"), source="openapi"
+    )
+
+    assert result.source == "openapi"
+    assert result.locate == LocateConfig(sdk_package="acme.mcp")
+
+
+# Spec AC2: --sdk-package names the MCP client package.
+def test_overrides_replaces_the_mcp_client_package():
+    result = overrides(a_config(source="mcp"), sdk_package="acme.mcp")
+
+    assert result.locate == McpLocateConfig(client_package="acme.mcp")
+
+
+# Spec AC5: MCP with TypeScript is one named error.
+def test_overrides_rejects_mcp_with_ts():
+    with pytest.raises(ValueError, match="mcp.*python"):
+        overrides(a_config(), source="mcp", language="ts")
+
+
+# Spec AC2: an unknown --source names the flag.
+def test_overrides_rejects_an_unknown_source():
+    with pytest.raises(ValueError, match=re.escape("--source")):
+        overrides(a_config(), source="graphql")
 
 
 # Spec AC5: CliConfig itself refuses an unknown language.

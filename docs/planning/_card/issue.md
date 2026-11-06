@@ -1,38 +1,41 @@
-# Card: feat/mcp-diffs
+# Card: feat/mcp-locator
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T8 MCP diffs and probe mode** — first slice: **MCP tool-schema diffs**
+- **Capability:** **T8 MCP diffs and probe mode** — second slice: **MCP tool-call locator**
   (`docs/technical/CAPABILITY_ROADMAP.md:14`)
-- **Milestone:** M2.3 (`docs/ROADMAP.md`), first slice
-- **State:** shipped 2026-11-07 (`src/tenon/detect/mcp_*.py`, 1,253 tests)
-- **Branch:** `feat/mcp-diffs/aliz`
-- **Worktree:** `.claude/worktrees/feat-mcp-diffs`
+- **Milestone:** M2.3 (`docs/ROADMAP.md`), second slice
+- **State:** shipped 2026-11-07 (`src/tenon/locate/mcp_*.py`, 1,342 tests)
+- **Branch:** `feat/mcp-locator/aliz`
+- **Worktree:** `.claude/worktrees/feat-mcp-locator`
 
 ## Brief
 
-T1 diffs OpenAPI documents. MCP servers publish a machine-readable `tools/list` result — tool names,
-input schemas, output schemas — and those tools break consumers the same way HTTP endpoints do. The
-product promises to trust machine-readable change sources; MCP is one of them (`CLAUDE.md` §3).
+T8a emits typed `Change` records for MCP tools, but nothing finds the consumer code that calls those
+tools. A tool removed, an argument renamed or a required argument added is reported; the user still
+has to grep `call_tool("name", ...)` by hand.
 
-This card adds an MCP tool-schema ingest and differ that emits the **same** `Change` / `DiffResult`
-records as T1, so a later MCP tool-call locator, `tenon check` source switch or probe mode can consume
-it unchanged. It is engine-only: no network, no agent, no probe.
+T8b adds the MCP tool-call locator for Python: given a T8a `Change` and a repository, find
+`session.call_tool("tool", arguments={...})` sites, the argument keys, and the sites the locator
+cannot prove. It returns the same `LocateResult` — certain `Site`s, ambiguity groups with named
+reasons, or a named non-result — so T3's existing rename rule, T4's proof runner, T5's PR writer and
+the CLI work unchanged. A `--source mcp` switch lets `tenon check` / `tenon fix` use the MCP loader,
+differ and locator.
 
-The hard rules do not change: only a machine-readable `tools/list` document is a source; an
-unparseable or unsupported schema is a named refusal with a pointer, never a partial guess;
-descriptions are not changes; output is deterministic and byte-stable.
+The hard rules do not change: a site is certain only when the receiver is rooted in an MCP client
+import/alias and the tool name is a literal that matches the changed tool; a dynamic tool name,
+dynamic arguments or an unrooted receiver is an ambiguity group, never a guess.
 
 ## Constraints carried in from the repo
 
-- `CLAUDE.md` §3: machine-readable sources only; a changelog paragraph is a hint.
-- `docs/technical/ARCHITECTURE.md`: the change record is the unit; adding a source should not touch
-  locate or prove.
-- T1's `Change`, `DiffResult`, `SpecRefusal` and canonical ordering are the contract to reuse.
-- Offline: committed JSON fixtures; no MCP server, no network, no model.
+- `CLAUDE.md` §1–2: execution decides; ambiguity is reported, never guessed.
+- T2's `Site`/`SiteShape`/`AmbiguousGroup`/`LocateResult` and certainty policy; T3 edits `keyword`/
+  `dict_key`/`attribute` spans; no new proposer rule unless the MCP shape needs one.
+- T8a's `Change` records: `location.method="tool"`, `path=<tool>`, pointer under `#/tools/<tool>/...`.
+- Offline: committed fixture repos; no MCP server, network, agent or model.
 
 ## Scope fence
 
-Not this card: `tenon probe`, an agent, network transport, an MCP tool-call locator, CLI
-`--source mcp`, SDK release metadata. Those are T8b/T8c after the diff contract is stable.
+Not this card: the TypeScript MCP locator, `tenon probe`/transport/agent, low-level
+`send_request("tools/call", ...)` (unless the interview chooses it), output-schema dataflow, T9.

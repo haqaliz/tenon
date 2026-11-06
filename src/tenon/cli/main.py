@@ -7,8 +7,23 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Sequence
 
-from tenon.detect import Change, DiffResult, SpecRefusal, diff, load
-from tenon.locate import LocateConfig, TsLocateConfig, locate, locate_ts
+from tenon.detect import (
+    Change,
+    DiffResult,
+    SpecRefusal,
+    diff,
+    diff_mcp,
+    load,
+    load_mcp,
+)
+from tenon.locate import (
+    LocateConfig,
+    McpLocateConfig,
+    TsLocateConfig,
+    locate,
+    locate_mcp,
+    locate_ts,
+)
 from tenon.pr import GitGhRemote, Remote, write_pr
 from tenon.propose import propose
 from tenon.prove import ProofPlan, proof_rank, prove_plan
@@ -56,14 +71,20 @@ def _require(value: str) -> str:
 
 def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("repo", help="repository to analyze")
-    parser.add_argument("--old", required=True, help="old OpenAPI document")
-    parser.add_argument("--new", required=True, help="new OpenAPI document")
+    parser.add_argument("--old", required=True, help="old API document")
+    parser.add_argument("--new", required=True, help="new API document")
     parser.add_argument("--config", default=None, help="path to tenon.toml")
     parser.add_argument(
         "--language",
         choices=("python", "ts"),
         default=None,
         help="repository language (default: from tenon.toml, else python)",
+    )
+    parser.add_argument(
+        "--source",
+        choices=("openapi", "mcp"),
+        default=None,
+        help="input documents (default: from tenon.toml, else openapi)",
     )
     parser.add_argument("--sdk-package", default=None, help="dotted SDK package")
     parser.add_argument(
@@ -129,14 +150,18 @@ def _config(args: argparse.Namespace) -> CliConfig:
         raise _Usage(f"repository is not a directory: {args.repo}")
     path = resolve_config_path(repo, args.config)
     if path is not None:
-        config = load_cli_config(path, args.language)
-    elif args.sdk_package is not None:
-        language = args.language or "python"
-        locate_type = TsLocateConfig if language == "ts" else LocateConfig
-        config = CliConfig(
-            locate=locate_type(sdk_package=args.sdk_package),
-            language=language,
-        )
+        config = load_cli_config(path, args.language, args.source)
+    elif args.source == "mcp" or args.sdk_package is not None:
+        if args.source == "mcp":
+            # Spec AC5: a missing config still has the default MCP package.
+            config = CliConfig(locate=McpLocateConfig(), source="mcp")
+        else:
+            language = args.language or "python"
+            locate_type = TsLocateConfig if language == "ts" else LocateConfig
+            config = CliConfig(
+                locate=locate_type(sdk_package=args.sdk_package),
+                language=language,
+            )
     else:
         raise _Usage(
             f"{repo / 'tenon.toml'} is missing and --sdk-package was not given"
@@ -153,20 +178,28 @@ def _config(args: argparse.Namespace) -> CliConfig:
         require=getattr(args, "require", None),
         breaking_only=args.breaking_only,
         language=args.language,
+        source=args.source,
     )
 
 
 def _diff_and_filter(
     old: str, new: str, config: CliConfig
 ) -> tuple[DiffResult, tuple[Change, ...]]:
-    result = diff(load(old), load(new))
+    # Spec AC3: the source chooses the loader and differ, nothing downstream.
+    result = (
+        diff_mcp(load_mcp(old), load_mcp(new))
+        if config.source == "mcp"
+        else diff(load(old), load(new))
+    )
     if config.breaking_only:
         return result, tuple(change for change in result.changes if change.breaking)
     return result, tuple(result.changes)
 
 
 def _locate(change: Change, repo: Path, config: CliConfig):
-    """The one dispatch point between the Python and TypeScript locators."""
+    """The one dispatch point between the MCP, Python and TypeScript locators."""
+    if config.source == "mcp":
+        return locate_mcp(change, repo, config.locate)
     locate_change = locate_ts if config.language == "ts" else locate
     return locate_change(change, repo, config.locate)
 
