@@ -1,4 +1,6 @@
 from .config import load_config
+from .mcp_config import McpLocateConfig
+from .mcp_locate import locate_mcp
 from .query import Query, derive
 from .result import (
     AmbiguityReason,
@@ -22,6 +24,7 @@ __all__ = [
     "LocateConfig",
     "LocateReason",
     "LocateResult",
+    "McpLocateConfig",
     "Query",
     "ScanResult",
     "Site",
@@ -30,6 +33,7 @@ __all__ = [
     "derive",
     "load_config",
     "locate",
+    "locate_mcp",
     "locate_ts",
     "scan",
 ]

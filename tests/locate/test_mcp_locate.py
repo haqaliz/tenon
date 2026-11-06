@@ -1,5 +1,8 @@
 """The MCP locate surface: change policy over the scan evidence."""
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -438,3 +441,106 @@ def test_an_output_schema_property_change_returns_the_call_site_only():
     assert all(site.shape is SiteShape.CALL for site in result.certain)
     assert result.ambiguous == ()
     assert result.reason is None
+
+
+# Phase 4: determinism, exports and the invariant.
+def a_site_key(site):
+    return (site.path, site.line, site.column, site.symbol, site.shape.value)
+
+
+# Spec AC7: the public surface exports the config and the locator.
+def test_the_public_surface_exports_the_mcp_locator():
+    from tenon.locate import McpLocateConfig as exported_config
+    from tenon.locate import locate_mcp as exported_locate
+
+    assert exported_config is McpLocateConfig
+    assert exported_locate is locate_mcp
+
+
+# Spec AC7: two runs produce byte-identical JSON.
+def test_two_runs_produce_identical_json():
+    change = a_change(
+        ChangeKind.PROPERTY_REMOVED, pointer=PROPERTIES, before=a_payload("amount")
+    )
+
+    first = locate_mcp(change, MCP_DYNAMIC, McpLocateConfig()).to_json()
+    second = locate_mcp(change, MCP_DYNAMIC, McpLocateConfig()).to_json()
+
+    assert first == second
+
+
+HASH_SEED_SCRIPT = """
+from tenon.detect import Change, ChangeKind, Location
+from tenon.locate import McpLocateConfig, locate_mcp
+
+change = Change(
+    kind=ChangeKind.PROPERTY_REMOVED,
+    location=Location(
+        pointer="#/tools/create_charge/inputSchema/properties",
+        method="tool",
+        path="create_charge",
+    ),
+    before={"type": "integer", "format": None, "name": "amount"},
+)
+print(locate_mcp(change, __REPO__, McpLocateConfig()).to_json(), end="")
+"""
+
+
+def locate_mcp_with_hash_seed(seed):
+    script = HASH_SEED_SCRIPT.replace("__REPO__", repr(str(MCP_DYNAMIC)))
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "PYTHONHASHSEED": seed},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+# Spec AC7: hash seeds cannot leak into the JSON.
+def test_locate_mcp_is_identical_across_hash_seeds():
+    assert locate_mcp_with_hash_seed("0") == locate_mcp_with_hash_seed("1")
+
+
+# Spec AC7: certain sites and candidates are canonically ordered and disjoint.
+def test_no_site_is_both_certain_and_a_candidate():
+    scenes = (
+        (
+            a_change(
+                ChangeKind.PROPERTY_REMOVED,
+                pointer=PROPERTIES,
+                before=a_payload("amount"),
+            ),
+            MCP_DYNAMIC,
+        ),
+        (
+            a_change(
+                ChangeKind.PROPERTY_REMOVED,
+                pointer=PROPERTIES,
+                before=a_payload("amount"),
+            ),
+            MCP_DECOY,
+        ),
+        (
+            a_change(
+                ChangeKind.PROPERTY_REMOVED,
+                pointer=PROPERTIES,
+                before=a_payload("amount"),
+            ),
+            MCP_ALIAS,
+        ),
+        (a_change(), MCP_DYNAMIC),
+    )
+
+    for change, repo in scenes:
+        result = locate_mcp(change, repo, McpLocateConfig())
+        certain = {a_site_key(site) for site in result.certain}
+        assert [a_site_key(site) for site in result.certain] == sorted(certain)
+        for group in result.ambiguous:
+            assert [
+                a_site_key(candidate) for candidate in group.candidates
+            ] == sorted(a_site_key(candidate) for candidate in group.candidates)
+            assert certain.isdisjoint(
+                a_site_key(candidate) for candidate in group.candidates
+            )
