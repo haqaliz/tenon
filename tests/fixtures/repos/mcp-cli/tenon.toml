@@ -1,0 +1,3 @@
+[locate]
+source = "mcp"
+sdk_package = "mcp"

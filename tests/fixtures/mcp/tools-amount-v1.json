@@ -1,0 +1,15 @@
+{
+  "tools": [
+    {
+      "name": "create_charge",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "amount": {"type": "integer"},
+          "currency": {"type": "string"}
+        },
+        "required": ["amount"]
+      }
+    }
+  ]
+}

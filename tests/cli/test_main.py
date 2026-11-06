@@ -260,6 +260,42 @@ def test_missing_config_with_language_ts_without_package_is_usage(a_ts_repo, cap
     assert "sdk-package" in capsys.readouterr().err
 
 
+# Spec AC3: check --source mcp runs the MCP diff and names the argument key.
+def test_check_mcp_source_names_the_argument_key(a_mcp_repo, a_mcp_specs, capsys):
+    assert a_check(a_mcp_repo, a_mcp_specs, "--source", "mcp") == 1
+
+    out = capsys.readouterr().out
+    assert "app.py:7:" in out
+    assert "amount" in out
+    assert "1 change, 1 certain site, 0 ambiguity groups" in out
+
+
+# Spec AC3: the MCP check JSON has the shipped envelope and the key.
+def test_check_mcp_json_names_the_argument_key(a_mcp_repo, a_mcp_specs, capsys):
+    assert a_check(a_mcp_repo, a_mcp_specs, "--source", "mcp", "--json") == 1
+    payload = json.loads(capsys.readouterr().out)
+
+    assert set(payload) == {"command", "results", "summary"}
+    assert payload["command"] == "check"
+    assert payload["summary"] == {"changes": 1, "certain": 1, "ambiguous": 0}
+    (result,) = payload["results"]
+    site = result["certain"][0]
+    assert (site["path"], site["symbol"]) == ("app.py", "amount")
+    assert result["reason"] is None
+
+
+# Spec AC2/AC3: [locate] source = "mcp" needs no flag.
+def test_check_mcp_source_from_the_config(a_mcp_repo, a_mcp_specs, capsys):
+    assert a_check(a_mcp_repo, a_mcp_specs) == 1
+    assert "amount" in capsys.readouterr().out
+
+
+# Spec AC3: identical MCP documents are a clean 0.
+def test_check_mcp_clean_change_exits_zero(a_mcp_repo, a_mcp_clean_specs, capsys):
+    assert a_check(a_mcp_repo, a_mcp_clean_specs, "--source", "mcp") == 0
+    assert "0 changes" in capsys.readouterr().out
+
+
 def a_fix(repo, specs, *extra, remote=None):
     old, new = specs
     return main(
@@ -970,6 +1006,18 @@ def test_check_ts_json_is_byte_stable_across_hash_seeds(a_ts_repo):
     assert first.stdout == second.stdout
     assert b"src/billing.ts" in first.stdout
     assert str(a_ts_repo.repo).encode() not in first.stdout
+
+
+# Spec AC3/M12: the MCP check report is byte-identical across hash seeds.
+def test_check_mcp_json_is_byte_stable_across_hash_seeds(a_mcp_repo, a_mcp_specs):
+    first = a_run_module_check(a_mcp_repo, a_mcp_specs, "0", "--source", "mcp")
+    second = a_run_module_check(a_mcp_repo, a_mcp_specs, "1", "--source", "mcp")
+
+    assert first.returncode == 1
+    assert second.returncode == 1
+    assert first.stdout == second.stdout
+    assert b"amount" in first.stdout
+    assert str(a_mcp_repo).encode() not in first.stdout
 
 
 # Spec AC7/M12: a build-only fix report is byte-identical across hash seeds.
