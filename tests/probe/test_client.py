@@ -50,9 +50,25 @@ def test_initialize_sends_initialized_before_tools_list(client):
     client.initialize()
 
     # The fake server answers tools/list only after notifications/initialized.
-    listed = client._request("tools/list", {})
+    tools = client.list_tools()
 
-    assert [tool["name"] for tool in listed["tools"]] == ["echo"]
+    assert [tool["name"] for tool in tools] == ["echo", "fail"]
+
+
+# Spec AC2: list_tools follows nextCursor and returns every page's tools.
+def test_list_tools_follows_the_cursor_across_pages(client):
+    client.start(a_server(), timeout=5)
+    client.initialize()
+
+    tools = client.list_tools()
+
+    assert [tool["name"] for tool in tools] == ["echo", "fail"]
+    assert tools[0]["description"] == "Echo the text back."
+    assert tools[0]["inputSchema"] == {
+        "type": "object",
+        "properties": {"text": {"type": "string"}},
+    }
+    assert tools[1]["description"] == "Always returns an isError result."
 
 
 # Spec AC1: a server notification before the response is ignored.

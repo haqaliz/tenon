@@ -101,6 +101,27 @@ class McpStdioClient:
         self._send({"jsonrpc": "2.0", "method": "notifications/initialized"})
         return result
 
+    def list_tools(self) -> tuple[dict, ...]:
+        """Every tool the server lists, following ``nextCursor`` to the end."""
+        tools: list[dict] = []
+        cursor: str | None = None
+        seen: set[str] = set()
+        while True:
+            params = {} if cursor is None else {"cursor": cursor}
+            result = self._request("tools/list", params)
+            page = result.get("tools")
+            if not isinstance(page, list) or not all(
+                isinstance(tool, dict) for tool in page
+            ):
+                raise ProbeError(PROTOCOL_ERROR, "tools/list: tools must be objects")
+            tools.extend(page)
+            cursor = result.get("nextCursor")
+            if not cursor:
+                return tuple(tools)
+            if cursor in seen:
+                raise ProbeError(PROTOCOL_ERROR, "tools/list: repeated nextCursor")
+            seen.add(cursor)
+
     def close(self) -> None:
         process = self._process
         if process is None:
