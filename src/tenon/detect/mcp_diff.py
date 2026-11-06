@@ -84,11 +84,15 @@ def _diff_schema(
     changes: list[Change],
     *,
     name: str | None = None,
+    enclosing: str | None = None,
     required_added: bool = True,
 ) -> None:
     old_schema = old if isinstance(old, dict) else {}
     new_schema = new if isinstance(new, dict) else {}
-    _diff_schema_header(old_schema, new_schema, name, pointer, location, changes)
+    record_pointer = enclosing or pointer
+    _diff_schema_header(
+        old_schema, new_schema, name, record_pointer, location, changes
+    )
     _diff_additional_properties(old_schema, new_schema, pointer, location, changes)
     _diff_properties(
         old_schema,
@@ -98,6 +102,18 @@ def _diff_schema(
         changes,
         required_added=required_added,
     )
+    old_items = old_schema.get("items")
+    new_items = new_schema.get("items")
+    if isinstance(old_items, dict) and isinstance(new_items, dict):
+        _diff_schema(
+            old_items,
+            new_items,
+            f"{pointer}/items",
+            location,
+            changes,
+            enclosing=pointer,
+            required_added=required_added,
+        )
 
 
 def _diff_schema_header(
@@ -214,25 +230,16 @@ def _diff_properties(
                     breaking=True,
                 )
             )
-        _diff_property(old_property, new_property, prop, pointer, location, changes)
-
-
-def _diff_property(
-    old: object,
-    new: object,
-    name: str,
-    pointer: str,
-    location: Location,
-    changes: list[Change],
-) -> None:
-    _diff_schema_header(
-        old if isinstance(old, dict) else {},
-        new if isinstance(new, dict) else {},
-        name,
-        pointer,
-        location,
-        changes,
-    )
+        _diff_schema(
+            old_property,
+            new_property,
+            f"{pointer}/{_escape(prop)}",
+            location,
+            changes,
+            name=prop,
+            enclosing=pointer,
+            required_added=required_added,
+        )
 
 
 def _properties_of(schema: object) -> dict:

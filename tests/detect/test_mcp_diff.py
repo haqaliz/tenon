@@ -32,6 +32,9 @@ def a_payload(name, type_, fmt=None):
 INPUT = "#/tools/read_file/inputSchema/properties"
 OUTPUT = "#/tools/read_file/outputSchema/properties"
 ADDITIONAL = "#/tools/read_file/inputSchema"
+NESTED_OPTIONS = "#/tools/read_file/inputSchema/properties/options/properties"
+NESTED_ITEMS = "#/tools/read_file/inputSchema/properties/tags/items/properties"
+CREATE_CHARGE = "#/tools/create_charge/inputSchema/properties"
 
 
 # Spec AC1: a removed tool is a breaking endpoint removal.
@@ -444,3 +447,148 @@ def test_the_openapi_differ_never_emits_the_mcp_only_kind():
     assert ChangeKind.ADDITIONAL_PROPERTIES_CHANGED not in {
         change.kind for change in result.changes
     }
+
+
+# Spec AC5: a removed property of a nested object uses the exact pointer.
+def test_a_nested_object_property_removal_uses_the_exact_pointer():
+    old = load_mcp(FIXTURES / "tools-nested-v1.json")
+    new = load_mcp(FIXTURES / "tools-nested-v2.json")
+
+    removed = of_kind(diff_mcp(old, new), ChangeKind.PROPERTY_REMOVED)
+
+    assert len(removed) == 1
+    change = removed[0]
+    assert change.location == Location(
+        pointer=NESTED_OPTIONS, method="tool", path="read_file"
+    )
+    assert change.before == a_payload("verbose", "boolean")
+    assert change.breaking is True
+
+
+# Spec AC5: a type change inside a nested object uses the exact pointer.
+def test_a_nested_property_type_change_uses_the_exact_pointer():
+    old = load_mcp(FIXTURES / "tools-nested-v1.json")
+    new = load_mcp(FIXTURES / "tools-nested-v2.json")
+
+    changed = of_kind(diff_mcp(old, new), ChangeKind.PROPERTY_TYPE_CHANGED)
+
+    retries = [
+        change for change in changed if change.before == a_payload("retries", "integer")
+    ]
+    assert len(retries) == 1
+    change = retries[0]
+    assert change.location == Location(
+        pointer=NESTED_OPTIONS, method="tool", path="read_file"
+    )
+    assert change.after == a_payload("retries", "string")
+    assert change.breaking is True
+
+
+# Spec AC5: a property inside array items uses the exact pointer.
+def test_an_array_items_property_type_change_uses_the_exact_pointer():
+    old = load_mcp(FIXTURES / "tools-nested-v1.json")
+    new = load_mcp(FIXTURES / "tools-nested-v2.json")
+
+    changed = of_kind(diff_mcp(old, new), ChangeKind.PROPERTY_TYPE_CHANGED)
+
+    label = [
+        change for change in changed if change.before == a_payload("label", "string")
+    ]
+    assert len(label) == 1
+    change = label[0]
+    assert change.location == Location(
+        pointer=NESTED_ITEMS, method="tool", path="read_file"
+    )
+    assert change.after == a_payload("label", "integer")
+    assert change.breaking is True
+
+
+# Spec AC4/AC5: nested additionalProperties is recorded at that nested schema.
+def test_nested_additional_properties_is_recorded_at_the_nested_schema():
+    old = load_mcp(FIXTURES / "tools-nested-v1.json")
+    new = load_mcp(FIXTURES / "tools-nested-v2.json")
+
+    changes = of_kind(
+        diff_mcp(old, new), ChangeKind.ADDITIONAL_PROPERTIES_CHANGED
+    )
+
+    assert len(changes) == 1
+    change = changes[0]
+    assert change.location.pointer == (
+        "#/tools/read_file/inputSchema/properties/options"
+    )
+    assert change.before is True
+    assert change.after is False
+    assert change.breaking is True
+
+
+# Spec AC6: a unique same-shape property pair becomes an inferred rename.
+def test_a_unique_property_rename_is_inferred():
+    old = load_mcp(FIXTURES / "tools-rename-v1.json")
+    new = load_mcp(FIXTURES / "tools-rename-v2.json")
+
+    changes = diff_mcp(old, new).changes
+
+    assert len(changes) == 1
+    change = changes[0]
+    assert change.kind is ChangeKind.RENAMED
+    assert change.location == Location(
+        pointer=CREATE_CHARGE, method="tool", path="create_charge"
+    )
+    assert change.before == "nickname"
+    assert change.after == "handle"
+    assert change.breaking is True
+    assert change.confidence == "inferred"
+
+
+# Spec AC6: an ambiguous pair stays a removal plus an addition.
+def test_an_ambiguous_property_pair_stays_removed_and_added():
+    old = a_document(
+        a_tool(
+            "read_file",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "nickname": {"type": "string"},
+                    "alias": {"type": "string"},
+                },
+            },
+        )
+    )
+    new = a_document(
+        a_tool(
+            "read_file",
+            input_schema={
+                "type": "object",
+                "properties": {"handle": {"type": "string"}},
+            },
+        )
+    )
+
+    changes = diff_mcp(old, new).changes
+
+    assert [change.kind for change in changes] == [
+        ChangeKind.PROPERTY_ADDED,
+        ChangeKind.PROPERTY_REMOVED,
+        ChangeKind.PROPERTY_REMOVED,
+    ]
+    assert all(change.confidence == "certain" for change in changes)
+
+
+# Spec AC6: a removed and an added tool are never inferred as a rename.
+def test_a_removed_and_added_tool_is_never_a_rename():
+    old = a_document(
+        a_tool("alpha", input_schema={"type": "object", "properties": {}})
+    )
+    new = a_document(
+        a_tool("beta", input_schema={"type": "object", "properties": {}})
+    )
+
+    changes = diff_mcp(old, new).changes
+
+    assert [change.kind for change in changes] == [
+        ChangeKind.ENDPOINT_REMOVED,
+        ChangeKind.ENDPOINT_ADDED,
+    ]
+    assert ChangeKind.RENAMED not in {change.kind for change in changes}
+    assert all(change.confidence == "certain" for change in changes)

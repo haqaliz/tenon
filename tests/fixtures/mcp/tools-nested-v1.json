@@ -1,0 +1,30 @@
+{
+  "tools": [
+    {
+      "name": "read_file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "options": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "retries": {"type": "integer"},
+              "verbose": {"type": "boolean"}
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {"type": "string"},
+                "weight": {"type": "integer"}
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
