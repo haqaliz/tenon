@@ -277,7 +277,7 @@ class _Visitor(ast.NodeVisitor):
 
     def _arguments(self, node: ast.Call, tool: str | None, rooted: bool) -> None:
         argument: ast.expr | None = None
-        if len(node.args) >= 2 and not isinstance(node.args[1], ast.Starred):
+        if len(node.args) >= 2:
             argument = node.args[1]
         else:
             argument = next(
@@ -288,20 +288,58 @@ class _Visitor(ast.NodeVisitor):
                 ),
                 None,
             )
+        for keyword in node.keywords:
+            if keyword.arg is None:
+                self.dynamics.append(
+                    _dynamic(
+                        self._source, keyword, DynamicKind.STAR_KWARGS, tool
+                    )
+                )
         if isinstance(argument, ast.Dict):
-            for key in argument.keys:
-                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+            for key, value in zip(argument.keys, argument.values):
+                if key is None:
+                    self.dynamics.append(
+                        _dynamic(
+                            self._source, value, DynamicKind.STAR_KWARGS, tool
+                        )
+                    )
+                elif isinstance(key, ast.Constant) and isinstance(key.value, str):
                     self._emit(key, SiteShape.DICT_KEY, key.value, tool, rooted)
+                else:
+                    self.dynamics.append(
+                        _dynamic(
+                            self._source, key, DynamicKind.STAR_KWARGS, tool
+                        )
+                    )
         elif (
             isinstance(argument, ast.Call)
             and isinstance(argument.func, ast.Name)
             and argument.func.id == "dict"
         ):
             for keyword in argument.keywords:
-                if keyword.arg is not None:
+                if keyword.arg is None:
+                    self.dynamics.append(
+                        _dynamic(
+                            self._source,
+                            keyword,
+                            DynamicKind.STAR_KWARGS,
+                            tool,
+                        )
+                    )
+                else:
                     self._emit(
                         keyword, SiteShape.KEYWORD, keyword.arg, tool, rooted
                     )
+            for positional in argument.args:
+                self.dynamics.append(
+                    _dynamic(
+                        self._source, positional, DynamicKind.STAR_KWARGS, tool
+                    )
+                )
+        elif argument is not None:
+            self.dynamics.append(
+                _dynamic(self._source, argument, DynamicKind.STAR_KWARGS, tool)
+            )
 
     def visit_Call(self, node: ast.Call) -> None:
         if isinstance(node.func, ast.Attribute) and node.func.attr == "call_tool":

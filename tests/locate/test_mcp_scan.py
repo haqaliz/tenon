@@ -2,13 +2,10 @@
 
 from pathlib import Path
 
-import pytest
-
 from tenon.locate import SiteShape
 from tenon.locate.mcp_scan import (
     McpDynamic,
     McpHit,
-    McpScan,
     scan_mcp,
 )
 from tenon.locate.scan import DynamicKind
@@ -54,6 +51,7 @@ def test_an_unrelated_file_is_not_scanned():
     result = scan_mcp(MCP_BASIC, "mcp")
 
     assert "unrelated.py" not in result.modules
+    assert all(hit.path != "unrelated.py" for hit in result.hits)
 
 
 # Spec AC1: no import -> empty modules.
@@ -231,3 +229,72 @@ def test_a_nested_object_key_is_not_walked():
 
 
 # Phase 4: dynamics, columns, determinism.
+# Spec AC4: a variable payload, **payload and a dict unpack are STAR_KWARGS with the tool.
+def test_a_variable_or_star_payload_is_a_star_kwargs_dynamic():
+    result = scan_mcp(MCP_DYNAMIC, "mcp")
+
+    assert result.dynamics == (
+        McpDynamic("app.py", 6, 23, DynamicKind.GETATTR, None, "call_tool"),
+        McpDynamic("app.py", 7, 50, DynamicKind.STAR_KWARGS, "create_charge"),
+        McpDynamic("app.py", 9, 50, DynamicKind.STAR_KWARGS, "create_charge"),
+        McpDynamic("app.py", 14, 63, DynamicKind.STAR_KWARGS, "create_charge"),
+    )
+
+
+# Spec AC5: columns are characters, not UTF-8 bytes.
+def test_columns_are_characters_not_utf8_bytes(tmp_path):
+    (tmp_path / "app.py").write_text(
+        "from mcp import ClientSession\n"
+        "\n"
+        "async def run(read, write):\n"
+        "    session = ClientSession(read, write)\n"
+        '    "héllo"; await session.call_tool("create_charge", '
+        '{"héllo": 1, "amount": 2})\n',
+        encoding="utf-8",
+    )
+
+    result = scan_mcp(tmp_path, "mcp")
+
+    line = a_line(tmp_path, "app.py", 5)
+    call = a_call_hits(result)[0]
+    [amount] = [hit for hit in result.hits if hit.symbol == "amount"]
+    assert call.column == line.index("call_tool") + 1
+    assert call.column != len(line[: line.index("call_tool")].encode("utf-8")) + 1
+    assert amount.column == line.index('"amount"') + 1
+    assert amount.line_text == line
+
+
+# Spec AC5: canonical order.
+def test_hits_and_dynamics_are_canonically_ordered():
+    result = scan_mcp(MCP_DYNAMIC, "mcp")
+
+    assert result.hits == tuple(
+        sorted(result.hits, key=lambda hit: (hit.path, hit.line, hit.column))
+    )
+    assert result.dynamics == tuple(
+        sorted(result.dynamics, key=lambda dynamic: (dynamic.path, dynamic.line, dynamic.column))
+    )
+
+
+# Spec AC5: two scans are identical.
+def test_two_scans_are_identical():
+    assert scan_mcp(MCP_BASIC, "mcp") == scan_mcp(MCP_BASIC, "mcp")
+
+
+# Spec AC5: the scan never modifies the tree.
+def test_scan_never_modifies_the_scanned_tree():
+    def snapshot():
+        return {
+            path.relative_to(MCP_BASIC).as_posix(): (
+                path.stat().st_mtime_ns,
+                path.read_bytes(),
+            )
+            for path in MCP_BASIC.rglob("*")
+            if path.is_file()
+        }
+
+    before = snapshot()
+
+    scan_mcp(MCP_BASIC, "mcp")
+
+    assert snapshot() == before
