@@ -1,0 +1,18 @@
+{
+  "tools": [
+    {
+      "name": "read_file",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": {"type": "string"},
+          "encoding": {"type": "string"},
+          "mode": {"type": "string", "enum": ["read", "append"]},
+          "limit": {"type": "string"},
+          "offset": {"type": "string"}
+        },
+        "required": ["path", "limit", "offset"]
+      }
+    }
+  ]
+}
