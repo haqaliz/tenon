@@ -1,6 +1,10 @@
 import json
+import re
 from pathlib import Path
 
+import pytest
+
+from tenon.detect import RefusalCode, SpecRefusal
 from tenon.detect.mcp_ingest import load_mcp, parse_mcp
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"
@@ -84,3 +88,89 @@ def test_load_mcp_matches_parse_mcp_on_the_same_bytes():
     text = (FIXTURES / "tools-v1.json").read_text(encoding="utf-8")
 
     assert load_mcp(FIXTURES / "tools-v1.json") == parse_mcp(text, source)
+
+
+def a_refusal(text: str) -> SpecRefusal:
+    with pytest.raises(SpecRefusal) as caught:
+        parse_mcp(text, "<inline>")
+    return caught.value
+
+
+# Spec AC2: a malformed tool document is refused at its pointer.
+@pytest.mark.parametrize(
+    ("text", "pointer"),
+    [
+        ("null", "#"),
+        ('"tools"', "#"),
+        ("{}", "#/tools"),
+        ('{"tools": {}}', "#/tools"),
+        ('{"tools": [42]}', "#/tools/0"),
+        ('{"tools": [{"name": ""}]}', "#/tools/0/name"),
+        ('{"tools": [{"name": 7}]}', "#/tools/0/name"),
+        ('{"tools": [{"inputSchema": {}}]}', "#/tools/0/name"),
+        ('{"tools": [{"name": "a"}, {"name": "a"}]}', "#/tools/a"),
+        ('{"tools": [{"name": "a/b"}, {"name": "a/b"}]}', "#/tools/a~1b"),
+        ('{"tools": [{"name": "a", "inputSchema": []}]}', "#/tools/a/inputSchema"),
+        (
+            '{"tools": [{"name": "a", "outputSchema": "object"}]}',
+            "#/tools/a/outputSchema",
+        ),
+    ],
+)
+def test_parse_mcp_refuses_a_malformed_document(text, pointer):
+    refusal = a_refusal(text)
+
+    assert refusal.code is RefusalCode.NOT_A_SPEC
+    assert refusal.pointer == pointer
+    assert "<inline>" in refusal.message
+
+
+# Spec AC1/AC2: an empty tools list is a valid document.
+def test_an_empty_tool_array_is_a_valid_document():
+    assert parse_mcp("[]", "<inline>") == {"tools": {}}
+
+
+# Spec AC3: an empty document is UNPARSEABLE.
+@pytest.mark.parametrize("text", ["", " \n\t"])
+def test_parse_mcp_refuses_an_empty_document(text):
+    refusal = a_refusal(text)
+
+    assert refusal.code is RefusalCode.UNPARSEABLE
+    assert refusal.pointer is None
+
+
+# Spec AC3: bad YAML/JSON names the line and column.
+@pytest.mark.parametrize(
+    "text",
+    ['{"tools": [}', "tools:\n  - name: [\n", "tools:\n\t- name: x\n"],
+)
+def test_parse_mcp_refuses_bad_syntax_with_line_and_column(text):
+    refusal = a_refusal(text)
+
+    assert refusal.code is RefusalCode.UNPARSEABLE
+    assert refusal.pointer is None
+    assert re.search(r"line \d+, column \d+", refusal.message)
+
+
+# Spec AC3/M1: an unreadable file is UNPARSEABLE naming the path.
+def test_load_mcp_refuses_a_missing_file(tmp_path):
+    missing = tmp_path / "missing.json"
+
+    with pytest.raises(SpecRefusal) as caught:
+        load_mcp(missing)
+
+    assert caught.value.code is RefusalCode.UNPARSEABLE
+    assert caught.value.pointer is None
+    assert str(missing) in caught.value.message
+
+
+# Spec AC3/M1: non-UTF-8 bytes are UNPARSEABLE naming the path.
+def test_load_mcp_refuses_non_utf8(tmp_path):
+    path = tmp_path / "latin-1.json"
+    path.write_bytes(b'{"tools": [{"name": "\xff"}]}')
+
+    with pytest.raises(SpecRefusal) as caught:
+        load_mcp(path)
+
+    assert caught.value.code is RefusalCode.UNPARSEABLE
+    assert str(path) in caught.value.message
