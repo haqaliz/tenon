@@ -29,6 +29,15 @@ def _package_version() -> str:
         return "0.0.0"
 
 
+def _error_detail(error: object) -> str:
+    """A JSON-RPC error as ``code: message`` for the capped detail."""
+    if isinstance(error, dict):
+        code = error.get("code")
+        message = error.get("message") or ""
+        return f"{code}: {message}" if code is not None else str(message)
+    return str(error)
+
+
 class ProbeError(Exception):
     """One probe connection failure: a stable reason and a capped detail."""
 
@@ -122,6 +131,10 @@ class McpStdioClient:
                 raise ProbeError(PROTOCOL_ERROR, "tools/list: repeated nextCursor")
             seen.add(cursor)
 
+    def call_tool(self, name: str, arguments: dict) -> dict:
+        """Call one tool and return its MCP result; a JSON-RPC error raises."""
+        return self._request("tools/call", {"name": name, "arguments": arguments})
+
     def close(self) -> None:
         process = self._process
         if process is None:
@@ -210,6 +223,9 @@ class McpStdioClient:
             }
         )
         response = self._receive()
+        error = response.get("error")
+        if error is not None:
+            raise ProbeError(SERVER_ERROR, _error_detail(error))
         result = response.get("result")
         if not isinstance(result, dict):
             raise ProbeError(PROTOCOL_ERROR, f"{method}: no result object")

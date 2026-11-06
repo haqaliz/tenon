@@ -80,6 +80,43 @@ def test_a_server_notification_is_ignored_during_a_request(client):
     assert result["protocolVersion"] == "2025-06-18"
 
 
+# Spec AC3: a normal call returns the MCP result object.
+def test_call_tool_returns_the_result(client):
+    client.start(a_server(), timeout=5)
+    client.initialize()
+
+    result = client.call_tool("echo", {"text": "hi"})
+
+    assert result == {
+        "content": [{"type": "text", "text": "echo:hi"}],
+        "isError": False,
+    }
+
+
+# Spec AC3: a tool's isError result is returned, not raised as a client error.
+def test_a_failed_tool_result_is_returned_not_raised(client):
+    client.start(a_server(), timeout=5)
+    client.initialize()
+
+    result = client.call_tool("fail", {})
+
+    assert result["isError"] is True
+    assert result["content"] == [{"type": "text", "text": "boom"}]
+
+
+# Spec AC3: a JSON-RPC error response raises ProbeError with its code and message.
+def test_an_unknown_tool_raises_probe_error(client):
+    client.start(a_server(), timeout=5)
+    client.initialize()
+
+    with pytest.raises(ProbeError) as caught:
+        client.call_tool("nope", {})
+
+    assert caught.value.reason == "server_error"
+    assert "-32602" in caught.value.detail
+    assert "unknown tool: nope" in caught.value.detail
+
+
 # Spec AC6: close stops the process and keeps a capped stderr tail.
 def test_close_stops_the_server_and_captures_the_stderr_tail(client):
     client.start(a_server(), timeout=5)
