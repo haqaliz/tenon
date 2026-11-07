@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from tenon.prove.result import ProofLevel
 
 from .record import CorpusRecord, Outcome
+from .store import CorpusError
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,19 +38,38 @@ def benchmark(records: Sequence[CorpusRecord]) -> CorpusReport:
     counts = {level: dict.fromkeys(Outcome, 0) for level in ProofLevel}
     outcomes = dict.fromkeys(Outcome, 0)
     for record in records:
-        level = ProofLevel(record.proof["level"])
+        try:
+            level = ProofLevel(record.proof["level"])
+        except (KeyError, ValueError) as exc:
+            raise CorpusError(
+                f"record {record.id}: unknown proof level "
+                f"{record.proof.get('level')!r}"
+            ) from exc
         counts[level][record.outcome] += 1
         outcomes[record.outcome] += 1
-    by_level = {
-        level: LevelStats(
-            count=sum(counts[level].values()),
-            merged=counts[level][Outcome.MERGED],
-            rejected=counts[level][Outcome.REJECTED],
-            closed=counts[level][Outcome.CLOSED],
-            incident=counts[level][Outcome.INCIDENT],
-            local_only=counts[level][Outcome.LOCAL_ONLY],
-            pending=counts[level][Outcome.PENDING],
+    by_level = {}
+    for level in ProofLevel:
+        counts_for_level = counts[level]
+        known = sum(
+            counts_for_level[outcome]
+            for outcome in (
+                Outcome.MERGED,
+                Outcome.REJECTED,
+                Outcome.CLOSED,
+                Outcome.INCIDENT,
+            )
         )
-        for level in ProofLevel
-    }
+        by_level[level] = LevelStats(
+            count=sum(counts_for_level.values()),
+            merged=counts_for_level[Outcome.MERGED],
+            rejected=counts_for_level[Outcome.REJECTED],
+            closed=counts_for_level[Outcome.CLOSED],
+            incident=counts_for_level[Outcome.INCIDENT],
+            local_only=counts_for_level[Outcome.LOCAL_ONLY],
+            pending=counts_for_level[Outcome.PENDING],
+            known=known,
+            merge_rate=(
+                counts_for_level[Outcome.MERGED] / known if known > 0 else None
+            ),
+        )
     return CorpusReport(total=len(records), by_level=by_level, outcomes=outcomes)
