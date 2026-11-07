@@ -120,7 +120,7 @@ required proof level and the optional stage commands:
     "fields": {"amount": "amount_total"}
   },
   "require": "TESTS_PASSED",
-  "command": ["python", "-m", "pytest", "-q", "tests/test_checkout.py"],
+  "check": ["python", "-m", "pytest", "-q", "tests/test_checkout.py"],
   "build": [],
   "characterize": [],
   "replay": [],

@@ -308,7 +308,7 @@ def test_bad_require_is_a_named_error(tmp_path, require):
 
 
 # Spec AC4: each stage command is an array, never a bare string.
-@pytest.mark.parametrize("key", ["command", "build", "characterize", "replay"])
+@pytest.mark.parametrize("key", ["check", "command", "build", "characterize", "replay"])
 @pytest.mark.parametrize("value", ["pytest", [""], ["pytest", 3], ["pytest", "  "]])
 def test_bad_command_is_a_named_error(tmp_path, key, value):
     a_named_error(tmp_path, a_data(**{key: value}), key)
@@ -319,6 +319,14 @@ def test_empty_command_array_is_allowed(tmp_path):
     bundle = load_bundle(a_bundle(tmp_path, command=[]))
 
     assert bundle.command == ()
+
+
+# Spec AC1: the documented `check` key is the tests stage (the `command` alias
+# remains for tenon.toml familiarity).
+def test_check_key_loads_the_tests_command(tmp_path):
+    bundle = load_bundle(a_bundle(tmp_path, check=["python", "-c", "pass"]))
+
+    assert bundle.command == ("python", "-c", "pass")
 
 
 # Spec AC4: breaking_only is a bool.

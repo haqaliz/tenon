@@ -133,6 +133,9 @@ def load_bundle(path: str | Path) -> MigrationBundle:
     if not isinstance(breaking_only, bool):
         raise ValueError(f"{path}: breaking_only must be a bool")
 
+    # `check` is the documented key; `command` is the tenon.toml alias.
+    command_key = "check" if "check" in data else "command"
+
     return MigrationBundle(
         provider=provider,
         migration=migration,
@@ -141,7 +144,7 @@ def load_bundle(path: str | Path) -> MigrationBundle:
         old=old,
         new=new,
         locate=locate,
-        command=a_command(data, "command", path),
+        command=a_command(data, command_key, path),
         build=a_command(data, "build", path),
         characterize=a_command(data, "characterize", path),
         replay=a_command(data, "replay", path),
