@@ -2,10 +2,10 @@
 
 Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR), T6
 (locate, TypeScript/JavaScript), T7 (proof ladder), T8a (MCP tool-schema diffs), T8b (Python MCP
-tool-call locator), T8c (`tenon probe`), T9 (benchmark corpus) and the `tenon check` / `tenon fix` /
-`tenon probe` / `tenon corpus` CLI are implemented** under `src/tenon/detect/`, `src/tenon/locate/`,
-`src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`, `src/tenon/probe/`, `src/tenon/corpus/`
-and `src/tenon/cli/`. The later stages are not.
+tool-call locator), T8c (`tenon probe`), T9 (benchmark corpus), T10a (GitHub App remote) and the
+`tenon check` / `tenon fix` / `tenon probe` / `tenon corpus` CLI are implemented** under
+`src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`,
+`src/tenon/probe/`, `src/tenon/corpus/` and `src/tenon/cli/`. The later stages are not.
 
 ## Pipeline
 
@@ -36,7 +36,7 @@ src/tenon/
   locate/     T2/T6/T8b: per-language call-site finders   <- built (Python + TS/JS + MCP)
   propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
   prove/      T4/T7: working-copy runner, proof ladder  <- built (all five levels)
-  pr/         T5: branch and PR writer                     <- built (git + gh seam)
+  pr/         T5/T10a: branch and PR writer              <- built (gh + GitHub App)
   probe/      T8c: MCP stdio probe, agent plan, report  <- built (tools only)
   corpus/     T9: benchmark records                         <- built (JSONL + report)
   cli/        tenon check | fix                           <- built
@@ -70,6 +70,9 @@ tests/        offline; fixture repos and specs; no network, no model calls
   its tools, runs user tasks through a user-supplied `--agent` command (JSON request in, JSON plan
   out), executes the plan itself and reports what worked. No model ships; Tenon makes no network
   call; the report says "worked in this run", never "verified".
+- **The GitHub App is a host adapter, not a new pipeline.** T10a implements the same `Remote` protocol
+  with an installation token; T5's clone/commit/push/PR guardrails and no-merge stance are unchanged.
+  The token is kept out of argv, the remote URL and error details; the app is self-hosted.
 - **The benchmark is descriptive, not a claim.** T9 records `(change, patch, proof, outcome)` in a
   local JSONL corpus. A merge rate uses only real outcomes (`merged`, `rejected`, `closed`,
   `incident`); `local_only`/`pending` never count as success. The public seed has no merge outcomes,
@@ -96,8 +99,15 @@ lists affected call sites and exits 0 when clean, 1 when a site or an unanalyzab
 found.
 `tenon fix <repo> --old SPEC --new SPEC [--source openapi|mcp] [--language python|ts] [--build CMD]
 [--characterize CMD] [--replay CMD] [--check CMD] [--require LEVEL] [--allow-below-required]
-[--open-pr] [--json]` proposes, proves and prints the diff; `--open-pr` delegates to T5. `LEVEL` is
-one of the five proof levels; the strongest configured stage that is green is the result.
+[--open-pr] [--remote gh|app] [--app-id ID] [--app-installation-id ID] [--app-private-key PATH]
+[--api-url URL] [--json]` proposes, proves and prints the diff; `--open-pr` delegates to T5. `LEVEL`
+is one of the five proof levels; the strongest configured stage that is green is the result.
+`--open-pr --remote app` builds `GitHubAppRemote`/`GitHubAppToken` instead of `GitGhRemote`; the app
+needs `contents:write` and `pull_requests:write`. Its inputs come from those flags or
+`TENON_GITHUB_APP_ID`, `TENON_GITHUB_APP_INSTALLATION_ID`, `TENON_GITHUB_APP_PRIVATE_KEY` (a path)
+and `TENON_GITHUB_API_URL`; a flag wins. An explicit `--remote` requires `--open-pr`; missing inputs
+or an unreadable key exit 2. The app remote is self-hosted: webhook/installation discovery and the
+provider bundle/fan-out (T10b) and a hosted service (T10c) are deferred.
 `tenon probe --server-cmd CMD --tasks FILE --agent CMD [--timeout SEC] [--json]` starts an MCP
 server over stdio, lists its tools, runs every task through the agent command and reports what
 worked. Exit 0 when every task passed, 1 when one failed, 2 on usage/connection. The task file and
@@ -128,4 +138,5 @@ pattern is the only locator in this slice. `language=ts` + `source=mcp` is a nam
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
-- Phase 3 (T10 hosted/provider, T11 more languages) is after the window and not started.
+- Phase 3: T10a (GitHub App remote) shipped; T10b (provider bundle/fan-out) and T10c (hosted
+  service), and T11 (Go/Rust/C#), are not started.

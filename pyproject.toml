@@ -13,8 +13,18 @@ dependencies = [
 [project.scripts]
 tenon = "tenon.cli:main"
 
+[project.optional-dependencies]
+app = [
+    "cryptography>=43",
+    "pyjwt>=2.10",
+]
+
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "cryptography>=43",
+    "pyjwt>=2.10",
+    "pytest>=8",
+]
 
 [build-system]
 requires = ["hatchling"]

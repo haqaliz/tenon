@@ -13,7 +13,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | **Shipped 2026-11-06** |
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Shipped 2026-11-07** |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
-| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | Not started |
+| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Partial 2026-11-08** — GitHub App remote shipped; provider fan-out/hosted service not started |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | Not started |
 
 ### T1 as shipped (2026-10-26)
@@ -193,6 +193,20 @@ Known limits: the corpus is local/opt-in (no upload, no GitHub outcome detection
 is a user claim with a URL/evidence, not a Tenon-verified fact; the seed has no merge outcomes, so
 every rate is n/a; the records are snapshots and a schema change is a migration; no `fix --corpus`
 auto-record.
+
+### T10a as built (2026-11-08)
+
+`src/tenon/pr/`: `GitHubAppToken` mints an RS256 app JWT and exchanges it for an installation token;
+`GitHubApi` is a small stdlib REST client with an injectable transport; `GitHubAppRemote` implements
+the T5 `Remote` protocol (origin parse, default branch, branch existence, token-safe `git push` via a
+credential helper, PR creation). `tenon fix --open-pr --remote app` constructs it from flags/env; the
+default remains the user's `gh`. `PyJWT`/`cryptography` are an optional `[app]` extra and dev
+dependency; the core install is unchanged. 1,635 tests, offline (test RSA key, fake transport/runner).
+
+Known limits: self-hosted only; no provider migration bundle, customer fan-out, webhook/installation
+discovery or hosted service (T10b/T10c); the private key is the operator's secret; a malicious git
+hook or `GIT_TRACE` can still expose the token; Windows is not a target; no token-expiry refresh
+beyond one mint per remote.
 
 
 

@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -14,22 +14,23 @@ affected calls, and proves the fix against your own checks before it opens a pul
 
 **T1 (change detection), T2 (Python call-site location), T3 (patch proposal), T4 (proof runner),
 T5 (PR writer), T6 (TypeScript/JavaScript call-site location), T7 (proof ladder), T8 (MCP
-tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark corpus) and the
-`tenon check` / `tenon fix` / `tenon probe` / `tenon corpus` CLI are shipped.** `src/tenon/detect/`
-diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed `Change` records;
-`src/tenon/locate/` turns one of those records into call sites with file, line and column, and keeps
-anything it cannot prove in a separate ambiguity list — Python via `ast`, TypeScript/JavaScript via
-tree-sitter, and MCP `call_tool` sites via `locate_mcp`; no Node analysis runtime;
-`src/tenon/propose/` turns the certain sites into a candidate diff and never applies it;
+tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark corpus), T10a (GitHub
+App remote) and the `tenon check` / `tenon fix` / `tenon probe` / `tenon corpus` CLI are shipped.**
+`src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed
+`Change` records; `src/tenon/locate/` turns one of those records into call sites with file, line and
+column, and keeps anything it cannot prove in a separate ambiguity list — Python via `ast`,
+TypeScript/JavaScript via tree-sitter, and MCP `call_tool` sites via `locate_mcp`; no Node analysis
+runtime; `src/tenon/propose/` turns the certain sites into a candidate diff and never applies it;
 `src/tenon/prove/` applies that diff to a copy and runs every configured proof stage before and
 after, recording the strongest level that actually passed (`TESTS_PASSED`, `CHARACTERIZED`,
 `REPLAYED`, `TYPES_BUILD_ONLY`) or `UNVERIFIED` with a reason; `src/tenon/pr/` renders a
 deterministic PR whose title and body state that level, then clones a clean checkout, commits the
-exact diff to a new branch and opens the PR through your own `git` and `gh`; `src/tenon/probe/`
-connects to an MCP server over stdio, runs tasks through a user-supplied agent and reports what
-worked; `src/tenon/corpus/` records `(change, patch, proof, outcome)` runs and reports by
-level/outcome; `src/tenon/cli/` exposes the whole pipeline. The analysis and proof run fully offline;
-only the final push and PR call touch a remote. Read `CLAUDE.md` before writing any code here.
+exact diff to a new branch and opens the PR through your own `git` and `gh` or a GitHub App
+installation (`--remote app`); `src/tenon/probe/` connects to an MCP server over stdio, runs tasks
+through a user-supplied agent and reports what worked; `src/tenon/corpus/` records
+`(change, patch, proof, outcome)` runs and reports by level/outcome; `src/tenon/cli/` exposes the
+whole pipeline. The analysis and proof run fully offline; only the final push and PR call touch a
+remote. Read `CLAUDE.md` before writing any code here.
 
 ## CLI
 
@@ -74,6 +75,24 @@ for change in changes:
     pr.url            # the PR, when OPENED
     pr.refusal        # DIRTY_CHECKOUT, DEFAULT_BRANCH, ... when REFUSED
 ```
+
+### GitHub App remote
+
+`tenon fix ... --open-pr --remote app` opens the PR as a GitHub App instead of through `gh`. The app
+needs `contents:write` and `pull_requests:write` permissions and must be installed on the repository.
+The inputs are flags or environment variables; a flag wins:
+
+| Flag | Environment |
+|---|---|
+| `--app-id` | `TENON_GITHUB_APP_ID` |
+| `--app-installation-id` | `TENON_GITHUB_APP_INSTALLATION_ID` |
+| `--app-private-key PATH` | `TENON_GITHUB_APP_PRIVATE_KEY` (a path) |
+| `--api-url URL` | `TENON_GITHUB_API_URL` |
+
+The private key is read from a path; key content is never read from the environment. `--remote`
+requires `--open-pr`, and `--remote gh` (the default) keeps the existing `gh` path. The app remote is
+self-hosted: webhook/installation discovery and the provider bundle/fan-out (T10b) and a hosted
+service (T10c) are deferred. `--api-url` also targets a self-hosted GitHub Enterprise endpoint.
 
 `uv run pytest` — no network, no model calls.
 

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import shlex
 import sys
 import tomllib
@@ -36,7 +37,13 @@ from tenon.locate import (
     locate_mcp,
     locate_ts,
 )
-from tenon.pr import GitGhRemote, Remote, write_pr
+from tenon.pr import (
+    GitGhRemote,
+    GitHubAppRemote,
+    GitHubAppToken,
+    Remote,
+    write_pr,
+)
 from tenon.probe import AgentError, ProbeError, load_tasks, probe
 from tenon.propose import propose
 from tenon.prove import ProofPlan, proof_rank, prove_plan, tail
@@ -146,6 +153,23 @@ def _parser() -> argparse.ArgumentParser:
     fix.add_argument("--replay", default=None, help="replay command")
     fix.add_argument("--require", type=_require, default=None, help="proof level")
     fix.add_argument("--open-pr", action="store_true", help="open a pull request")
+    fix.add_argument(
+        "--remote",
+        choices=("gh", "app"),
+        default=None,
+        help="GitHub remote (default: gh)",
+    )
+    fix.add_argument("--app-id", default=None, help="GitHub App id")
+    fix.add_argument(
+        "--app-installation-id", default=None, help="GitHub App installation id"
+    )
+    fix.add_argument(
+        "--app-private-key",
+        default=None,
+        metavar="PATH",
+        help="GitHub App private key PEM path",
+    )
+    fix.add_argument("--api-url", default=None, help="GitHub API base URL")
     fix.add_argument(
         "--allow-below-required",
         "--allow-unverified",
@@ -290,12 +314,63 @@ def _check(args: argparse.Namespace, config: CliConfig) -> int:
     return check_exit(located)
 
 
+# Spec AC1/AC2/AC3: the gh default, or the app remote from flags/env.
+def _remote(args: argparse.Namespace) -> Remote:
+    if args.remote != "app":
+        return GitGhRemote()
+    app_id = args.app_id or os.environ.get("TENON_GITHUB_APP_ID")
+    installation_id = args.app_installation_id or os.environ.get(
+        "TENON_GITHUB_APP_INSTALLATION_ID"
+    )
+    key_path = args.app_private_key or os.environ.get(
+        "TENON_GITHUB_APP_PRIVATE_KEY"
+    )
+    api_url = (
+        args.api_url
+        or os.environ.get("TENON_GITHUB_API_URL")
+        or "https://api.github.com"
+    )
+    if not app_id:
+        raise _Usage(
+            "--app-id or TENON_GITHUB_APP_ID is required for --remote app"
+        )
+    if not installation_id:
+        raise _Usage(
+            "--app-installation-id or TENON_GITHUB_APP_INSTALLATION_ID "
+            "is required for --remote app"
+        )
+    if not key_path:
+        raise _Usage(
+            "--app-private-key or TENON_GITHUB_APP_PRIVATE_KEY "
+            "is required for --remote app"
+        )
+    try:
+        pem = Path(key_path).read_text(encoding="utf-8")
+    except OSError as error:
+        raise _Usage(
+            f"cannot read the app private key {key_path}: {error}"
+        ) from None
+    # The token and the REST client share the stdlib default transport.
+    return GitHubAppRemote(
+        GitHubAppToken(
+            app_id,
+            installation_id,
+            pem,
+            api_url=api_url,
+        ),
+        api_url=api_url,
+    )
+
+
 # Spec AC4/AC5: locate, propose and prove each change; never write the checkout.
 def _fix(
     args: argparse.Namespace, config: CliConfig, remote: Remote | None
 ) -> int:
     result, changes = _diff_and_filter(args.old, args.new, config)
     repo = Path(args.repo)
+    target = remote
+    if args.open_pr and target is None:
+        target = _remote(args)
     plan = ProofPlan(
         tests=config.command,
         characterize=config.characterize,
@@ -315,7 +390,7 @@ def _fix(
                     proposal,
                     proof,
                     repo,
-                    remote=remote or GitGhRemote(),
+                    remote=target,
                     required=config.require,
                     allow_below_required=args.allow_below_required,
                     unanalyzed=result.unanalyzed,
@@ -532,6 +607,9 @@ def main(argv: Sequence[str] | None = None, *, remote: Remote | None = None) -> 
         return int(status.code or 0)
 
     json_mode = bool(args.json)
+    # Spec AC4: an explicit remote is meaningless without --open-pr.
+    if args.command == "fix" and args.remote is not None and not args.open_pr:
+        return _fail("usage", "--remote requires --open-pr", json_mode=json_mode)
     try:
         # Spec AC1: corpus and probe are dispatched before _config, which needs a repo.
         if args.command == "corpus":
