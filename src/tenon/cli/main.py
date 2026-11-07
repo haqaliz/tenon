@@ -65,6 +65,8 @@ from .report import (
     render_error,
     render_fix_json,
     render_fix_text,
+    render_provider_json,
+    render_provider_text,
 )
 
 # Spec AC1: the installed package version, with a stable fallback for a source run.
@@ -480,7 +482,13 @@ def _provider(args: argparse.Namespace) -> int:
         open_pr=False,
         allow_below=False,
     )
-    text = render_fix_json(results) if args.json else render_fix_text(results)
+    text = (
+        render_provider_json(
+            bundle.provider, bundle.migration, args.repo, results
+        )
+        if args.json
+        else render_provider_text(bundle.provider, bundle.migration, results)
+    )
     print(text, end="")
     return fix_exit(len(changes), results, config.require)
 

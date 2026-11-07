@@ -1655,6 +1655,120 @@ def test_provider_breaking_only_filters_changes(tmp_path, capsys):
     assert "2 changes" in capsys.readouterr().out
 
 
+# Spec AC3/M5: the text is the provider header then the fix report.
+def test_provider_text_has_the_header_and_the_fix_report(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_provider(bundle) == 0
+
+    out = capsys.readouterr().out
+    assert out.startswith("provider: acme\nmigration: amount-cents\n\n")
+    assert (
+        '+    return client.charges.create(amount_cents=amount, currency="usd")'
+        in out
+    )
+    assert "Proof: TESTS_PASSED" in out
+    assert "1 change, 1 proposal" in out
+
+
+# Spec AC3/M5: the provider JSON has the exact keys and the fix item shape.
+def test_provider_json_has_the_exact_envelope(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_provider(bundle, "--json") == 0
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert set(payload) == {
+        "command",
+        "provider",
+        "migration",
+        "repo",
+        "results",
+        "summary",
+    }
+    assert payload["command"] == "provider"
+    assert payload["provider"] == "acme"
+    assert payload["migration"] == "amount-cents"
+    assert payload["repo"] == str(PROOF_BASIC)
+    (result,) = payload["results"]
+    assert set(result) == {"change", "locate", "proposal", "proof", "pr"}
+    assert result["proof"]["level"] == "TESTS_PASSED"
+    assert result["pr"] is None
+    assert payload["summary"] == {
+        "changes": 1,
+        "proposals": 1,
+        "passed": 1,
+        "characterized": 0,
+        "replayed": 0,
+        "build_only": 0,
+        "unverified": 0,
+        "prs_opened": 0,
+        "prs_refused": 0,
+    }
+    assert out.count("\n") == 1
+
+
+# Spec AC3/M5: the provider envelope reuses the shipped fix items and summary.
+def test_provider_json_reuses_the_fix_results_and_summary(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+    old = tmp_path / "old.yaml"
+    new = tmp_path / "new.yaml"
+
+    assert (
+        a_fix(
+            PROOF_BASIC,
+            (old, new),
+            "--sdk-package",
+            "acme.client",
+            "--check",
+            shlex.join(PROVIDER_CHECK),
+            "--json",
+        )
+        == 0
+    )
+    fixed = json.loads(capsys.readouterr().out)
+
+    assert a_provider(bundle, "--json") == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["command"] == "provider"
+    assert payload["results"] == fixed["results"]
+    assert payload["summary"] == fixed["summary"]
+
+
+def a_run_module_provider(bundle, seed):
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tenon",
+            "provider",
+            "migrate",
+            str(PROOF_BASIC),
+            "--bundle",
+            str(bundle),
+            "--json",
+        ],
+        capture_output=True,
+        env={**os.environ, "PYTHONHASHSEED": seed},
+    )
+
+
+# Spec AC3/M5: the provider JSON is byte-identical across hash seeds.
+def test_provider_json_is_byte_stable_across_hash_seeds(tmp_path):
+    bundle = a_bundle(tmp_path)
+
+    first = a_run_module_provider(bundle, "0")
+    second = a_run_module_provider(bundle, "1")
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    assert first.stdout == second.stdout
+    assert b'"command":"provider"' in first.stdout
+    assert b'"provider":"acme"' in first.stdout
+
+
 PROBE_FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"
 PROBE_SERVER = PROBE_FIXTURES / "probe_server.py"
 PROBE_AGENT = PROBE_FIXTURES / "probe_agent.py"
