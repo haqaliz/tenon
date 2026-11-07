@@ -110,3 +110,31 @@ class GitHubAppRemote:
         )
         if completed.returncode != 0:
             raise RemoteError((completed.stderr or "").replace(token, "***"))
+
+    def create_pr(
+        self,
+        repo: str | Path,
+        *,
+        branch: str,
+        base: str,
+        title: str,
+        body: str,
+        draft: bool,
+    ) -> str:
+        owner, name = self._owner_repo(repo)
+        payload = self._api.request(
+            "POST",
+            f"/repos/{owner}/{name}/pulls",
+            self._token(),
+            {
+                "head": branch,
+                "base": base,
+                "title": title,
+                "body": body,
+                "draft": draft,
+            },
+        )
+        url = payload.get("html_url")
+        if not isinstance(url, str) or not url:
+            raise RemoteError("GitHub did not return a pull request URL")
+        return url

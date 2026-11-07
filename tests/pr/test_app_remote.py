@@ -284,3 +284,56 @@ def test_a_push_failure_redacts_the_token(tmp_path):
 
     assert TOKEN not in raised.value.detail
     assert "***" in raised.value.detail
+
+
+# Spec AC5/AC7: create_pr posts head/base/title/body/draft and returns html_url.
+@pytest.mark.parametrize("draft", [True, False])
+def test_create_pr_posts_the_exact_body_and_returns_the_url(tmp_path, draft):
+    url = "https://github.com/acme/widgets/pull/7"
+    remote, _, transport = a_remote((201, {}, json.dumps({"html_url": url})))
+    body = "## Tenon proof: TESTS_PASSED\n"
+
+    result = remote.create_pr(
+        tmp_path,
+        branch="tenon/x",
+        base="main",
+        title="[TESTS_PASSED] tenon: x",
+        body=body,
+        draft=draft,
+    )
+
+    assert result == url
+    method, sent_url, headers, sent = transport.calls[0]
+    assert method == "POST"
+    assert sent_url == f"{API}/repos/acme/widgets/pulls"
+    assert headers["Authorization"] == f"Bearer {TOKEN}"
+    assert json.loads(sent) == {
+        "head": "tenon/x",
+        "base": "main",
+        "title": "[TESTS_PASSED] tenon: x",
+        "body": body,
+        "draft": draft,
+    }
+    assert TOKEN not in sent
+
+
+# Spec AC5: a response without html_url is a RemoteError, never an empty URL.
+def test_a_missing_pr_url_is_a_remote_error(tmp_path):
+    remote, _, _ = a_remote((201, {}, json.dumps({"number": 7})))
+
+    with pytest.raises(RemoteError):
+        remote.create_pr(
+            tmp_path,
+            branch="tenon/x",
+            base="main",
+            title="[TESTS_PASSED] tenon: x",
+            body="body\n",
+            draft=False,
+        )
+
+
+# Spec AC5: the app remote is part of the package surface.
+def test_the_app_remote_is_exported_from_the_package():
+    import tenon.pr as pr
+
+    assert pr.GitHubAppRemote is GitHubAppRemote

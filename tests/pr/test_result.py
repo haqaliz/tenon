@@ -339,6 +339,7 @@ def test_package_exports_the_public_contract():
         "GitGhRemote",
         "GitHubApi",
         "GitHubApiError",
+        "GitHubAppRemote",
         "GitHubAppToken",
         "PrDraft",
         "PrRefusal",

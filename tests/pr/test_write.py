@@ -764,6 +764,7 @@ def test_package_exports_the_full_public_surface():
         "GitGhRemote",
         "GitHubApi",
         "GitHubApiError",
+        "GitHubAppRemote",
         "GitHubAppToken",
         "PrDraft",
         "PrRefusal",
