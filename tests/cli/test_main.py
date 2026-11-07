@@ -1235,3 +1235,48 @@ def test_probe_missing_required_flags_exit_two(capsys):
 # Spec AC2: a valid fake server/agent/tasks run is a 0; probe takes no repo.
 def test_probe_passing_run_exits_zero(a_pass_tasks, capsys):
     assert a_probe(tasks=a_pass_tasks) == 0
+
+
+# Spec AC2: the passing text names the task and the tool count.
+def test_probe_text_names_the_task_and_tools(a_pass_tasks, capsys):
+    assert a_probe(tasks=a_pass_tasks) == 0
+
+    out = capsys.readouterr().out
+    assert "PASS echo: echo:hello" in out
+    assert "2 tools, 1 task, 1 passed, 0 failed" in out
+
+
+# Spec AC3: a failing task is a 1 that names the failed call and its error.
+def test_probe_failing_task_exits_one_and_names_the_call(capsys):
+    assert a_probe() == 1
+
+    out = capsys.readouterr().out
+    assert "FAIL fail: fail: isError: boom" in out
+    assert "1 passed, 1 failed" in out
+
+
+# Spec AC2/AC7: --json is the report object, byte-identical across runs.
+def test_probe_json_has_the_report_shape_and_is_byte_stable(a_pass_tasks, capsys):
+    assert a_probe("--json", tasks=a_pass_tasks) == 0
+    first = capsys.readouterr().out
+    assert a_probe("--json", tasks=a_pass_tasks) == 0
+    second = capsys.readouterr().out
+
+    assert first == second
+    payload = json.loads(first)
+    assert set(payload) == {"server", "tools", "tasks", "summary"}
+    assert payload["server"]["name"] == "fake"
+    assert [tool["name"] for tool in payload["tools"]] == ["echo", "fail"]
+    (task,) = payload["tasks"]
+    assert task["ok"] is True
+    assert task["calls"][0]["result_excerpt"] == "echo:hello"
+    assert payload["summary"] == {"tasks": 1, "ok": 1, "failed": 0}
+    assert first.count("\n") == 1
+
+
+# Spec AC2: an empty tasks file is valid, exits 0 and reports zero.
+def test_probe_empty_tasks_exits_zero(tmp_path, capsys):
+    tasks = a_tasks_file(tmp_path, [], name="empty.json")
+
+    assert a_probe(tasks=tasks) == 0
+    assert "0 tasks, 0 passed, 0 failed" in capsys.readouterr().out

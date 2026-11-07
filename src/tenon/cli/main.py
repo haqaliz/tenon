@@ -280,8 +280,12 @@ def _probe(args: argparse.Namespace) -> int:
     agent_cmd = shlex.split(args.agent)
     tasks = load_tasks(args.tasks)
     report = probe(server_cmd, tasks, agent_cmd, args.timeout)
-    print(report.render_text(), end="")
-    return 0
+    # Spec AC2/AC3: a task failure is a report with exit 1, never an error envelope.
+    if args.json:
+        print(report.to_json())
+    else:
+        print(report.render_text(), end="")
+    return 0 if report.summary.failed == 0 else 1
 
 
 def _fail(
