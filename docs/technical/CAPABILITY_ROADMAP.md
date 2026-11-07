@@ -13,7 +13,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | **Shipped 2026-11-06** |
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Shipped 2026-11-07** |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
-| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Partial 2026-11-08** — GitHub App remote shipped; provider fan-out/hosted service not started |
+| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Partial 2026-11-08** — GitHub App remote + provider migration bundle shipped; hosted service/fan-out not started |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | Not started |
 
 ### T1 as shipped (2026-10-26)
@@ -207,6 +207,19 @@ Known limits: self-hosted only; no provider migration bundle, customer fan-out, 
 discovery or hosted service (T10b/T10c); the private key is the operator's secret; a malicious git
 hook or `GIT_TRACE` can still expose the token; Windows is not a target; no token-expiry refresh
 beyond one mint per remote.
+
+### T10b as built (2026-11-08)
+
+`src/tenon/provider/`: a `MigrationBundle` (provider/migration identity, source/language, old/new
+spec paths relative to the bundle, locate config, `check`/`build`/`characterize`/`replay`, require,
+breaking_only) and `load_bundle` with named validation. `tenon provider migrate <repo> --bundle PATH`
+runs the shipped detect → locate → propose → prove pipeline (the same `_fix_results`), prints a
+provider/migration header plus the fix report or a provider JSON envelope, and with `--open-pr` uses
+`gh`/the T10a app remote. `--check`/`--require` override the bundle. 1,738 tests, offline.
+
+Known limits: one repo per run; no multi-repo/installed fan-out, webhooks, database or hosted service
+(T10c); no provider note in the PR body; the bundle is trusted local input (paths/commands), not a
+sandbox; `command` is accepted as a `tenon.toml` alias for the documented `check` key.
 
 
 

@@ -3,7 +3,7 @@
 - **Slug:** `provider-bundle`
 - **Capability:** T10 in `docs/technical/CAPABILITY_ROADMAP.md` — **second slice, provider migration bundle**
 - **Milestone:** Phase 3 in `docs/ROADMAP.md`, second slice
-- **Status:** draft for review
+- **Status:** implemented 2026-11-08 (`src/tenon/provider/`, CLI; 1,738 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

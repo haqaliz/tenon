@@ -6,6 +6,7 @@
 - **Capability:** **T10 Provider layer and GitHub App (hosted)** — second slice: **provider migration
   bundle** (`docs/technical/CAPABILITY_ROADMAP.md:16`)
 - **Milestone:** Phase 3 (`docs/ROADMAP.md`), second slice
+- **State:** shipped 2026-11-08 (`src/tenon/provider/`, CLI; 1,738 tests)
 - **Branch:** `feat/provider-bundle/aliz`
 - **Worktree:** `.claude/worktrees/feat-provider-bundle`
 
