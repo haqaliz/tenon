@@ -12,7 +12,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | | **Shipped 2026-11-05** |
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | **Shipped 2026-11-06** |
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Shipped 2026-11-07** |
-| **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | Not started |
+| **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | Not started |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | Not started |
 
@@ -177,6 +177,22 @@ Known limits: stdio/tools only (no HTTP/SSE, resources/prompts, sampling/roots/e
 agent is the user's command, so a weak agent yields a weak readiness report (the report shows the
 plan/calls); a server logging to stdout corrupts the JSON-RPC stream; no `--stop-on-error`, no
 `tenon.toml` probe defaults; the probe runs arbitrary local server/agent code and is not a sandbox.
+
+### T9 as built (2026-11-07)
+
+`src/tenon/corpus/`: a `CorpusRecord` (deterministic id over repo/commit/change/diff; change,
+proposal, proof and PR snapshots; six outcomes; user-supplied date/evidence/notes), an append-only
+JSONL store with atomic outcome updates, and a report grouping by proof level and outcome. The merge
+rate is `merged / (merged + rejected + closed + incident)` and is null until a real outcome exists;
+`local_only`/`pending` never count as success. The CLI adds `tenon corpus record --from fix.json`,
+`outcome` and `report`. `docs/benchmark/corpus.jsonl` seeds the two public M0.3 cases as
+`local_only`/`TESTS_PASSED`; `docs/benchmark/README.md` states the method and the absence of merge
+outcomes. 1,571 tests, offline.
+
+Known limits: the corpus is local/opt-in (no upload, no GitHub outcome detection); a `merged` outcome
+is a user claim with a URL/evidence, not a Tenon-verified fact; the seed has no merge outcomes, so
+every rate is n/a; the records are snapshots and a schema change is a migration; no `fix --corpus`
+auto-record.
 
 
 

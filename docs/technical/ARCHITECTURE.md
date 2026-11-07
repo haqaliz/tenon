@@ -2,9 +2,10 @@
 
 Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR), T6
 (locate, TypeScript/JavaScript), T7 (proof ladder), T8a (MCP tool-schema diffs), T8b (Python MCP
-tool-call locator), T8c (`tenon probe`) and the `tenon check` / `tenon fix` / `tenon probe` CLI are
-implemented** under `src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`,
-`src/tenon/pr/`, `src/tenon/probe/` and `src/tenon/cli/`. The later stages are not.
+tool-call locator), T8c (`tenon probe`), T9 (benchmark corpus) and the `tenon check` / `tenon fix` /
+`tenon probe` / `tenon corpus` CLI are implemented** under `src/tenon/detect/`, `src/tenon/locate/`,
+`src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`, `src/tenon/probe/`, `src/tenon/corpus/`
+and `src/tenon/cli/`. The later stages are not.
 
 ## Pipeline
 
@@ -37,7 +38,7 @@ src/tenon/
   prove/      T4/T7: working-copy runner, proof ladder  <- built (all five levels)
   pr/         T5: branch and PR writer                     <- built (git + gh seam)
   probe/      T8c: MCP stdio probe, agent plan, report  <- built (tools only)
-  corpus/     T9: benchmark records
+  corpus/     T9: benchmark records                         <- built (JSONL + report)
   cli/        tenon check | fix                           <- built
 tests/        offline; fixture repos and specs; no network, no model calls
 ```
@@ -69,6 +70,10 @@ tests/        offline; fixture repos and specs; no network, no model calls
   its tools, runs user tasks through a user-supplied `--agent` command (JSON request in, JSON plan
   out), executes the plan itself and reports what worked. No model ships; Tenon makes no network
   call; the report says "worked in this run", never "verified".
+- **The benchmark is descriptive, not a claim.** T9 records `(change, patch, proof, outcome)` in a
+  local JSONL corpus. A merge rate uses only real outcomes (`merged`, `rejected`, `closed`,
+  `incident`); `local_only`/`pending` never count as success. The public seed has no merge outcomes,
+  so its rate is `n/a`.
 - **Determinism.** Detection, location and PR text are deterministic for the same inputs. The
   model proposer is the only non-deterministic piece, behind an injectable seam; tests use
   recorded proposals.
@@ -98,6 +103,10 @@ server over stdio, lists its tools, runs every task through the agent command an
 worked. Exit 0 when every task passed, 1 when one failed, 2 on usage/connection. The task file and
 agent contract are documented in `docs/planning/mcp-probe/prd.md`.
 
+`tenon corpus record --from FIX_JSON --repo URL --commit SHA --outcome STATUS --date YYYY-MM-DD
+--corpus PATH` appends records; `tenon corpus outcome` updates a human outcome; `tenon corpus
+report` prints the level/outcome table and merge rate. `docs/benchmark/` holds the public seed.
+
 `tenon.toml` provides `[locate]` (`source`, `language`, `sdk_package`, mappings) and `[tenon]`
 defaults; flags override. Exit 2 on usage or bad input. Never a traceback.
 
@@ -113,6 +122,10 @@ pattern is the only locator in this slice. `language=ts` + `source=mcp` is a nam
 - T8 probe follow-ups: HTTP/SSE transport, an OpenAPI/API probe, resources/prompts,
   sampling/roots/elicitation, and `--stop-on-error`. The shipped probe is stdio/tools only and runs
   the user's local server/agent without a sandbox.
+- T9 follow-ups: GitHub merge/incident detection, `tenon fix --corpus` auto-record, and a hosted
+  public benchmark (T10). The shipped corpus is local/opt-in and its public seed has no merge
+  outcomes yet.
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
+- Phase 3 (T10 hosted/provider, T11 more languages) is after the window and not started.

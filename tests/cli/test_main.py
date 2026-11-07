@@ -11,6 +11,13 @@ from pathlib import Path
 import pytest
 
 from tenon.cli import main
+from tenon.corpus import (
+    CorpusRecord,
+    Outcome,
+    benchmark,
+    load_corpus,
+    record_id,
+)
 from tenon.detect import diff, diff_mcp, load, load_mcp
 from tenon.pr import PrDraft, PrRefusal, PrResult, PrStatus
 from tenon.prove import CheckResult, ProofLevel, ProofPlan, ProofResult
@@ -1386,3 +1393,716 @@ def test_probe_non_numeric_timeout_is_usage(a_pass_tasks, capsys):
     err = capsys.readouterr().err
     assert "--timeout" in err
     assert "Traceback" not in err
+
+
+CORPUS_REPO = "https://github.com/o/r"
+CORPUS_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+CORPUS_CHANGE = {
+    "kind": "renamed",
+    "location": {
+        "method": "post",
+        "path": "/v1/checkout/sessions",
+        "pointer": (
+            "#/paths/~1v1~1checkout~1sessions/post/requestBody/content/"
+            "application~1x-www-form-urlencoded/schema/properties"
+        ),
+    },
+    "before": "payment_method_types",
+    "after": "allowed_payment_method_types",
+    "breaking": True,
+    "confidence": "inferred",
+}
+CORPUS_DIFF = (
+    "--- a/app.py\n"
+    "+++ b/app.py\n"
+    "@@ -4,7 +4,7 @@\n"
+    '-    payment_method_types=["card"],\n'
+    '+    allowed_payment_method_types=["card"],\n'
+)
+CORPUS_PROPOSAL = {
+    "change": CORPUS_CHANGE,
+    "edits": [
+        {
+            "path": "app.py",
+            "line": 7,
+            "column": 13,
+            "shape": "keyword",
+            "old": "payment_method_types",
+            "new": "allowed_payment_method_types",
+        }
+    ],
+    "skipped": [],
+    "files": ["app.py"],
+    "diff": CORPUS_DIFF,
+    "reason": None,
+}
+CORPUS_PROOF = {
+    "level": "TESTS_PASSED",
+    "cause": None,
+    "baseline": {
+        "kind": "baseline",
+        "stage": "TESTS",
+        "command": ["pytest", "tests/test_app.py", "-q"],
+        "returncode": 0,
+        "timed_out": False,
+        "stdout_tail": "1 passed",
+        "stderr_tail": "",
+    },
+    "after": {
+        "kind": "after",
+        "stage": "TESTS",
+        "command": ["pytest", "tests/test_app.py", "-q"],
+        "returncode": 0,
+        "timed_out": False,
+        "stdout_tail": "1 passed",
+        "stderr_tail": "",
+    },
+    "patch_applied": True,
+    "checks": [],
+}
+SECOND_CHANGE = {**CORPUS_CHANGE, "before": "currency", "after": "currency_code"}
+SECOND_PROPOSAL = {
+    **CORPUS_PROPOSAL,
+    "change": SECOND_CHANGE,
+    "edits": [
+        {
+            **CORPUS_PROPOSAL["edits"][0],
+            "path": "other.py",
+            "line": 12,
+            "old": "currency",
+            "new": "currency_code",
+        }
+    ],
+    "files": ["other.py"],
+    "diff": (
+        "--- a/other.py\n"
+        "+++ b/other.py\n"
+        "@@ -10,7 +10,7 @@\n"
+        '-    currency="usd",\n'
+        '+    currency_code="usd",\n'
+    ),
+}
+
+
+def a_corpus_result(**overrides):
+    """One result shaped exactly like ``render_fix_json`` output."""
+    values = {
+        "change": CORPUS_CHANGE,
+        "locate": {
+            "change": CORPUS_CHANGE,
+            "certain": [],
+            "ambiguous": [],
+            "reason": None,
+        },
+        "proposal": CORPUS_PROPOSAL,
+        "proof": CORPUS_PROOF,
+        "pr": None,
+    }
+    values.update(overrides)
+    return values
+
+
+def a_fix_json(tmp_path, *results, name="fix.json"):
+    payload = {
+        "command": "fix",
+        "results": list(results),
+        "summary": {"changes": len(results)},
+    }
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def a_corpus_record(fix, corpus, *extra, outcome="local_only", date="2026-11-07"):
+    return main(
+        [
+            "corpus",
+            "record",
+            "--from",
+            str(fix),
+            "--repo",
+            CORPUS_REPO,
+            "--commit",
+            CORPUS_COMMIT,
+            "--outcome",
+            outcome,
+            "--date",
+            date,
+            "--corpus",
+            str(corpus),
+            *extra,
+        ]
+    )
+
+
+# Spec AC1: a valid two-result fix report appends one deterministic record each.
+def test_corpus_record_appends_one_record_per_result(tmp_path, capsys):
+    fix = a_fix_json(
+        tmp_path,
+        a_corpus_result(),
+        a_corpus_result(change=SECOND_CHANGE, proposal=SECOND_PROPOSAL),
+    )
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert (
+        a_corpus_record(
+            fix,
+            corpus,
+            "--outcome-url",
+            "https://github.com/o/r/pull/1",
+            "--notes",
+            "focused test",
+            "--evidence",
+            "docs/evidence.md",
+        )
+        == 0
+    )
+
+    records = load_corpus(corpus)
+    assert len(records) == 2
+    first, second = records
+    assert first.id == record_id(
+        CORPUS_REPO, CORPUS_COMMIT, CORPUS_CHANGE, CORPUS_PROPOSAL
+    )
+    assert second.id == record_id(
+        CORPUS_REPO, CORPUS_COMMIT, SECOND_CHANGE, SECOND_PROPOSAL
+    )
+    assert first.id != second.id
+    assert (first.repo, first.commit) == (CORPUS_REPO, CORPUS_COMMIT)
+    assert (first.change, first.proposal, first.proof) == (
+        CORPUS_CHANGE,
+        CORPUS_PROPOSAL,
+        CORPUS_PROOF,
+    )
+    assert first.pr is None
+    assert first.outcome is Outcome.LOCAL_ONLY
+    assert first.recorded == "2026-11-07"
+    assert first.outcome_url == "https://github.com/o/r/pull/1"
+    assert first.notes == "focused test"
+    assert first.evidence == "docs/evidence.md"
+    assert capsys.readouterr().out == f"{first.id}\n{second.id}\n"
+
+
+# Spec AC1: a fix report with no results records nothing and prints no ids.
+def test_corpus_record_with_no_results_records_nothing(tmp_path, capsys):
+    fix = a_fix_json(tmp_path)
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus) == 0
+
+    assert capsys.readouterr().out == ""
+    assert load_corpus(corpus) == ()
+
+
+# Spec AC1: --json lists the recorded ids as one object.
+def test_corpus_record_json_lists_the_ids(tmp_path, capsys):
+    fix = a_fix_json(
+        tmp_path,
+        a_corpus_result(),
+        a_corpus_result(change=SECOND_CHANGE, proposal=SECOND_PROPOSAL),
+    )
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus, "--json") == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "ids": [
+            record_id(CORPUS_REPO, CORPUS_COMMIT, CORPUS_CHANGE, CORPUS_PROPOSAL),
+            record_id(
+                CORPUS_REPO, CORPUS_COMMIT, SECOND_CHANGE, SECOND_PROPOSAL
+            ),
+        ]
+    }
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC1/AC2: every lowercase outcome token maps to the uppercase enum.
+@pytest.mark.parametrize(
+    "token", ["pending", "merged", "rejected", "closed", "incident", "local_only"]
+)
+def test_corpus_record_maps_every_outcome_token(tmp_path, capsys, token):
+    fix = a_fix_json(tmp_path, a_corpus_result())
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus, outcome=token) == 0
+
+    (record,) = load_corpus(corpus)
+    assert record.outcome.value == token.upper()
+
+
+# Spec AC2: a non-fix report, a missing results list, a missing result key and
+# a non-object result are named errors that append nothing.
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"command": "check", "results": []}, 'command != "fix"'),
+        ({"command": "fix"}, "results list"),
+        (
+            {"command": "fix", "results": [{"change": {}, "proposal": {}}]},
+            "proof must be a mapping",
+        ),
+        ({"command": "fix", "results": ["not an object"]}, "must be an object"),
+    ],
+)
+def test_corpus_record_bad_fix_json_appends_nothing(
+    tmp_path, capsys, payload, message
+):
+    fix = tmp_path / "fix.json"
+    fix.write_text(json.dumps(payload), encoding="utf-8")
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus) == 2
+
+    captured = capsys.readouterr()
+    assert message in captured.err
+    assert "Traceback" not in captured.err
+    assert not corpus.exists()
+
+
+# Spec AC2: a malformed fix JSON body is a named error, not a traceback.
+def test_corpus_record_invalid_json_is_a_named_error(tmp_path, capsys):
+    fix = tmp_path / "fix.json"
+    fix.write_text("{", encoding="utf-8")
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus) == 2
+
+    captured = capsys.readouterr()
+    assert "invalid JSON" in captured.err
+    assert "Traceback" not in captured.err
+    assert not corpus.exists()
+
+
+# Spec AC2: a missing fix file is a named error.
+def test_corpus_record_missing_fix_file_exits_two(tmp_path, capsys):
+    assert a_corpus_record(tmp_path / "missing.json", tmp_path / "corpus.jsonl") == 2
+
+    err = capsys.readouterr().err
+    assert "cannot read fix JSON" in err
+    assert "Traceback" not in err
+
+
+# Spec AC2: a date that is not a real YYYY-MM-DD appends nothing.
+@pytest.mark.parametrize("date", ["2026-13-01", "07/11/2026", "2026-1-1"])
+def test_corpus_record_bad_date_exits_two(tmp_path, capsys, date):
+    fix = a_fix_json(tmp_path, a_corpus_result())
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus, date=date) == 2
+
+    captured = capsys.readouterr()
+    assert "YYYY-MM-DD" in captured.err
+    assert "Traceback" not in captured.err
+    assert not corpus.exists()
+
+
+# Spec AC2: an unknown outcome token appends nothing.
+def test_corpus_record_unknown_outcome_exits_two(tmp_path, capsys):
+    fix = a_fix_json(tmp_path, a_corpus_result())
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus, outcome="bogus") == 2
+
+    captured = capsys.readouterr()
+    assert "unknown outcome" in captured.err
+    assert "Traceback" not in captured.err
+    assert not corpus.exists()
+
+
+# Spec AC2/AC7: a --json error is one object on stdout, never a traceback.
+def test_corpus_record_json_error_is_one_object(tmp_path, capsys):
+    fix = a_fix_json(tmp_path, a_corpus_result())
+
+    assert a_corpus_record(
+        fix, tmp_path / "corpus.jsonl", "--json", outcome="bogus"
+    ) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "corpus"
+    assert "unknown outcome" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+def a_stored_record(commit="commit-one", outcome=Outcome.LOCAL_ONLY, **overrides):
+    values = {
+        "repo": CORPUS_REPO,
+        "commit": commit,
+        "change": CORPUS_CHANGE,
+        "proposal": CORPUS_PROPOSAL,
+        "proof": CORPUS_PROOF,
+        "pr": None,
+        "outcome": outcome,
+        "recorded": "2026-11-07",
+        "outcome_url": None,
+        "notes": "",
+        "evidence": "",
+    }
+    values.update(overrides)
+    if "id" not in values:
+        values["id"] = record_id(
+            values["repo"], values["commit"], values["change"], values["proposal"]
+        )
+    return CorpusRecord(**values)
+
+
+def a_corpus_file(tmp_path, *records, name="corpus.jsonl"):
+    path = tmp_path / name
+    path.write_text(
+        "".join(record.to_json() + "\n" for record in records),
+        encoding="utf-8",
+    )
+    return path
+
+
+def a_corpus_outcome(corpus, record_id, *extra):
+    return main(
+        [
+            "corpus",
+            "outcome",
+            "--corpus",
+            str(corpus),
+            "--id",
+            record_id,
+            "--outcome",
+            "merged",
+            *extra,
+        ]
+    )
+
+
+# Spec AC3: an outcome update changes the outcome/url/notes and keeps the id.
+def test_corpus_outcome_updates_and_keeps_the_id(tmp_path, capsys):
+    record = a_stored_record()
+    corpus = a_corpus_file(tmp_path, record)
+
+    assert (
+        a_corpus_outcome(
+            corpus,
+            record.id,
+            "--outcome-url",
+            "https://github.com/o/r/pull/1",
+            "--notes",
+            "merged by hand",
+        )
+        == 0
+    )
+
+    (updated,) = load_corpus(corpus)
+    assert updated.id == record.id
+    assert updated.outcome is Outcome.MERGED
+    assert updated.outcome_url == "https://github.com/o/r/pull/1"
+    assert updated.notes == "merged by hand"
+    out = capsys.readouterr().out
+    assert record.id in out
+    assert "MERGED" in out
+
+
+# Spec AC3: --json returns the updated record as one object.
+def test_corpus_outcome_json_returns_the_updated_record(tmp_path, capsys):
+    record = a_stored_record()
+    corpus = a_corpus_file(tmp_path, record)
+
+    assert (
+        a_corpus_outcome(
+            corpus,
+            record.id,
+            "--outcome-url",
+            "https://github.com/o/r/pull/1",
+            "--notes",
+            "merged by hand",
+            "--json",
+        )
+        == 0
+    )
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["id"] == record.id
+    assert payload["outcome"] == "MERGED"
+    assert payload["outcome_url"] == "https://github.com/o/r/pull/1"
+    assert payload["notes"] == "merged by hand"
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC3: omitted --outcome-url/--notes keep the existing values.
+def test_corpus_outcome_keeps_the_existing_url_and_notes(tmp_path):
+    record = a_stored_record(
+        outcome_url="https://github.com/o/r/pull/1", notes="old note"
+    )
+    corpus = a_corpus_file(tmp_path, record)
+
+    assert main(
+        [
+            "corpus",
+            "outcome",
+            "--corpus",
+            str(corpus),
+            "--id",
+            record.id,
+            "--outcome",
+            "rejected",
+        ]
+    ) == 0
+
+    (updated,) = load_corpus(corpus)
+    assert updated.outcome is Outcome.REJECTED
+    assert updated.outcome_url == "https://github.com/o/r/pull/1"
+    assert updated.notes == "old note"
+
+
+# Spec AC3: an unknown id exits 2 and leaves the file alone.
+def test_corpus_outcome_unknown_id_exits_two(tmp_path, capsys):
+    record = a_stored_record()
+    corpus = a_corpus_file(tmp_path, record)
+
+    assert a_corpus_outcome(corpus, "000000000000") == 2
+
+    captured = capsys.readouterr()
+    assert "unknown corpus id" in captured.err
+    assert "Traceback" not in captured.err
+    assert load_corpus(corpus) == (record,)
+
+
+# Spec AC3: an unknown outcome token exits 2 and leaves the file alone.
+def test_corpus_outcome_unknown_outcome_exits_two(tmp_path, capsys):
+    record = a_stored_record()
+    corpus = a_corpus_file(tmp_path, record)
+
+    assert main(
+        [
+            "corpus",
+            "outcome",
+            "--corpus",
+            str(corpus),
+            "--id",
+            record.id,
+            "--outcome",
+            "bogus",
+        ]
+    ) == 2
+
+    captured = capsys.readouterr()
+    assert "unknown outcome" in captured.err
+    assert "Traceback" not in captured.err
+    assert load_corpus(corpus) == (record,)
+
+
+# Spec AC3/AC7: a --json outcome error is one object on stdout.
+def test_corpus_outcome_json_error_is_one_object(tmp_path, capsys):
+    record = a_stored_record()
+    corpus = a_corpus_file(tmp_path, record)
+
+    assert main(
+        [
+            "corpus",
+            "outcome",
+            "--corpus",
+            str(corpus),
+            "--id",
+            record.id,
+            "--outcome",
+            "bogus",
+            "--json",
+        ]
+    ) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["error"]["kind"] == "corpus"
+    assert "unknown outcome" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC3: a missing corpus exits 2.
+def test_corpus_outcome_missing_corpus_exits_two(tmp_path, capsys):
+    assert a_corpus_outcome(tmp_path / "missing.jsonl", "abc") == 2
+
+    err = capsys.readouterr().err
+    assert "cannot read corpus" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: the text report is exactly the benchmark's text.
+def test_corpus_report_text_matches_benchmark(tmp_path, capsys):
+    records = (a_stored_record(), a_stored_record(commit="commit-two"))
+    corpus = a_corpus_file(tmp_path, *records)
+
+    assert main(["corpus", "report", "--corpus", str(corpus)]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == benchmark(records).render_text()
+
+
+# Spec AC4: the JSON report is exactly the benchmark's JSON.
+def test_corpus_report_json_matches_benchmark(tmp_path, capsys):
+    records = (a_stored_record(), a_stored_record(commit="commit-two"))
+    corpus = a_corpus_file(tmp_path, *records)
+
+    assert main(["corpus", "report", "--corpus", str(corpus), "--json"]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == benchmark(records).to_json() + "\n"
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC4/M8: an empty file is a valid zero report with a null rate.
+def test_corpus_report_empty_file_is_valid(tmp_path, capsys):
+    corpus = tmp_path / "corpus.jsonl"
+    corpus.write_text("", encoding="utf-8")
+
+    assert main(["corpus", "report", "--corpus", str(corpus), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["total"] == 0
+    assert all(
+        stats["merge_rate"] is None for stats in payload["by_level"].values()
+    )
+    assert set(payload["outcomes"].values()) == {0}
+
+    assert main(["corpus", "report", "--corpus", str(corpus)]) == 0
+    assert "0 records" in capsys.readouterr().out
+
+
+# Spec AC4: a missing corpus exits 2.
+def test_corpus_report_missing_corpus_exits_two(tmp_path, capsys):
+    assert main(
+        ["corpus", "report", "--corpus", str(tmp_path / "missing.jsonl")]
+    ) == 2
+
+    err = capsys.readouterr().err
+    assert "cannot read corpus" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4/AC7: a malformed corpus is one JSON error object and exit 2.
+def test_corpus_report_malformed_corpus_json_is_one_object(tmp_path, capsys):
+    corpus = tmp_path / "corpus.jsonl"
+    corpus.write_text("{", encoding="utf-8")
+
+    assert main(["corpus", "report", "--corpus", str(corpus), "--json"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert payload["error"]["kind"] == "corpus"
+    assert "line 1" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+BENCHMARK_CORPUS = (
+    Path(__file__).parent.parent.parent / "docs" / "benchmark" / "corpus.jsonl"
+)
+BENCHMARK_README = BENCHMARK_CORPUS.with_name("README.md")
+FHI_COMMIT = "56e69cfa4440aea0a42d016f84e6af336c5e0d3c"
+STRIPE_TEMPLATE_COMMIT = "9d9178c47a191112b86a6ce6edd71962faee80d1"
+
+
+# Spec AC5: the committed seed is exactly the two public M0.3 cases.
+def test_benchmark_seed_has_the_two_public_cases():
+    records = load_corpus(BENCHMARK_CORPUS)
+
+    assert len(records) == 2
+    by_commit = {record.commit: record for record in records}
+    assert set(by_commit) == {FHI_COMMIT, STRIPE_TEMPLATE_COMMIT}
+
+    fhi = by_commit[FHI_COMMIT]
+    assert fhi.repo == "https://github.com/fighthealthinsurance/fighthealthinsurance"
+    assert fhi.recorded == "2026-11-02"
+    assert fhi.evidence == "docs/planning/m0-3-first-real-case/evidence.md"
+    assert len(fhi.proposal["edits"]) == 3
+    assert fhi.proposal["files"] == [
+        "fhi_users/auth/rest_auth_views.py",
+        "fighthealthinsurance/views.py",
+    ]
+    assert sum(line.startswith("@@") for line in fhi.proposal["diff"].splitlines()) == 3
+
+    stripe_template = by_commit[STRIPE_TEMPLATE_COMMIT]
+    assert stripe_template.repo == "https://github.com/yezz123/stripe-template"
+    assert stripe_template.recorded == "2026-10-31"
+    assert stripe_template.evidence == "docs/planning/m0-3-real-case/evidence.md"
+    assert len(stripe_template.proposal["edits"]) == 2
+    assert stripe_template.proposal["files"] == [
+        "app/router/v1/payment.py",
+        "tests/test_payment.py",
+    ]
+    assert (
+        sum(
+            line.startswith("@@")
+            for line in stripe_template.proposal["diff"].splitlines()
+        )
+        == 2
+    )
+
+    for record in records:
+        assert record.id == record_id(
+            record.repo, record.commit, record.change, record.proposal
+        )
+        assert record.outcome is Outcome.LOCAL_ONLY
+        assert record.proof["level"] == "TESTS_PASSED"
+        assert record.proof["patch_applied"] is True
+        assert record.proof["cause"] is None
+        assert record.pr is None
+        assert record.change["kind"] == "renamed"
+        assert record.change["location"]["method"] == "post"
+        assert record.change["location"]["path"] == "/v1/checkout/sessions"
+        assert (
+            record.change["before"],
+            record.change["after"],
+        ) == ("payment_method_types", "allowed_payment_method_types")
+
+
+# Spec AC5: with no real outcomes, known is 0 and every merge rate is null.
+def test_benchmark_seed_report_has_no_known_outcomes():
+    report = benchmark(load_corpus(BENCHMARK_CORPUS))
+
+    assert report.total == 2
+    assert report.by_level[ProofLevel.TESTS_PASSED].count == 2
+    assert report.by_level[ProofLevel.TESTS_PASSED].known == 0
+    assert all(stats.merge_rate is None for stats in report.by_level.values())
+    assert report.outcomes[Outcome.LOCAL_ONLY] == 2
+
+
+# Spec AC4/AC5: the CLI report over the seed is the benchmark report.
+def test_corpus_report_on_the_seed_matches_benchmark(capsys):
+    assert (
+        main(["corpus", "report", "--corpus", str(BENCHMARK_CORPUS), "--json"])
+        == 0
+    )
+
+    assert capsys.readouterr().out == (
+        benchmark(load_corpus(BENCHMARK_CORPUS)).to_json() + "\n"
+    )
+
+
+# Spec AC5: the README states the method, the cases and the honest no-merge note.
+def test_benchmark_readme_documents_the_method_and_no_merge_outcomes():
+    text = BENCHMARK_README.read_text(encoding="utf-8")
+    lowered = text.lower()
+
+    assert "docs/benchmark/corpus.jsonl" in text
+    assert "tenon corpus record" in text
+    assert "tenon corpus outcome" in text
+    assert "tenon corpus report --corpus docs/benchmark/corpus.jsonl" in text
+    assert "no merge outcomes yet" in lowered
+    assert "merge rate n/a" in lowered
+    for outcome in (
+        "pending",
+        "merged",
+        "rejected",
+        "closed",
+        "incident",
+        "local_only",
+    ):
+        assert outcome in text
+    assert "fighthealthinsurance" in text
+    assert "stripe-template" in text
+    assert "local" in lowered
+    assert "opt-in" in lowered
