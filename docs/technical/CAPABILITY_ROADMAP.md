@@ -11,7 +11,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T5** | **PR writer.** Branch and PR stating the proof level; never pushes to the default branch. | T4 | No merging | **Shipped 2026-11-05** |
 | **T6** | **TypeScript/JavaScript locator.** Same contract as T2. | T1 | | **Shipped 2026-11-05** |
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | **Shipped 2026-11-06** |
-| **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Partial 2026-11-07** — MCP diffs + tool-call locator shipped; probe not started |
+| **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Shipped 2026-11-07** |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | Not started |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | Not started |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | Not started |
@@ -162,6 +162,21 @@ the MCP diff/locator feed the existing propose/prove/PR stages. 1,342 tests, off
 Known limits: Python only; high-level `call_tool` only (no `send_request`, framework wrappers, or a
 session passed through a parameter); no TypeScript MCP locator; output-schema changes locate the tool
 call only, not result-field dataflow; a second-hop receiver alias is `ALIAS_CHAIN`.
+
+### T8c as built (2026-11-07)
+
+`src/tenon/probe/`: a stdlib newline-JSON-RPC stdio client (`initialize`, paginated `tools/list`,
+`tools/call`, timeouts, named errors), `tasks.json` with optional `tools`/`result_contains`
+expectations, and a user-supplied agent command (`--agent`) that receives `{"task","tools"}` and
+returns `{"calls":[...]}`. The probe executes the plan, records each call's result/error, evaluates
+expectations, and prints a text or byte-stable JSON report. `tenon probe` exits 0 when every task
+worked, 1 when one failed, 2 on usage/connection. No model, key, network or new dependency; offline
+fake server/agent tests. 1,436 tests.
+
+Known limits: stdio/tools only (no HTTP/SSE, resources/prompts, sampling/roots/elicitation); the
+agent is the user's command, so a weak agent yields a weak readiness report (the report shows the
+plan/calls); a server logging to stdout corrupts the JSON-RPC stream; no `--stop-on-error`, no
+`tenon.toml` probe defaults; the probe runs arbitrary local server/agent code and is not a sandbox.
 
 
 

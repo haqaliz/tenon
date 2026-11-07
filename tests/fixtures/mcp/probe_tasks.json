@@ -1,0 +1,19 @@
+{
+  "tasks": [
+    {
+      "name": "echo",
+      "prompt": "Echo hello",
+      "expect": {
+        "tools": ["echo"],
+        "result_contains": "echo:hello"
+      }
+    },
+    {
+      "name": "fail",
+      "prompt": "Use the fail tool",
+      "expect": {
+        "tools": ["fail"]
+      }
+    }
+  ]
+}

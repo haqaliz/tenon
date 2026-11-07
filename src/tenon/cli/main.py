@@ -1,6 +1,8 @@
 """The ``tenon`` command: parse, configure, compose the stages, report."""
 
 import argparse
+import json
+import shlex
 import sys
 import tomllib
 from importlib.metadata import PackageNotFoundError, version
@@ -25,8 +27,9 @@ from tenon.locate import (
     locate_ts,
 )
 from tenon.pr import GitGhRemote, Remote, write_pr
+from tenon.probe import AgentError, ProbeError, load_tasks, probe
 from tenon.propose import propose
-from tenon.prove import ProofPlan, proof_rank, prove_plan
+from tenon.prove import ProofPlan, proof_rank, prove_plan, tail
 
 from .config import (
     CliConfig,
@@ -140,6 +143,20 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow a draft PR below the required proof level",
     )
+
+    # Spec AC1: the third subcommand, with no repo/--old/--new.
+    probe_command = commands.add_parser("probe", help="probe an MCP server with an agent")
+    probe_command.add_argument(
+        "--server-cmd", required=True, help="MCP server command, shlex-split"
+    )
+    probe_command.add_argument("--tasks", required=True, help="probe tasks JSON file")
+    probe_command.add_argument(
+        "--agent", required=True, help="agent command, shlex-split"
+    )
+    probe_command.add_argument(
+        "--timeout", type=float, default=30, help="seconds per request (default: 30)"
+    )
+    probe_command.add_argument("--json", action="store_true", help="machine output")
     return parser
 
 
@@ -258,6 +275,53 @@ def _fix(
     return fix_exit(len(changes), results, config.require)
 
 
+# Spec AC4: a setup failure is one named probe error, never a traceback.
+def _probe_fail(reason: str, detail: str, *, json_mode: bool) -> int:
+    message = tail(detail)
+    if json_mode:
+        print(
+            json.dumps(
+                {"error": {"kind": "probe", "reason": reason, "message": message}},
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(f"tenon: probe: {reason}: {message}", file=sys.stderr)
+    return 2
+
+
+# Spec AC1/AC2: split the commands, load the tasks, probe, then render.
+def _probe(args: argparse.Namespace) -> int:
+    json_mode = bool(args.json)
+    if not args.timeout > 0:
+        return _probe_fail(
+            "invalid_timeout",
+            f"--timeout must be positive: {args.timeout}",
+            json_mode=json_mode,
+        )
+    try:
+        server_cmd = shlex.split(args.server_cmd)
+        agent_cmd = shlex.split(args.agent)
+    except ValueError as error:
+        return _probe_fail("invalid_command", str(error), json_mode=json_mode)
+    try:
+        tasks = load_tasks(args.tasks)
+    except (OSError, ValueError) as error:
+        return _probe_fail("invalid_tasks", str(error), json_mode=json_mode)
+    try:
+        report = probe(server_cmd, tasks, agent_cmd, args.timeout)
+    except (ProbeError, AgentError) as error:
+        return _probe_fail(error.reason, error.detail, json_mode=json_mode)
+    # Spec AC2/AC3: a task failure is a report with exit 1, never an error envelope.
+    if args.json:
+        print(report.to_json())
+    else:
+        print(report.render_text(), end="")
+    return 0 if report.summary.failed == 0 else 1
+
+
 def _fail(
     kind: str,
     message: str,
@@ -287,6 +351,9 @@ def main(argv: Sequence[str] | None = None, *, remote: Remote | None = None) -> 
 
     json_mode = bool(args.json)
     try:
+        # Spec AC1: probe is dispatched before _config, which needs a repo.
+        if args.command == "probe":
+            return _probe(args)
         config = _config(args)
         if args.command == "check":
             return _check(args, config)

@@ -2,9 +2,9 @@
 
 Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR), T6
 (locate, TypeScript/JavaScript), T7 (proof ladder), T8a (MCP tool-schema diffs), T8b (Python MCP
-tool-call locator) and the `tenon check` / `tenon fix` CLI are implemented** under
-`src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`
-and `src/tenon/cli/`. The probe and the later stages are not.
+tool-call locator), T8c (`tenon probe`) and the `tenon check` / `tenon fix` / `tenon probe` CLI are
+implemented** under `src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`,
+`src/tenon/pr/`, `src/tenon/probe/` and `src/tenon/cli/`. The later stages are not.
 
 ## Pipeline
 
@@ -36,7 +36,7 @@ src/tenon/
   propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
   prove/      T4/T7: working-copy runner, proof ladder  <- built (all five levels)
   pr/         T5: branch and PR writer                     <- built (git + gh seam)
-  probe/      T8: agent run against an API or MCP server
+  probe/      T8c: MCP stdio probe, agent plan, report  <- built (tools only)
   corpus/     T9: benchmark records
   cli/        tenon check | fix                           <- built
 tests/        offline; fixture repos and specs; no network, no model calls
@@ -65,6 +65,10 @@ tests/        offline; fixture repos and specs; no network, no model calls
   opens the PR through `GitGhRemote` (`git` + `gh`). It never force-pushes, never pushes the base
   branch and has no merge path. A result at or above the required level opens a normal PR; below it
   is `BELOW_REQUIRED_LEVEL` or, with explicit opt-in, a draft; `UNVERIFIED` is always a draft.
+- **Probe is a readiness observation, not proof.** T8c starts a local MCP server over stdio, lists
+  its tools, runs user tasks through a user-supplied `--agent` command (JSON request in, JSON plan
+  out), executes the plan itself and reports what worked. No model ships; Tenon makes no network
+  call; the report says "worked in this run", never "verified".
 - **Determinism.** Detection, location and PR text are deterministic for the same inputs. The
   model proposer is the only non-deterministic piece, behind an injectable seam; tests use
   recorded proposals.
@@ -89,7 +93,10 @@ found.
 [--characterize CMD] [--replay CMD] [--check CMD] [--require LEVEL] [--allow-below-required]
 [--open-pr] [--json]` proposes, proves and prints the diff; `--open-pr` delegates to T5. `LEVEL` is
 one of the five proof levels; the strongest configured stage that is green is the result.
-`tenon probe <api-or-mcp-url> [--agent CMD]` (T8c, not built).
+`tenon probe --server-cmd CMD --tasks FILE --agent CMD [--timeout SEC] [--json]` starts an MCP
+server over stdio, lists its tools, runs every task through the agent command and reports what
+worked. Exit 0 when every task passed, 1 when one failed, 2 on usage/connection. The task file and
+agent contract are documented in `docs/planning/mcp-probe/prd.md`.
 
 `tenon.toml` provides `[locate]` (`source`, `language`, `sdk_package`, mappings) and `[tenon]`
 defaults; flags override. Exit 2 on usage or bad input. Never a traceback.
@@ -103,9 +110,9 @@ pattern is the only locator in this slice. `language=ts` + `source=mcp` is a nam
   `node_modules` so a real TS `npm test` can run in the proof copy.
 - T7 follow-ups: generation of characterization tests, recording/replaying real traffic, and
   per-stage timeouts. The current commands are user-supplied and share one timeout.
-- T8c follow-ups: the probe transport (stdio/HTTP/SSE), the agent seam, and more JSON Schema
-  composition coverage. The Python `call_tool` locator is shipped; a TypeScript MCP locator and the
-  low-level `send_request` pattern are follow-ups.
+- T8 probe follow-ups: HTTP/SSE transport, an OpenAPI/API probe, resources/prompts,
+  sampling/roots/elicitation, and `--stop-on-error`. The shipped probe is stdio/tools only and runs
+  the user's local server/agent without a sandbox.
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
