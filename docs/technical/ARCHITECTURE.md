@@ -96,8 +96,15 @@ lists affected call sites and exits 0 when clean, 1 when a site or an unanalyzab
 found.
 `tenon fix <repo> --old SPEC --new SPEC [--source openapi|mcp] [--language python|ts] [--build CMD]
 [--characterize CMD] [--replay CMD] [--check CMD] [--require LEVEL] [--allow-below-required]
-[--open-pr] [--json]` proposes, proves and prints the diff; `--open-pr` delegates to T5. `LEVEL` is
-one of the five proof levels; the strongest configured stage that is green is the result.
+[--open-pr] [--remote gh|app] [--app-id ID] [--app-installation-id ID] [--app-private-key PATH]
+[--api-url URL] [--json]` proposes, proves and prints the diff; `--open-pr` delegates to T5. `LEVEL`
+is one of the five proof levels; the strongest configured stage that is green is the result.
+`--open-pr --remote app` builds `GitHubAppRemote`/`GitHubAppToken` instead of `GitGhRemote`; the app
+needs `contents:write` and `pull_requests:write`. Its inputs come from those flags or
+`TENON_GITHUB_APP_ID`, `TENON_GITHUB_APP_INSTALLATION_ID`, `TENON_GITHUB_APP_PRIVATE_KEY` (a path)
+and `TENON_GITHUB_API_URL`; a flag wins. An explicit `--remote` requires `--open-pr`; missing inputs
+or an unreadable key exit 2. The app remote is self-hosted: webhook/installation discovery and the
+provider bundle/fan-out (T10b) and a hosted service (T10c) are deferred.
 `tenon probe --server-cmd CMD --tasks FILE --agent CMD [--timeout SEC] [--json]` starts an MCP
 server over stdio, lists its tools, runs every task through the agent command and reports what
 worked. Exit 0 when every task passed, 1 when one failed, 2 on usage/connection. The task file and

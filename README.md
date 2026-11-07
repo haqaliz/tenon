@@ -75,6 +75,24 @@ for change in changes:
     pr.refusal        # DIRTY_CHECKOUT, DEFAULT_BRANCH, ... when REFUSED
 ```
 
+### GitHub App remote
+
+`tenon fix ... --open-pr --remote app` opens the PR as a GitHub App instead of through `gh`. The app
+needs `contents:write` and `pull_requests:write` permissions and must be installed on the repository.
+The inputs are flags or environment variables; a flag wins:
+
+| Flag | Environment |
+|---|---|
+| `--app-id` | `TENON_GITHUB_APP_ID` |
+| `--app-installation-id` | `TENON_GITHUB_APP_INSTALLATION_ID` |
+| `--app-private-key PATH` | `TENON_GITHUB_APP_PRIVATE_KEY` (a path) |
+| `--api-url URL` | `TENON_GITHUB_API_URL` |
+
+The private key is read from a path; key content is never read from the environment. `--remote`
+requires `--open-pr`, and `--remote gh` (the default) keeps the existing `gh` path. The app remote is
+self-hosted: webhook/installation discovery and the provider bundle/fan-out (T10b) and a hosted
+service (T10c) are deferred. `--api-url` also targets a self-hosted GitHub Enterprise endpoint.
+
 `uv run pytest` — no network, no model calls.
 
 MCP `tools/list` documents use the same records:
