@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from tenon.corpus.record import CorpusRecord, Outcome, record_id
@@ -133,3 +135,125 @@ def test_unknown_proof_level_raises_corpus_error_with_the_id():
 
     with pytest.raises(CorpusError, match=record.id):
         benchmark([record])
+
+
+# Spec AC5: the dictionary carries exactly the contract keys, in order.
+def test_to_dict_has_the_exact_keys():
+    report = benchmark([a_record(outcome=Outcome.MERGED)])
+
+    data = report.to_dict()
+
+    assert list(data) == ["total", "by_level", "outcomes"]
+    assert data["total"] == 1
+    assert set(data["by_level"]) == {level.value for level in ProofLevel}
+    stats = data["by_level"]["TESTS_PASSED"]
+    assert list(stats) == [
+        "count",
+        "merged",
+        "rejected",
+        "closed",
+        "incident",
+        "local_only",
+        "pending",
+        "known",
+        "merge_rate",
+    ]
+    assert stats["known"] == 1
+    assert stats["merge_rate"] == 1.0
+    assert set(data["outcomes"]) == {outcome.value for outcome in Outcome}
+    assert data["outcomes"]["MERGED"] == 1
+
+
+# Spec AC5: the JSON is canonical and byte-stable for the same records.
+def test_to_json_is_canonical_and_stable():
+    records = [
+        a_record("TESTS_PASSED", Outcome.MERGED, "one"),
+        a_record("CHARACTERIZED", Outcome.LOCAL_ONLY, "two"),
+    ]
+
+    report = benchmark(records)
+    text = report.to_json()
+
+    assert text == json.dumps(
+        report.to_dict(), sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
+    assert '", "' not in text
+    assert benchmark(records).to_json() == text
+
+
+# Spec AC5: the text has a level table, an outcome line and n/a for a null rate.
+def test_text_renders_the_level_table_and_outcomes():
+    report = benchmark(
+        [
+            a_record("TESTS_PASSED", Outcome.MERGED, "one"),
+            a_record("TESTS_PASSED", Outcome.REJECTED, "two"),
+            a_record("CHARACTERIZED", Outcome.LOCAL_ONLY, "three"),
+        ]
+    )
+
+    lines = report.render_text().splitlines()
+
+    assert lines[0] == "corpus: 3 records"
+    assert lines[1].split() == [
+        "level",
+        "count",
+        "merged",
+        "rejected",
+        "closed",
+        "incident",
+        "local",
+        "pending",
+        "rate",
+    ]
+    rows = {line.split()[0]: line.split() for line in lines[2:7]}
+    assert set(rows) == {level.value for level in ProofLevel}
+    assert rows["TESTS_PASSED"][1:] == [
+        "2",
+        "1",
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "0.50",
+    ]
+    assert rows["CHARACTERIZED"][1:] == [
+        "1",
+        "0",
+        "0",
+        "0",
+        "0",
+        "1",
+        "0",
+        "n/a",
+    ]
+    assert lines[7] == (
+        "outcomes: PENDING=0 MERGED=1 REJECTED=1 CLOSED=0 "
+        "INCIDENT=0 LOCAL_ONLY=1"
+    )
+
+
+# Spec AC5: the text is stable for the same records.
+def test_text_is_stable():
+    records = [a_record("TESTS_PASSED", Outcome.MERGED, "one")]
+
+    assert benchmark(records).render_text() == benchmark(records).render_text()
+
+
+# Spec AC4: an empty corpus is a valid report with null rates.
+def test_empty_corpus_is_a_valid_report():
+    report = benchmark([])
+
+    assert report.total == 0
+    assert set(report.by_level) == set(ProofLevel)
+    assert all(
+        stats.count == 0 and stats.known == 0 and stats.merge_rate is None
+        for stats in report.by_level.values()
+    )
+    assert set(report.outcomes) == set(Outcome)
+    assert all(count == 0 for count in report.outcomes.values())
+    assert report.to_dict()["total"] == 0
+    assert "n/a" in report.render_text()
+    assert report.to_json() == json.dumps(
+        report.to_dict(), sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )

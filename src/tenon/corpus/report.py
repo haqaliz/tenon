@@ -1,5 +1,6 @@
 """The corpus report: group records by proof level and human outcome."""
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
@@ -23,6 +24,19 @@ class LevelStats:
     known: int = 0
     merge_rate: float | None = None
 
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "count": self.count,
+            "merged": self.merged,
+            "rejected": self.rejected,
+            "closed": self.closed,
+            "incident": self.incident,
+            "local_only": self.local_only,
+            "pending": self.pending,
+            "known": self.known,
+            "merge_rate": self.merge_rate,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class CorpusReport:
@@ -31,6 +45,26 @@ class CorpusReport:
     total: int
     by_level: Mapping[ProofLevel, LevelStats]
     outcomes: Mapping[Outcome, int]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "total": self.total,
+            "by_level": {
+                level.value: stats.to_dict()
+                for level, stats in self.by_level.items()
+            },
+            "outcomes": {
+                outcome.value: count for outcome, count in self.outcomes.items()
+            },
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(
+            self.to_dict(), sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        )
+
+    def render_text(self) -> str:
+        return render_text(self)
 
 
 def benchmark(records: Sequence[CorpusRecord]) -> CorpusReport:
@@ -73,3 +107,55 @@ def benchmark(records: Sequence[CorpusRecord]) -> CorpusReport:
             ),
         )
     return CorpusReport(total=len(records), by_level=by_level, outcomes=outcomes)
+
+
+def _count(count: int, singular: str) -> str:
+    return f"{count} {singular if count == 1 else singular + 's'}"
+
+
+def _row(cells: Sequence[str], widths: Sequence[int]) -> str:
+    first = f"{cells[0]:<{widths[0]}}"
+    rest = "  ".join(
+        cell.rjust(width) for cell, width in zip(cells[1:], widths[1:])
+    )
+    return f"{first}  {rest}"
+
+
+def render_text(report: CorpusReport) -> str:
+    """The level table, one row per level, then the outcome counts."""
+    rows = [
+        (
+            level.value,
+            str(stats.count),
+            str(stats.merged),
+            str(stats.rejected),
+            str(stats.closed),
+            str(stats.incident),
+            str(stats.local_only),
+            str(stats.pending),
+            "n/a" if stats.merge_rate is None else f"{stats.merge_rate:.2f}",
+        )
+        for level, stats in report.by_level.items()
+    ]
+    header = (
+        "level",
+        "count",
+        "merged",
+        "rejected",
+        "closed",
+        "incident",
+        "local",
+        "pending",
+        "rate",
+    )
+    widths = [
+        max(len(row[index]) for row in (header, *rows))
+        for index in range(len(header))
+    ]
+    lines = [f"corpus: {_count(report.total, 'record')}", _row(header, widths)]
+    lines.extend(_row(row, widths) for row in rows)
+    outcomes = " ".join(
+        f"{outcome.value}={count}" for outcome, count in report.outcomes.items()
+    )
+    lines.append(f"outcomes: {outcomes}")
+    return "\n".join(lines) + "\n"
