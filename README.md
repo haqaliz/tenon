@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -14,21 +14,22 @@ affected calls, and proves the fix against your own checks before it opens a pul
 
 **T1 (change detection), T2 (Python call-site location), T3 (patch proposal), T4 (proof runner),
 T5 (PR writer), T6 (TypeScript/JavaScript call-site location), T7 (proof ladder), T8 (MCP
-tool-schema diffs, Python tool-call location and `tenon probe`) and the `tenon check` / `tenon fix` /
-`tenon probe` CLI are shipped.** `src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP
-`tools/list` documents — into typed `Change` records; `src/tenon/locate/` turns one of those records
-into call sites with file, line and column, and keeps anything it cannot prove in a separate
-ambiguity list — Python via `ast`, TypeScript/JavaScript via tree-sitter, and MCP `call_tool` sites
-via `locate_mcp`; no Node analysis runtime; `src/tenon/propose/` turns the certain sites into a
-candidate diff and never applies it; `src/tenon/prove/` applies that diff to a copy and runs every
-configured proof stage before and after, recording the strongest level that actually passed
-(`TESTS_PASSED`, `CHARACTERIZED`, `REPLAYED`, `TYPES_BUILD_ONLY`) or `UNVERIFIED` with a reason;
-`src/tenon/pr/` renders a deterministic PR whose title and body state that level, then clones a clean
-checkout, commits the exact diff to a new branch and opens the PR through your own `git` and `gh`;
-`src/tenon/probe/` connects to an MCP server over stdio, runs tasks through a user-supplied agent and
-reports what worked; `src/tenon/cli/` exposes the whole pipeline. The analysis and proof run fully
-offline; only the final push and PR call touch a remote. Read `CLAUDE.md` before writing any code
-here.
+tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark corpus) and the
+`tenon check` / `tenon fix` / `tenon probe` / `tenon corpus` CLI are shipped.** `src/tenon/detect/`
+diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed `Change` records;
+`src/tenon/locate/` turns one of those records into call sites with file, line and column, and keeps
+anything it cannot prove in a separate ambiguity list — Python via `ast`, TypeScript/JavaScript via
+tree-sitter, and MCP `call_tool` sites via `locate_mcp`; no Node analysis runtime;
+`src/tenon/propose/` turns the certain sites into a candidate diff and never applies it;
+`src/tenon/prove/` applies that diff to a copy and runs every configured proof stage before and
+after, recording the strongest level that actually passed (`TESTS_PASSED`, `CHARACTERIZED`,
+`REPLAYED`, `TYPES_BUILD_ONLY`) or `UNVERIFIED` with a reason; `src/tenon/pr/` renders a
+deterministic PR whose title and body state that level, then clones a clean checkout, commits the
+exact diff to a new branch and opens the PR through your own `git` and `gh`; `src/tenon/probe/`
+connects to an MCP server over stdio, runs tasks through a user-supplied agent and reports what
+worked; `src/tenon/corpus/` records `(change, patch, proof, outcome)` runs and reports by
+level/outcome; `src/tenon/cli/` exposes the whole pipeline. The analysis and proof run fully offline;
+only the final push and PR call touch a remote. Read `CLAUDE.md` before writing any code here.
 
 ## CLI
 
@@ -43,6 +44,7 @@ uv run tenon check path/to/mcp-repo --source mcp \
     --old tools-v1.json --new tools-v2.json
 uv run tenon probe \
     --server-cmd "python server.py" --tasks tasks.json --agent "python agent.py"
+uv run tenon corpus report --corpus docs/benchmark/corpus.jsonl
 ```
 
 `check` exits 0 when no affected site exists and 1 when one does; `fix` prints the diff and the proof,
@@ -50,8 +52,9 @@ and `--open-pr` opens a PR whose title states the level. `--require` chooses the
 reach; `--build`/`--characterize`/`--replay` add the weaker stages; `--source mcp` selects the MCP
 loader/differ/locator. `probe` starts a local MCP server over stdio, runs the task file through your
 agent command and reports what worked (exit 0 all tasks, 1 a failed task, 2 usage/connection).
-`--json` is byte-stable. Repeated inputs can live in `tenon.toml` under `[locate]` (`source`,
-`language`, `sdk_package`, mappings) and `[tenon]`; probe uses flags only.
+`corpus` records a `fix --json` run, updates a human outcome and reports by level/outcome. `--json`
+is byte-stable. Repeated inputs can live in `tenon.toml` under `[locate]` (`source`, `language`,
+`sdk_package`, mappings) and `[tenon]`; probe/corpus use flags only.
 
 ```python
 from tenon.detect import diff, load
@@ -93,6 +96,20 @@ site.certain        # call_tool("name", {"amount": ...}) keys, rooted in ClientS
 `tenon check --source mcp` and `tenon fix --source mcp` use the same MCP diff and locator. The
 Python locator covers the high-level `ClientSession.call_tool` pattern; TypeScript and low-level
 `send_request` calls are follow-ups.
+
+## Benchmark
+
+`docs/benchmark/corpus.jsonl` records `(change, patch, proof, outcome)` runs. The two public M0.3
+cases are `local_only`/`TESTS_PASSED`; no merge outcome exists yet, so the report shows no merge
+rate.
+
+```sh
+uv run tenon corpus report --corpus docs/benchmark/corpus.jsonl
+```
+
+A run enters with `tenon corpus record --from fix.json ...`; a human outcome is added with
+`tenon corpus outcome <id> merged --outcome-url <pr>`. The corpus is local and opt-in; nothing is
+uploaded.
 
 ## What Tenon is
 
