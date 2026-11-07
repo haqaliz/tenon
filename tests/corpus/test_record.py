@@ -1,5 +1,8 @@
 import json
+import os
 import re
+import subprocess
+import sys
 
 import pytest
 
@@ -284,3 +287,59 @@ def test_record_id_ignores_other_proposal_keys():
     assert an_id(proposal={"diff": "d", "summary": "x"}) == an_id(
         proposal={"diff": "d"}
     )
+
+
+# Spec: the package exports the record and store surface.
+def test_package_exports_the_public_surface():
+    import tenon.corpus as corpus
+
+    assert set(corpus.__all__) == {
+        "Outcome",
+        "CorpusRecord",
+        "CorpusError",
+        "record_id",
+        "load_corpus",
+        "append_records",
+        "update_outcome",
+    }
+    assert corpus.Outcome is Outcome
+    assert corpus.CorpusRecord is CorpusRecord
+    assert corpus.record_id is record_id
+
+
+SUBPROCESS_SCRIPT = """
+from tenon.corpus import CorpusRecord, record_id
+
+change = {"path": "app.py", "kind": "signature"}
+proposal = {"summary": "one edit", "diff": "--- a/app.py\\n+++ b/app.py\\n"}
+record = CorpusRecord(
+    id=record_id("https://github.com/o/r", "56e69cf", change, proposal),
+    repo="https://github.com/o/r",
+    commit="56e69cf",
+    change=change,
+    proposal=proposal,
+    proof={"level": "TESTS_PASSED", "cause": None},
+    pr=None,
+    outcome="PENDING",
+    recorded="2026-11-07",
+)
+print(record.to_json(), end="")
+"""
+
+
+def to_json_with_hash_seed(seed):
+    result = subprocess.run(
+        [sys.executable, "-c", SUBPROCESS_SCRIPT],
+        env={**os.environ, "PYTHONHASHSEED": seed},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+# Spec AC7: byte-identical output across hash seeds and repeated runs.
+def test_to_json_is_byte_stable_across_hash_seeds():
+    assert to_json_with_hash_seed("0") == to_json_with_hash_seed("1")
+    assert to_json_with_hash_seed("0") == to_json_with_hash_seed("0")
+    assert a_record().to_json() == a_record().to_json()
