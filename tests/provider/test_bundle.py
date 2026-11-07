@@ -3,7 +3,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from tenon.locate import LocateConfig
+from tenon.locate import LocateConfig, McpLocateConfig, TsLocateConfig
 from tenon.prove import ProofLevel
 from tenon.provider.bundle import MigrationBundle, load_bundle
 
@@ -114,3 +114,94 @@ def test_bundle_is_frozen_and_slotted(tmp_path):
     assert not hasattr(bundle, "__dict__")
     with pytest.raises(FrozenInstanceError):
         bundle.provider = "other"
+
+
+# Spec AC2: relative specs resolve against the bundle's directory.
+def test_relative_specs_resolve_against_the_bundle_dir(tmp_path):
+    bundle = load_bundle(a_bundle(tmp_path))
+
+    assert bundle.old == (tmp_path / "old.json").resolve()
+    assert bundle.new == (tmp_path / "new.json").resolve()
+
+
+# Spec AC2: absolute spec paths work unchanged.
+def test_absolute_spec_paths_work(tmp_path):
+    old = a_spec(tmp_path, "old.json").resolve()
+    new = a_spec(tmp_path, "new.json").resolve()
+    path = a_bundle(tmp_path, old=str(old), new=str(new))
+
+    bundle = load_bundle(path)
+
+    assert bundle.old == old
+    assert bundle.new == new
+
+
+# Spec AC2: a missing spec is a named error.
+@pytest.mark.parametrize("key", ["old", "new"])
+def test_missing_spec_is_a_named_error(tmp_path, key):
+    path = a_bundle(tmp_path, **{key: "missing.json"})
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert key in str(error.value)
+
+
+# Spec AC3: the locate config follows source and language.
+@pytest.mark.parametrize(
+    ("source", "language", "sdk_package", "expected_type"),
+    [
+        ("openapi", "python", "stripe", LocateConfig),
+        ("openapi", "ts", "stripe", TsLocateConfig),
+        ("mcp", "python", "mcp", McpLocateConfig),
+    ],
+)
+def test_locate_type_follows_source_and_language(
+    tmp_path, source, language, sdk_package, expected_type
+):
+    path = a_bundle(
+        tmp_path,
+        source=source,
+        language=language,
+        locate={"sdk_package": sdk_package},
+    )
+
+    bundle = load_bundle(path)
+
+    assert isinstance(bundle.locate, expected_type)
+
+
+# Spec AC3: mcp is Python-only.
+def test_mcp_with_ts_is_an_error(tmp_path):
+    path = a_bundle(
+        tmp_path, source="mcp", language="ts", locate={"sdk_package": "mcp"}
+    )
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "mcp" in str(error.value)
+
+
+# Spec AC3: only the two shipped sources are accepted.
+def test_unknown_source_is_an_error(tmp_path):
+    path = a_bundle(tmp_path, source="graphql")
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "source" in str(error.value)
+
+
+# Spec AC3: only the two shipped languages are accepted.
+def test_unknown_language_is_an_error(tmp_path):
+    path = a_bundle(tmp_path, language="rust")
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "language" in str(error.value)
