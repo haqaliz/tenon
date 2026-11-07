@@ -1,5 +1,6 @@
 """The GitHub App remote: the host seam under an installation identity."""
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -9,6 +10,10 @@ from .remote import RemoteError
 
 _ORIGIN = re.compile(
     r"^(?:https://github\.com/|git@github\.com:)([^/\s]+)/([^/\s]+?)(?:\.git)?$"
+)
+_CREDENTIAL_HELPER = (
+    '!f() { echo "username=x-access-token"; '
+    'echo "password=$TENON_GITHUB_TOKEN"; }; f'
 )
 
 
@@ -41,7 +46,13 @@ class GitHubAppRemote:
                 ) from exc
         return self._installation_token
 
-    def _invoke(self, argv, *, repo: str | Path) -> subprocess.CompletedProcess:
+    def _invoke(
+        self,
+        argv,
+        *,
+        repo: str | Path,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess:
         try:
             return self._runner(
                 list(argv),
@@ -50,6 +61,7 @@ class GitHubAppRemote:
                 text=True,
                 shell=False,
                 timeout=self._timeout,
+                env={**os.environ, **(env or {})},
             )
         except subprocess.TimeoutExpired as exc:
             raise RemoteError(str(exc)) from exc
@@ -88,3 +100,13 @@ class GitHubAppRemote:
                 return False
             raise
         return True
+
+    def push(self, repo: str | Path, branch: str) -> None:
+        token = self._token()
+        completed = self._invoke(
+            ["git", "-c", _CREDENTIAL_HELPER, "push", "origin", branch],
+            repo=repo,
+            env={"TENON_GITHUB_TOKEN": token, "GIT_TERMINAL_PROMPT": "0"},
+        )
+        if completed.returncode != 0:
+            raise RemoteError((completed.stderr or "").replace(token, "***"))

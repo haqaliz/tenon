@@ -222,3 +222,65 @@ def test_an_unexpected_token_failure_is_a_remote_error(tmp_path):
     assert "OSError" in raised.value.detail
     assert "down" not in raised.value.detail
     assert transport.calls == []
+
+
+HELPER = (
+    '!f() { echo "username=x-access-token"; '
+    'echo "password=$TENON_GITHUB_TOKEN"; }; f'
+)
+
+
+# Spec AC3/AC7: push is exactly one git command with the credential helper and
+# the branch, no token in argv, no force, and the token only in the env.
+def test_push_builds_the_exact_argv_and_env(tmp_path):
+    remote, runner, _ = a_remote()
+
+    remote.push(tmp_path, "tenon/x")
+
+    argv, kwargs = runner.calls[0]
+    assert argv == ["git", "-c", HELPER, "push", "origin", "tenon/x"]
+    assert kwargs["cwd"] == tmp_path
+    assert kwargs["capture_output"] is True
+    assert kwargs["text"] is True
+    assert kwargs["shell"] is False
+    assert kwargs["timeout"] == 30
+    assert kwargs["env"]["TENON_GITHUB_TOKEN"] == TOKEN
+    assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert kwargs["env"]["PATH"] == os.environ["PATH"]
+    assert TOKEN not in " ".join(argv)
+    assert "--force" not in argv
+    assert "-f" not in argv
+    assert "merge" not in argv
+
+
+# Spec AC3: a non-zero push is a RemoteError carrying the stderr tail.
+def test_a_push_failure_is_a_remote_error_with_the_stderr_tail(tmp_path):
+    remote, runner, _ = a_remote()
+    runner.responses.append(
+        a_completed(returncode=1, stderr="fatal: could not push\n")
+    )
+
+    with pytest.raises(RemoteError) as raised:
+        remote.push(tmp_path, "tenon/x")
+
+    assert "fatal: could not push" in raised.value.detail
+
+
+# Spec AC4/AC7: the token in the git output is redacted, never returned.
+def test_a_push_failure_redacts_the_token(tmp_path):
+    remote, runner, _ = a_remote()
+    runner.responses.append(
+        a_completed(
+            returncode=1,
+            stderr=(
+                "fatal: unable to access "
+                f"https://x-access-token:{TOKEN}@github.com/acme/widgets.git\n"
+            ),
+        )
+    )
+
+    with pytest.raises(RemoteError) as raised:
+        remote.push(tmp_path, "tenon/x")
+
+    assert TOKEN not in raised.value.detail
+    assert "***" in raised.value.detail
