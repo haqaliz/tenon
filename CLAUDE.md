@@ -16,7 +16,7 @@ usable by AI agents, by running an agent against it.
 The name: a *tenon* is the tongue cut on a timber to fit its mortise exactly. The joint holds
 only if the two sides still match. Tenon asks of an integration: *does your side still fit theirs?*
 
-Status: **T1, T2, T3, T4, T5, T6, T7, T8a, T8b, T8c, T9 and M1.4 shipped.** `src/tenon/detect/`
+Status: **T1, T2, T3, T4, T5, T6, T7, T8a, T8b, T8c, T9, T10a and M1.4 shipped.** `src/tenon/detect/`
 turns two OpenAPI 3.x documents — and, for T8a, two MCP `tools/list` documents — into typed
 `Change` records; `src/tenon/locate/` turns a record into call sites with file, line and column,
 keeping anything unprovable in named ambiguity groups — Python via `ast`, TypeScript/JavaScript via
@@ -26,12 +26,13 @@ tree-sitter, and MCP `call_tool` sites via `locate_mcp`, no Node analysis runtim
 and records the strongest level that actually passed (`TESTS_PASSED`, `CHARACTERIZED`, `REPLAYED`,
 `TYPES_BUILD_ONLY`) or `UNVERIFIED` with a stage-specific cause; `src/tenon/pr/` renders a
 deterministic PR whose title and body state that level, then clones a clean checkout, commits the
-exact diff to a new branch and opens the PR through the user's own `git` and `gh`; `src/tenon/cli/`
-exposes `tenon check`, `tenon fix`, `tenon probe` and `tenon corpus` with `--language python|ts`,
-`--source openapi|mcp`, `--build`/`--characterize`/`--replay`/`--check`, the five-level `--require`,
-text or byte-stable JSON, honest exit codes, `tenon.toml` config, and `fix --open-pr` delegating to
-T5 with the required level and a draft gate; `src/tenon/probe/` connects to an MCP server over stdio,
-runs probe tasks through a user-supplied agent and reports what worked, with no model or network;
+exact diff to a new branch and opens the PR through the user's own `git` and `gh` or a GitHub App
+installation (`--remote app`); `src/tenon/cli/` exposes `tenon check`, `tenon fix`, `tenon probe` and
+`tenon corpus` with `--language python|ts`, `--source openapi|mcp`,
+`--build`/`--characterize`/`--replay`/`--check`, the five-level `--require`, text or byte-stable
+JSON, honest exit codes, `tenon.toml` config, and `fix --open-pr` delegating to T5 with the required
+level and a draft gate; `src/tenon/probe/` connects to an MCP server over stdio, runs probe tasks
+through a user-supplied agent and reports what worked, with no model or network;
 `src/tenon/corpus/` records `(change, patch, proof, outcome)` runs and reports by level/outcome,
 with a merge rate only where real outcomes exist (`docs/benchmark/`). `fix` never writes the
 checkout; the PR writer refuses a dirty tree, the default branch, an existing branch, a failed
@@ -40,8 +41,9 @@ merge path. Tests live in `tests/`. The Phase 0 gate (M0.3) is met on two real c
 `fighthealthinsurance/fighthealthinsurance` @ `56e69cf` (three certain sites, a three-edit diff,
 `TESTS_PASSED` on the focused checkout test) and `yezz123/stripe-template` @ `9d9178c` (a
 mock-assertion site, `TESTS_PASSED` on the offline subset; the case that forced T2's mock-assertion
-keyword attribution). Phase 2 is complete; Phase 3 (T10 hosted/provider, T11 more languages) is
-after the window and not started — do not describe capability that isn't there yet.
+keyword attribution). Phase 2 is complete; Phase 3's T10a (GitHub App remote) shipped, while T10b/T10c
+(provider fan-out, hosted service) and T11 are not started — do not describe capability that isn't
+there yet.
 
 Lineage: one of three siblings scaffolded together on 2026-10-22 (with Assay and Pry) from a
 market-demand pass (`~/dev/at/ideas/market-demand-2026-10.md`). It answers the YC Fall 2026

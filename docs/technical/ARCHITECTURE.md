@@ -2,10 +2,10 @@
 
 Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR), T6
 (locate, TypeScript/JavaScript), T7 (proof ladder), T8a (MCP tool-schema diffs), T8b (Python MCP
-tool-call locator), T8c (`tenon probe`), T9 (benchmark corpus) and the `tenon check` / `tenon fix` /
-`tenon probe` / `tenon corpus` CLI are implemented** under `src/tenon/detect/`, `src/tenon/locate/`,
-`src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`, `src/tenon/probe/`, `src/tenon/corpus/`
-and `src/tenon/cli/`. The later stages are not.
+tool-call locator), T8c (`tenon probe`), T9 (benchmark corpus), T10a (GitHub App remote) and the
+`tenon check` / `tenon fix` / `tenon probe` / `tenon corpus` CLI are implemented** under
+`src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`,
+`src/tenon/probe/`, `src/tenon/corpus/` and `src/tenon/cli/`. The later stages are not.
 
 ## Pipeline
 
@@ -36,7 +36,7 @@ src/tenon/
   locate/     T2/T6/T8b: per-language call-site finders   <- built (Python + TS/JS + MCP)
   propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
   prove/      T4/T7: working-copy runner, proof ladder  <- built (all five levels)
-  pr/         T5: branch and PR writer                     <- built (git + gh seam)
+  pr/         T5/T10a: branch and PR writer              <- built (gh + GitHub App)
   probe/      T8c: MCP stdio probe, agent plan, report  <- built (tools only)
   corpus/     T9: benchmark records                         <- built (JSONL + report)
   cli/        tenon check | fix                           <- built
@@ -70,6 +70,9 @@ tests/        offline; fixture repos and specs; no network, no model calls
   its tools, runs user tasks through a user-supplied `--agent` command (JSON request in, JSON plan
   out), executes the plan itself and reports what worked. No model ships; Tenon makes no network
   call; the report says "worked in this run", never "verified".
+- **The GitHub App is a host adapter, not a new pipeline.** T10a implements the same `Remote` protocol
+  with an installation token; T5's clone/commit/push/PR guardrails and no-merge stance are unchanged.
+  The token is kept out of argv, the remote URL and error details; the app is self-hosted.
 - **The benchmark is descriptive, not a claim.** T9 records `(change, patch, proof, outcome)` in a
   local JSONL corpus. A merge rate uses only real outcomes (`merged`, `rejected`, `closed`,
   `incident`); `local_only`/`pending` never count as success. The public seed has no merge outcomes,
@@ -135,4 +138,5 @@ pattern is the only locator in this slice. `language=ts` + `source=mcp` is a nam
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
-- Phase 3 (T10 hosted/provider, T11 more languages) is after the window and not started.
+- Phase 3: T10a (GitHub App remote) shipped; T10b (provider bundle/fan-out) and T10c (hosted
+  service), and T11 (Go/Rust/C#), are not started.

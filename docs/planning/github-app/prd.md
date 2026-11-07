@@ -3,7 +3,7 @@
 - **Slug:** `github-app`
 - **Capability:** T10 in `docs/technical/CAPABILITY_ROADMAP.md` — **first slice, GitHub App remote**
 - **Milestone:** Phase 3 in `docs/ROADMAP.md`, first slice
-- **Status:** draft for review
+- **Status:** implemented 2026-11-08 (`src/tenon/pr/{app,api,github_app}.py`, CLI; 1,635 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

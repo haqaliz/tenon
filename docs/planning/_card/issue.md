@@ -6,6 +6,7 @@
 - **Capability:** **T10 Provider layer and GitHub App (hosted)** — first slice: **GitHub App remote**
   (`docs/technical/CAPABILITY_ROADMAP.md:16`)
 - **Milestone:** Phase 3 (`docs/ROADMAP.md`), first slice
+- **State:** shipped 2026-11-08 (`src/tenon/pr/{app,api,github_app}.py`, CLI; 1,635 tests)
 - **Branch:** `feat/github-app/aliz`
 - **Worktree:** `.claude/worktrees/feat-github-app`
 
