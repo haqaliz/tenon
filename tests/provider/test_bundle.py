@@ -5,7 +5,7 @@ import pytest
 
 from tenon.locate import LocateConfig, McpLocateConfig, TsLocateConfig
 from tenon.prove import ProofLevel
-from tenon.provider.bundle import MigrationBundle, load_bundle
+from tenon.provider.bundle import load_bundle
 
 
 MISSING = object()
@@ -358,3 +358,12 @@ def test_missing_bundle_file_is_a_named_error(tmp_path):
         load_bundle(path)
 
     assert str(path) in str(error.value)
+
+
+# Spec: the package surface is the bundle and its loader.
+def test_package_exports_the_bundle_and_loader(tmp_path):
+    from tenon.provider import MigrationBundle, load_bundle
+
+    bundle = load_bundle(a_bundle(tmp_path))
+
+    assert isinstance(bundle, MigrationBundle)
