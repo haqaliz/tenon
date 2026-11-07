@@ -192,7 +192,8 @@ _LEVEL_COUNT = {
 _LEVEL_KEYS = tuple(_LEVEL_COUNT.values())
 
 
-def _fix_counts(results: Sequence[FixResult]) -> dict[str, int]:
+def fix_summary(results: Sequence[FixResult]) -> dict[str, int]:
+    """The fix counts, shared by the fix and provider envelopes."""
     counts = {"changes": len(results)}
     counts["proposals"] = sum(1 for result in results if result.proposal.edits)
     counts.update(dict.fromkeys(_LEVEL_KEYS, 0))
@@ -302,7 +303,7 @@ def _fix_block(result: FixResult) -> str:
 def render_fix_text(results: Sequence[FixResult]) -> str:
     """One block with diff and proof per change, then the counts."""
     blocks = [_fix_block(result) for result in results]
-    summary = _fix_summary(_fix_counts(results))
+    summary = _fix_summary(fix_summary(results))
     return "\n\n".join([*blocks, summary]) + "\n"
 
 
@@ -326,22 +327,53 @@ def render_check_json(results: Sequence[LocateResult]) -> str:
     )
 
 
+def fix_result_dict(result: FixResult) -> dict[str, object]:
+    """One fix result item, shared by the fix and provider envelopes."""
+    return {
+        "change": result.change.to_dict(),
+        "locate": result.locate.to_dict(),
+        "proposal": result.proposal.to_dict(),
+        "proof": result.proof.to_dict(),
+        "pr": None if result.pr is None else result.pr.to_dict(),
+    }
+
+
 def render_fix_json(results: Sequence[FixResult]) -> str:
     """One byte-stable fix envelope composing the shipped dictionaries."""
     return _canonical_json(
         {
             "command": "fix",
-            "results": [
-                {
-                    "change": result.change.to_dict(),
-                    "locate": result.locate.to_dict(),
-                    "proposal": result.proposal.to_dict(),
-                    "proof": result.proof.to_dict(),
-                    "pr": None if result.pr is None else result.pr.to_dict(),
-                }
-                for result in results
-            ],
-            "summary": _fix_counts(results),
+            "results": [fix_result_dict(result) for result in results],
+            "summary": fix_summary(results),
+        }
+    )
+
+
+def render_provider_text(
+    provider: str, migration: str, results: Sequence[FixResult]
+) -> str:
+    """The provider header, then the unchanged fix report."""
+    return (
+        f"provider: {provider}\nmigration: {migration}\n\n"
+        + render_fix_text(results)
+    )
+
+
+def render_provider_json(
+    provider: str,
+    migration: str,
+    repo: str,
+    results: Sequence[FixResult],
+) -> str:
+    """One byte-stable provider envelope wrapping the shipped fix items."""
+    return _canonical_json(
+        {
+            "command": "provider",
+            "provider": provider,
+            "migration": migration,
+            "repo": repo,
+            "results": [fix_result_dict(result) for result in results],
+            "summary": fix_summary(results),
         }
     )
 

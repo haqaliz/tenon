@@ -2,10 +2,12 @@
 
 Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR), T6
 (locate, TypeScript/JavaScript), T7 (proof ladder), T8a (MCP tool-schema diffs), T8b (Python MCP
-tool-call locator), T8c (`tenon probe`), T9 (benchmark corpus), T10a (GitHub App remote) and the
-`tenon check` / `tenon fix` / `tenon probe` / `tenon corpus` CLI are implemented** under
-`src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`,
-`src/tenon/probe/`, `src/tenon/corpus/` and `src/tenon/cli/`. The later stages are not.
+tool-call locator), T8c (`tenon probe`), T9 (benchmark corpus), T10a (GitHub App remote), T10b
+(provider migration bundle) and the `tenon check` / `tenon fix` / `tenon provider migrate` /
+`tenon probe` / `tenon corpus` CLI are implemented** under `src/tenon/detect/`,
+`src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`,
+`src/tenon/provider/`, `src/tenon/probe/`, `src/tenon/corpus/` and `src/tenon/cli/`. The later
+stages are not.
 
 ## Pipeline
 
@@ -37,9 +39,10 @@ src/tenon/
   propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
   prove/      T4/T7: working-copy runner, proof ladder  <- built (all five levels)
   pr/         T5/T10a: branch and PR writer              <- built (gh + GitHub App)
+  provider/   T10b: migration bundle schema and loader   <- built (JSON)
   probe/      T8c: MCP stdio probe, agent plan, report  <- built (tools only)
   corpus/     T9: benchmark records                         <- built (JSONL + report)
-  cli/        tenon check | fix                           <- built
+  cli/        tenon check | fix | provider migrate | probe | corpus <- built
 tests/        offline; fixture repos and specs; no network, no model calls
 ```
 
@@ -73,6 +76,11 @@ tests/        offline; fixture repos and specs; no network, no model calls
 - **The GitHub App is a host adapter, not a new pipeline.** T10a implements the same `Remote` protocol
   with an installation token; T5's clone/commit/push/PR guardrails and no-merge stance are unchanged.
   The token is kept out of argv, the remote URL and error details; the app is self-hosted.
+- **The bundle is config, not a new pipeline.** T10b serializes the provider-side `CliConfig`
+  (identity, spec paths, locate, require, stage commands) and `tenon provider migrate` loads it into
+  the same detect → locate → propose → prove → optional PR flow. The bundle never upgrades a proof
+  level and adds no PR branding; one repository per invocation. Fan-out and a hosted service are
+  T10c.
 - **The benchmark is descriptive, not a claim.** T9 records `(change, patch, proof, outcome)` in a
   local JSONL corpus. A merge rate uses only real outcomes (`merged`, `rejected`, `closed`,
   `incident`); `local_only`/`pending` never count as success. The public seed has no merge outcomes,
@@ -85,10 +93,10 @@ tests/        offline; fixture repos and specs; no network, no model calls
   `NO_TESTS_FOUND`, `TESTS_FAILED_BEFORE`, `TESTS_FAILED_AFTER`, `BUILD_FAILED_BEFORE`,
   `BUILD_FAILED_AFTER`, `CHARACTERIZE_FAILED_BEFORE`, `CHARACTERIZE_FAILED_AFTER`,
   `REPLAY_FAILED_BEFORE`, `REPLAY_FAILED_AFTER`, `CHECK_TIMED_OUT`, `COPY_FAILED`.
-- **A thin CLI with honest exit codes.** `tenon check` and `tenon fix` parse, configure, compose and
-  render; they add no detection or proof logic. `check` exits 0 clean / 1 affected or unanalyzable /
-  2 usage; `fix` exits 0 required proof / 1 not / 2 usage. `--json` is one byte-stable object;
-  `fix` prints unless `--open-pr`, which delegates to T5. No traceback.
+- **A thin CLI with honest exit codes.** `tenon check`, `tenon fix` and `tenon provider migrate`
+  parse, configure, compose and render; they add no detection or proof logic. `check` exits 0 clean /
+  1 affected or unanalyzable / 2 usage; `fix` exits 0 required proof / 1 not / 2 usage. `--json` is
+  one byte-stable object; `fix` prints unless `--open-pr`, which delegates to T5. No traceback.
 - **Baseline first.** Run the user's checks before patching, so a red baseline is reported as such
   and not blamed on the patch.
 
@@ -106,8 +114,17 @@ is one of the five proof levels; the strongest configured stage that is green is
 needs `contents:write` and `pull_requests:write`. Its inputs come from those flags or
 `TENON_GITHUB_APP_ID`, `TENON_GITHUB_APP_INSTALLATION_ID`, `TENON_GITHUB_APP_PRIVATE_KEY` (a path)
 and `TENON_GITHUB_API_URL`; a flag wins. An explicit `--remote` requires `--open-pr`; missing inputs
-or an unreadable key exit 2. The app remote is self-hosted: webhook/installation discovery and the
-provider bundle/fan-out (T10b) and a hosted service (T10c) are deferred.
+or an unreadable key exit 2. The app remote is self-hosted: webhook/installation discovery,
+multi-repo/installed fan-out and a hosted service (T10c) are deferred.
+`tenon provider migrate <repo> --bundle PATH [--open-pr] [--remote gh|app] [--app-id ID]
+[--app-installation-id ID] [--app-private-key PATH] [--api-url URL] [--check CMD] [--require LEVEL]
+[--allow-below-required] [--allow-unverified] [--json]` builds the `CliConfig` from a JSON migration
+bundle (provider/migration, source/language, relative spec paths, locate config, required proof,
+stage commands, `breaking_only`), applies `--check`/`--require` over it and runs the same fix
+pipeline and exit code. The text is a `provider`/`migration` header plus the fix report; `--json` is
+the provider envelope (`command`, `provider`, `migration`, `repo`, `results`, `summary`). The bundle
+never upgrades the proof level; `--open-pr` uses the same T5 gate and gh/app remote. One repo per
+run; fan-out/hosted (T10c) and PR branding are deferred.
 `tenon probe --server-cmd CMD --tasks FILE --agent CMD [--timeout SEC] [--json]` starts an MCP
 server over stdio, lists its tools, runs every task through the agent command and reports what
 worked. Exit 0 when every task passed, 1 when one failed, 2 on usage/connection. The task file and
@@ -138,5 +155,5 @@ pattern is the only locator in this slice. `language=ts` + `source=mcp` is a nam
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
-- Phase 3: T10a (GitHub App remote) shipped; T10b (provider bundle/fan-out) and T10c (hosted
-  service), and T11 (Go/Rust/C#), are not started.
+- Phase 3: T10a (GitHub App remote) and T10b (provider migration bundle) shipped; T10c
+  (multi-repo/installed fan-out and hosted service), and T11 (Go/Rust/C#), are not started.

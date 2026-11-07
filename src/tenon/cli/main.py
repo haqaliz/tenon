@@ -47,6 +47,7 @@ from tenon.pr import (
 from tenon.probe import AgentError, ProbeError, load_tasks, probe
 from tenon.propose import propose
 from tenon.prove import ProofPlan, proof_rank, prove_plan, tail
+from tenon.provider import MigrationBundle, load_bundle
 
 from .config import (
     CliConfig,
@@ -64,6 +65,8 @@ from .report import (
     render_error,
     render_fix_json,
     render_fix_text,
+    render_provider_json,
+    render_provider_text,
 )
 
 # Spec AC1: the installed package version, with a stable fallback for a source run.
@@ -177,6 +180,47 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow a draft PR below the required proof level",
     )
+
+    # Spec AC1/AC2: one provider bundle runs against one repository.
+    provider = commands.add_parser(
+        "provider", help="run a provider migration bundle"
+    )
+    provider_commands = provider.add_subparsers(
+        dest="provider_command", required=True
+    )
+    migrate = provider_commands.add_parser(
+        "migrate", help="migrate one repository"
+    )
+    migrate.add_argument("repo", help="repository to migrate")
+    migrate.add_argument("--bundle", required=True, help="migration bundle JSON")
+    migrate.add_argument("--check", dest="check", default=None, help="check command")
+    migrate.add_argument("--require", default=None, help="proof level")
+    migrate.add_argument("--open-pr", action="store_true", help="open a pull request")
+    migrate.add_argument(
+        "--remote",
+        choices=("gh", "app"),
+        default=None,
+        help="GitHub remote (default: gh)",
+    )
+    migrate.add_argument("--app-id", default=None, help="GitHub App id")
+    migrate.add_argument(
+        "--app-installation-id", default=None, help="GitHub App installation id"
+    )
+    migrate.add_argument(
+        "--app-private-key",
+        default=None,
+        metavar="PATH",
+        help="GitHub App private key PEM path",
+    )
+    migrate.add_argument("--api-url", default=None, help="GitHub API base URL")
+    migrate.add_argument(
+        "--allow-below-required",
+        "--allow-unverified",
+        dest="allow_below_required",
+        action="store_true",
+        help="allow a draft PR below the required proof level",
+    )
+    migrate.add_argument("--json", action="store_true", help="machine output")
 
     # Spec AC1: the third subcommand, with no repo/--old/--new.
     probe_command = commands.add_parser("probe", help="probe an MCP server with an agent")
@@ -363,14 +407,18 @@ def _remote(args: argparse.Namespace) -> Remote:
 
 
 # Spec AC4/AC5: locate, propose and prove each change; never write the checkout.
-def _fix(
-    args: argparse.Namespace, config: CliConfig, remote: Remote | None
-) -> int:
-    result, changes = _diff_and_filter(args.old, args.new, config)
-    repo = Path(args.repo)
-    target = remote
-    if args.open_pr and target is None:
-        target = _remote(args)
+def _fix_results(
+    repo: Path,
+    old: str,
+    new: str,
+    config: CliConfig,
+    remote: Remote | None,
+    *,
+    open_pr: bool,
+    allow_below: bool,
+) -> tuple[tuple[Change, ...], list[FixResult]]:
+    """The shared fix pipeline: detect, locate, propose, prove, optional PR."""
+    result, changes = _diff_and_filter(old, new, config)
     plan = ProofPlan(
         tests=config.command,
         characterize=config.characterize,
@@ -383,16 +431,16 @@ def _fix(
         proposal = propose(change, located, repo)
         proof = prove_plan(proposal, repo, plan)
         pr = None
-        if args.open_pr:
+        if open_pr:
             below = proof_rank(proof.level) < proof_rank(config.require)
-            if not below or args.allow_below_required:
+            if not below or allow_below:
                 pr = write_pr(
                     proposal,
                     proof,
                     repo,
-                    remote=target,
+                    remote=remote,
                     required=config.require,
-                    allow_below_required=args.allow_below_required,
+                    allow_below_required=allow_below,
                     unanalyzed=result.unanalyzed,
                 )
         results.append(
@@ -404,7 +452,71 @@ def _fix(
                 pr=pr,
             )
         )
+    return changes, results
+
+
+def _fix(
+    args: argparse.Namespace, config: CliConfig, remote: Remote | None
+) -> int:
+    target = remote
+    if args.open_pr and target is None:
+        target = _remote(args)
+    changes, results = _fix_results(
+        Path(args.repo),
+        args.old,
+        args.new,
+        config,
+        target,
+        open_pr=args.open_pr,
+        allow_below=args.allow_below_required,
+    )
     text = render_fix_json(results) if args.json else render_fix_text(results)
+    print(text, end="")
+    return fix_exit(len(changes), results, config.require)
+
+
+# Spec AC2: the bundle is a serialized provider-side CliConfig.
+def _bundle_config(bundle: MigrationBundle, args: argparse.Namespace) -> CliConfig:
+    config = CliConfig(
+        locate=bundle.locate,
+        command=bundle.command,
+        build=bundle.build,
+        characterize=bundle.characterize,
+        replay=bundle.replay,
+        require=bundle.require,
+        breaking_only=bundle.breaking_only,
+        language=bundle.language,
+        source=bundle.source,
+    )
+    return overrides(config, command=args.check, require=args.require)
+
+
+# Spec AC1/AC2/AC4: one bundle, one repo, the shipped fix pipeline.
+def _provider(args: argparse.Namespace, remote: Remote | None) -> int:
+    repo = Path(args.repo)
+    if not repo.is_dir():
+        raise _Usage(f"repository is not a directory: {args.repo}")
+    bundle = load_bundle(args.bundle)
+    config = _bundle_config(bundle, args)
+    target = remote
+    if args.open_pr and target is None:
+        target = _remote(args)
+    changes, results = _fix_results(
+        repo,
+        str(bundle.old),
+        str(bundle.new),
+        config,
+        target,
+        open_pr=args.open_pr,
+        allow_below=args.allow_below_required,
+    )
+    text = (
+        render_provider_json(
+            bundle.provider, bundle.migration, args.repo, results
+        )
+        if args.json
+        else render_provider_text(bundle.provider, bundle.migration, results)
+    )
     print(text, end="")
     return fix_exit(len(changes), results, config.require)
 
@@ -608,7 +720,11 @@ def main(argv: Sequence[str] | None = None, *, remote: Remote | None = None) -> 
 
     json_mode = bool(args.json)
     # Spec AC4: an explicit remote is meaningless without --open-pr.
-    if args.command == "fix" and args.remote is not None and not args.open_pr:
+    if (
+        args.command in ("fix", "provider")
+        and args.remote is not None
+        and not args.open_pr
+    ):
         return _fail("usage", "--remote requires --open-pr", json_mode=json_mode)
     try:
         # Spec AC1: corpus and probe are dispatched before _config, which needs a repo.
@@ -616,6 +732,8 @@ def main(argv: Sequence[str] | None = None, *, remote: Remote | None = None) -> 
             return _corpus(args)
         if args.command == "probe":
             return _probe(args)
+        if args.command == "provider":
+            return _provider(args, remote)
         config = _config(args)
         if args.command == "check":
             return _check(args, config)

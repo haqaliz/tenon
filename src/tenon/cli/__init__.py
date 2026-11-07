@@ -4,11 +4,15 @@ from .report import (
     FixResult,
     check_exit,
     fix_exit,
+    fix_result_dict,
+    fix_summary,
     render_check_json,
     render_check_text,
     render_error,
     render_fix_json,
     render_fix_text,
+    render_provider_json,
+    render_provider_text,
 )
 
 __all__ = [
@@ -16,6 +20,8 @@ __all__ = [
     "FixResult",
     "check_exit",
     "fix_exit",
+    "fix_result_dict",
+    "fix_summary",
     "load_cli_config",
     "main",
     "overrides",
@@ -24,5 +30,7 @@ __all__ = [
     "render_error",
     "render_fix_json",
     "render_fix_text",
+    "render_provider_json",
+    "render_provider_text",
     "resolve_config_path",
 ]

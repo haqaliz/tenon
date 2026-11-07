@@ -1513,6 +1513,491 @@ def test_fix_build_only_json_is_byte_stable_across_hash_seeds(
     assert str(a_repo).encode() not in first.stdout
 
 
+PROOF_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "proof-basic"
+PROVIDER_CHECK = [sys.executable, "-c", "import acme.billing"]
+PROVIDER_OLD = """\
+openapi: 3.1.0
+components:
+  schemas:
+    Charge:
+      type: object
+      properties:
+        amount:
+          type: integer
+"""
+PROVIDER_NEW = PROVIDER_OLD.replace("amount:", "amount_cents:")
+PROVIDER_MIXED = """\
+openapi: 3.1.0
+components:
+  schemas:
+    Charge:
+      type: object
+      properties:
+        amount_cents:
+          type: integer
+        currency:
+          type: string
+"""
+
+
+def a_bundle(
+    tmp_path, *, old_text=PROVIDER_OLD, new_text=PROVIDER_NEW, **overrides
+):
+    """One temp provider bundle over the proof-basic repo's acme.client SDK."""
+    (tmp_path / "old.yaml").write_text(old_text, encoding="utf-8")
+    (tmp_path / "new.yaml").write_text(new_text, encoding="utf-8")
+    data = {
+        "provider": "acme",
+        "migration": "amount-cents",
+        "source": "openapi",
+        "language": "python",
+        "old": "old.yaml",
+        "new": "new.yaml",
+        "locate": {"sdk_package": "acme.client"},
+        "command": PROVIDER_CHECK,
+    }
+    data.update(overrides)
+    path = tmp_path / "bundle.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def a_provider(bundle, *extra, repo=PROOF_BASIC, remote=None):
+    return main(
+        ["provider", "migrate", str(repo), "--bundle", str(bundle), *extra],
+        remote=remote,
+    )
+
+
+# Spec AC1: a valid bundle runs the fix pipeline on the fixture and leaves it alone.
+def test_provider_migrate_passing_bundle_exits_zero(a_snapshot, tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+    before = a_snapshot(PROOF_BASIC)
+
+    assert a_provider(bundle) == 0
+
+    out = capsys.readouterr().out
+    assert (
+        '+    return client.charges.create(amount_cents=amount, currency="usd")'
+        in out
+    )
+    assert "Proof: TESTS_PASSED" in out
+    assert a_snapshot(PROOF_BASIC) == before
+
+
+# Spec AC1: a red check is exit 1 and the proof names the failure.
+def test_provider_migrate_red_check_exits_one(tmp_path, capsys):
+    bundle = a_bundle(
+        tmp_path, command=[sys.executable, "-c", "raise SystemExit(1)"]
+    )
+
+    assert a_provider(bundle) == 1
+
+    out = capsys.readouterr().out
+    assert "Proof: UNVERIFIED" in out
+    assert "Cause: TESTS_FAILED_BEFORE" in out
+
+
+# Spec AC1: the provider and migrate help screens are zeros.
+@pytest.mark.parametrize(
+    "argv", [["provider", "--help"], ["provider", "migrate", "--help"]]
+)
+def test_provider_help_returns_zero(argv, capsys):
+    assert main(argv) == 0
+    assert "usage: tenon provider" in capsys.readouterr().out
+
+
+# Spec AC2: --check overrides the bundle's (empty) command.
+def test_provider_check_flag_overrides_the_bundle_command(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, command=[])
+
+    assert a_provider(bundle) == 1
+    assert "Cause: NO_PROOF_COMMAND" in capsys.readouterr().out
+
+    assert a_provider(bundle, "--check", shlex.join(PROVIDER_CHECK)) == 0
+    assert "Proof: TESTS_PASSED" in capsys.readouterr().out
+
+
+# Spec AC2: the bundle's require sets the bar; --require overrides it.
+def test_provider_require_comes_from_the_bundle_and_the_flag(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, command=[], require="UNVERIFIED")
+
+    assert a_provider(bundle) == 0
+    assert "Proof: UNVERIFIED" in capsys.readouterr().out
+
+    assert a_provider(bundle, "--require", "TESTS_PASSED") == 1
+    assert "Proof: UNVERIFIED" in capsys.readouterr().out
+
+
+# Spec AC2: the bundle's stage commands reach one plan.
+def test_provider_bundle_commands_reach_the_plan(tmp_path, monkeypatch):
+    bundle = a_bundle(tmp_path)
+    seen = []
+
+    def prove_plan_spy(proposal, repo, plan):
+        seen.append(plan)
+        return a_green_proof()
+
+    monkeypatch.setattr(cli_main, "prove_plan", prove_plan_spy)
+
+    assert a_provider(bundle) == 0
+    assert seen == [ProofPlan(tests=tuple(PROVIDER_CHECK))]
+
+
+# Spec AC2/S3: the bundle's breaking_only filters the diff.
+def test_provider_breaking_only_filters_changes(tmp_path, capsys):
+    breaking = a_bundle(tmp_path, new_text=PROVIDER_MIXED, breaking_only=True)
+
+    assert a_provider(breaking) == 0
+    assert "1 change, 1 proposal" in capsys.readouterr().out
+
+    everything = a_bundle(tmp_path, new_text=PROVIDER_MIXED)
+
+    assert a_provider(everything) == 1
+    assert "2 changes" in capsys.readouterr().out
+
+
+# Spec AC3/M5: the text is the provider header then the fix report.
+def test_provider_text_has_the_header_and_the_fix_report(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_provider(bundle) == 0
+
+    out = capsys.readouterr().out
+    assert out.startswith("provider: acme\nmigration: amount-cents\n\n")
+    assert (
+        '+    return client.charges.create(amount_cents=amount, currency="usd")'
+        in out
+    )
+    assert "Proof: TESTS_PASSED" in out
+    assert "1 change, 1 proposal" in out
+
+
+# Spec AC3/M5: the provider JSON has the exact keys and the fix item shape.
+def test_provider_json_has_the_exact_envelope(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_provider(bundle, "--json") == 0
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert set(payload) == {
+        "command",
+        "provider",
+        "migration",
+        "repo",
+        "results",
+        "summary",
+    }
+    assert payload["command"] == "provider"
+    assert payload["provider"] == "acme"
+    assert payload["migration"] == "amount-cents"
+    assert payload["repo"] == str(PROOF_BASIC)
+    (result,) = payload["results"]
+    assert set(result) == {"change", "locate", "proposal", "proof", "pr"}
+    assert result["proof"]["level"] == "TESTS_PASSED"
+    assert result["pr"] is None
+    assert payload["summary"] == {
+        "changes": 1,
+        "proposals": 1,
+        "passed": 1,
+        "characterized": 0,
+        "replayed": 0,
+        "build_only": 0,
+        "unverified": 0,
+        "prs_opened": 0,
+        "prs_refused": 0,
+    }
+    assert out.count("\n") == 1
+
+
+# Spec AC3/M5: the provider envelope reuses the shipped fix items and summary.
+def test_provider_json_reuses_the_fix_results_and_summary(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+    old = tmp_path / "old.yaml"
+    new = tmp_path / "new.yaml"
+
+    assert (
+        a_fix(
+            PROOF_BASIC,
+            (old, new),
+            "--sdk-package",
+            "acme.client",
+            "--check",
+            shlex.join(PROVIDER_CHECK),
+            "--json",
+        )
+        == 0
+    )
+    fixed = json.loads(capsys.readouterr().out)
+
+    assert a_provider(bundle, "--json") == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["command"] == "provider"
+    assert payload["results"] == fixed["results"]
+    assert payload["summary"] == fixed["summary"]
+
+
+def a_run_module_provider(bundle, seed):
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tenon",
+            "provider",
+            "migrate",
+            str(PROOF_BASIC),
+            "--bundle",
+            str(bundle),
+            "--json",
+        ],
+        capture_output=True,
+        env={**os.environ, "PYTHONHASHSEED": seed},
+    )
+
+
+# Spec AC3/M5: the provider JSON is byte-identical across hash seeds.
+def test_provider_json_is_byte_stable_across_hash_seeds(tmp_path):
+    bundle = a_bundle(tmp_path)
+
+    first = a_run_module_provider(bundle, "0")
+    second = a_run_module_provider(bundle, "1")
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    assert first.stdout == second.stdout
+    assert b'"command":"provider"' in first.stdout
+    assert b'"provider":"acme"' in first.stdout
+
+
+# Spec AC4: --open-pr --remote gh uses the shipped adapter and the bundle require.
+def test_provider_open_pr_remote_gh_uses_gitgh(tmp_path, monkeypatch, capsys):
+    bundle = a_bundle(tmp_path)
+    marker = object()
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "GitGhRemote", lambda: marker)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_provider(bundle, "--open-pr", "--remote", "gh") == 0
+
+    assert "PR: https://github.com/example/repo/pull/7" in capsys.readouterr().out
+    (call,) = calls
+    assert call["remote"] is marker
+    assert call["required"] is ProofLevel.TESTS_PASSED
+    assert call["allow_below_required"] is False
+
+
+# Spec AC4: --remote app builds the token and remote from the same flags as fix.
+def test_provider_open_pr_remote_app_constructs_the_app_remote(
+    tmp_path, monkeypatch, a_app_env
+):
+    bundle = a_bundle(tmp_path)
+    key = a_app_key(tmp_path)
+    tokens, remotes = a_app_recorders(monkeypatch)
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert (
+        a_provider(
+            bundle,
+            "--open-pr",
+            "--remote",
+            "app",
+            "--app-id",
+            "123",
+            "--app-installation-id",
+            "456",
+            "--app-private-key",
+            str(key),
+            "--api-url",
+            "https://ghe.example/api/v3",
+        )
+        == 0
+    )
+
+    (token,) = tokens
+    assert token["app_id"] == "123"
+    assert token["installation_id"] == "456"
+    assert token["private_key_pem"] == key.read_text(encoding="utf-8")
+    assert token["api_url"] == "https://ghe.example/api/v3"
+    (remote,) = remotes
+    assert remote["provider"].record is token
+    assert remote["api_url"] == "https://ghe.example/api/v3"
+    assert calls[0]["remote"].record is remote
+
+
+# Spec AC4/AC5: --remote without --open-pr is a named usage error.
+@pytest.mark.parametrize("remote", ["gh", "app"])
+def test_provider_remote_without_open_pr_is_usage(
+    remote, tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+
+    def bomb(*_args, **_kwargs):
+        raise AssertionError("no remote may be constructed")
+
+    monkeypatch.setattr(cli_main, "GitGhRemote", bomb)
+    monkeypatch.setattr(cli_main, "GitHubAppRemote", bomb)
+
+    assert a_provider(bundle, "--remote", remote) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--open-pr" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC5: the same usage error in --json mode is one object.
+def test_provider_remote_without_open_pr_json_is_one_object(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_provider(bundle, "--remote", "app", "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "usage"
+    assert "--open-pr" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC4: below the requirement with no opt-in, the CLI never calls the writer.
+def test_provider_open_pr_below_required_makes_no_pr_call(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path, command=[])
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_provider(bundle, "--open-pr", remote=object()) == 1
+
+    assert calls == []
+    assert "PR:" not in capsys.readouterr().out
+
+
+# Spec AC4: either opt-in reaches the writer as allow_below_required.
+@pytest.mark.parametrize("flag", ["--allow-below-required", "--allow-unverified"])
+def test_provider_open_pr_below_required_opt_in_reaches_the_writer(
+    flag, tmp_path, monkeypatch
+):
+    bundle = a_bundle(tmp_path, command=[])
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_provider(bundle, "--open-pr", flag, remote=object()) == 1
+
+    (call,) = calls
+    assert call["required"] is ProofLevel.TESTS_PASSED
+    assert call["allow_below_required"] is True
+
+
+# Spec AC5: a missing bundle is a named config error.
+def test_provider_missing_bundle_is_a_named_error(tmp_path, capsys):
+    missing = tmp_path / "missing.json"
+
+    assert a_provider(missing) == 2
+
+    err = capsys.readouterr().err
+    assert str(missing) in err
+    assert "Traceback" not in err
+
+
+# Spec AC5: malformed bundle JSON in --json mode is one error object.
+def test_provider_bad_bundle_json_is_one_error_object(tmp_path, capsys):
+    bundle = tmp_path / "bundle.json"
+    bundle.write_text("{", encoding="utf-8")
+
+    assert a_provider(bundle, "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "config"
+    assert str(bundle) in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC5: a bundle naming a missing spec is a named error.
+def test_provider_missing_spec_is_a_named_error(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, old="missing.yaml")
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "missing.yaml" in err
+    assert "Traceback" not in err
+
+
+# Spec AC5: a spec the differ refuses is a named spec error, not a traceback.
+def test_provider_bad_spec_is_a_named_spec_error(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, new_text="openapi: 2.0\n")
+
+    assert a_provider(bundle) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "tenon: spec:" in captured.err
+    assert "UNSUPPORTED_VERSION" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC5: the same bad spec in --json mode is one error object.
+def test_provider_bad_spec_json_is_one_error_object(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, new_text="openapi: 2.0\n")
+
+    assert a_provider(bundle, "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "spec"
+    assert payload["error"]["code"] == "UNSUPPORTED_VERSION"
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC5: an invalid --require names the five levels and is exit 2.
+def test_provider_invalid_require_is_a_named_error(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_provider(bundle, "--require", "BY_HAND") == 2
+
+    err = capsys.readouterr().err
+    assert "--require" in err
+    assert "TYPES_BUILD_ONLY" in err
+    assert "UNVERIFIED" in err
+    assert "Traceback" not in err
+
+
+# Spec AC5: an invalid --require in --json mode is one error object.
+def test_provider_invalid_require_json_is_one_error_object(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_provider(bundle, "--require", "BY_HAND", "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "config"
+    assert "TYPES_BUILD_ONLY" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC5: a repository that is not a directory is a named usage error.
+def test_provider_missing_repo_is_usage(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_provider(bundle, repo=tmp_path / "missing") == 2
+
+    err = capsys.readouterr().err
+    assert "repository is not a directory" in err
+    assert "Traceback" not in err
+
+
 PROBE_FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"
 PROBE_SERVER = PROBE_FIXTURES / "probe_server.py"
 PROBE_AGENT = PROBE_FIXTURES / "probe_agent.py"
