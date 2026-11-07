@@ -7,6 +7,7 @@ from typing import Callable, Protocol
 
 import jwt
 
+from .api import _api_message
 from .remote import RemoteError
 
 _ACCEPT = "application/vnd.github+json"
@@ -31,17 +32,6 @@ class StaticToken:
 
     def token(self) -> str:
         return self.value
-
-
-def _api_message(body: str | None) -> str:
-    """The API's own message, and never any other field of the body."""
-    try:
-        payload = json.loads(body or "")
-    except (TypeError, ValueError):
-        return ""
-    if isinstance(payload, dict) and isinstance(payload.get("message"), str):
-        return payload["message"]
-    return ""
 
 
 class GitHubAppToken:

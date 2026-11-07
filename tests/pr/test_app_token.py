@@ -7,6 +7,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from tenon.pr.api import GitHubApi, GitHubApiError
 from tenon.pr.app import GitHubAppToken, StaticToken
 from tenon.pr.remote import RemoteError
 
@@ -170,5 +171,99 @@ def test_a_transport_failure_is_a_remote_error():
     with pytest.raises(RemoteError) as raised:
         an_app_token(transport).token()
 
+    assert "network down" not in raised.value.detail
+    assert "OSError" in raised.value.detail
+
+
+# Spec AC4: a 200 JSON body becomes a dict.
+def test_a_200_json_body_is_returned_as_a_dict():
+    transport = FakeTransport((200, {}, '{"default_branch": "main"}'))
+
+    assert GitHubApi(transport=transport).request(
+        "GET", "/repos/o/r", "tok"
+    ) == {"default_branch": "main"}
+
+
+# Spec AC4: an empty 2xx body is an empty dict, not a parse error.
+def test_an_empty_body_is_an_empty_dict():
+    transport = FakeTransport((204, {}, ""))
+
+    assert GitHubApi(transport=transport).request("DELETE", "/x", "tok") == {}
+
+
+# Spec AC4/AC5: the transport receives the exact method, URL, headers and JSON
+# body; a GET sends no body.
+def test_the_transport_receives_the_exact_request():
+    transport = FakeTransport((201, {}, '{"html_url": "https://github.com/o/r/pull/1"}'))
+    body = {"head": "tenon/x", "base": "main", "title": "t", "body": "b"}
+
+    result = GitHubApi(transport=transport).request(
+        "POST", "/repos/o/r/pulls", "tok", body
+    )
+
+    assert result == {"html_url": "https://github.com/o/r/pull/1"}
+    method, url, headers, sent = transport.calls[0]
+    assert method == "POST"
+    assert url == "https://api.github.com/repos/o/r/pulls"
+    assert headers == {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Authorization": "Bearer tok",
+        "Content-Type": "application/json",
+    }
+    assert json.loads(sent) == body
+
+    transport = FakeTransport((200, {}, "{}"))
+    GitHubApi(transport=transport).request("GET", "/repos/o/r", "tok")
+    assert transport.calls[0][3] is None
+
+
+# Spec AC4: a 404 or 500 is a GitHubApiError carrying the status and the API
+# message, and it is still the RemoteError the writer maps.
+@pytest.mark.parametrize("status", [404, 500])
+def test_a_non_2xx_is_a_github_api_error_with_the_status(status):
+    transport = FakeTransport((status, {}, json.dumps({"message": "Not Found"})))
+
+    with pytest.raises(GitHubApiError) as raised:
+        GitHubApi(transport=transport).request("GET", "/repos/o/r", "tok")
+
+    assert isinstance(raised.value, RemoteError)
+    assert raised.value.status == status
+    assert "Not Found" in raised.value.detail
+    assert "Bearer tok" not in raised.value.detail
+
+
+# Spec AC4: a long API message cannot grow the error beyond the house cap.
+def test_a_long_api_error_is_capped():
+    transport = FakeTransport((500, {}, json.dumps({"message": "x" * 3000})))
+
+    with pytest.raises(GitHubApiError) as raised:
+        GitHubApi(transport=transport).request("GET", "/repos/o/r", "tok")
+
+    assert len(raised.value.detail) <= 2000
+
+
+# Spec AC4: a 2xx body that is not JSON is a GitHubApiError with the status,
+# and the raw body is not copied into the detail.
+def test_an_invalid_json_api_body_is_a_github_api_error():
+    transport = FakeTransport((200, {}, "ghs_secret not json"))
+
+    with pytest.raises(GitHubApiError) as raised:
+        GitHubApi(transport=transport).request("GET", "/repos/o/r", "tok")
+
+    assert raised.value.status == 200
+    assert "JSON" in raised.value.detail
+    assert "ghs_secret" not in raised.value.detail
+
+
+# Spec AC4: a transport that cannot reach GitHub is a GitHubApiError with no
+# status, because no response arrived.
+def test_an_api_transport_failure_has_no_status():
+    transport = FakeTransport(OSError("network down"))
+
+    with pytest.raises(GitHubApiError) as raised:
+        GitHubApi(transport=transport).request("GET", "/repos/o/r", "tok")
+
+    assert raised.value.status is None
     assert "network down" not in raised.value.detail
     assert "OSError" in raised.value.detail
