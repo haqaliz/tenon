@@ -8,10 +8,30 @@ from tenon.prove import ProofLevel
 from tenon.provider.bundle import MigrationBundle, load_bundle
 
 
+MISSING = object()
+
+
 def a_spec(tmp_path, name):
     path = tmp_path / name
     path.write_text("{}")
     return path
+
+
+def a_file(tmp_path, data):
+    path = tmp_path / "bundle.json"
+    path.write_text(json.dumps(data))
+    return path
+
+
+def a_named_error(tmp_path, data, key):
+    a_spec(tmp_path, "old.json")
+    a_spec(tmp_path, "new.json")
+    path = a_file(tmp_path, data)
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+    assert str(path) in str(error.value)
+    assert key in str(error.value)
+    return error
 
 
 def a_data(**overrides):
@@ -31,9 +51,7 @@ def a_data(**overrides):
 def a_bundle(tmp_path, **overrides):
     a_spec(tmp_path, "old.json")
     a_spec(tmp_path, "new.json")
-    path = tmp_path / "bundle.json"
-    path.write_text(json.dumps(a_data(**overrides)))
-    return path
+    return a_file(tmp_path, a_data(**overrides))
 
 
 # Spec AC1: every bundle key lands on the dataclass.
@@ -205,3 +223,138 @@ def test_unknown_language_is_an_error(tmp_path):
 
     assert str(path) in str(error.value)
     assert "language" in str(error.value)
+
+
+# Spec AC4: every required string key is present and non-blank.
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("provider", MISSING),
+        ("provider", ""),
+        ("provider", "   "),
+        ("migration", MISSING),
+        ("migration", ""),
+        ("migration", "  "),
+        ("source", MISSING),
+        ("source", ""),
+        ("language", MISSING),
+        ("language", " "),
+        ("old", MISSING),
+        ("old", ""),
+        ("new", MISSING),
+        ("new", " "),
+    ],
+)
+def test_missing_or_blank_key_is_a_named_error(tmp_path, key, value):
+    data = a_data()
+    if value is MISSING:
+        del data[key]
+    else:
+        data[key] = value
+
+    a_named_error(tmp_path, data, key)
+
+
+# Spec AC4: locate must be an object.
+@pytest.mark.parametrize("locate", [MISSING, None, "", []])
+def test_bad_locate_is_a_named_error(tmp_path, locate):
+    data = a_data()
+    if locate is MISSING:
+        del data["locate"]
+    else:
+        data["locate"] = locate
+
+    a_named_error(tmp_path, data, "locate")
+
+
+# Spec AC4: sdk_package is required, non-blank and a valid package.
+@pytest.mark.parametrize("sdk_package", [MISSING, None, "", "   "])
+def test_bad_sdk_package_is_a_named_error(tmp_path, sdk_package):
+    locate = {}
+    if sdk_package is not MISSING:
+        locate["sdk_package"] = sdk_package
+
+    a_named_error(tmp_path, a_data(locate=locate), "sdk_package")
+
+
+def test_invalid_sdk_package_is_a_named_error(tmp_path):
+    a_named_error(
+        tmp_path, a_data(locate={"sdk_package": "not a package"}), "sdk_package"
+    )
+
+
+# Spec AC4: operations and fields are string mappings.
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("operations", ["a"]),
+        ("operations", "a"),
+        ("fields", {"amount": 1}),
+        ("fields", []),
+    ],
+)
+def test_non_string_mapping_is_a_named_error(tmp_path, key, value):
+    a_named_error(
+        tmp_path,
+        a_data(locate={"sdk_package": "stripe", **{key: value}}),
+        key,
+    )
+
+
+# Spec AC4: require is one of the five shipped proof levels.
+@pytest.mark.parametrize("require", ["SOMETIMES", 3, []])
+def test_bad_require_is_a_named_error(tmp_path, require):
+    a_named_error(tmp_path, a_data(require=require), "require")
+
+
+# Spec AC4: each stage command is an array, never a bare string.
+@pytest.mark.parametrize("key", ["command", "build", "characterize", "replay"])
+@pytest.mark.parametrize("value", ["pytest", [""], ["pytest", 3], ["pytest", "  "]])
+def test_bad_command_is_a_named_error(tmp_path, key, value):
+    a_named_error(tmp_path, a_data(**{key: value}), key)
+
+
+# Spec AC4: an empty command array is allowed; only its elements must be non-empty.
+def test_empty_command_array_is_allowed(tmp_path):
+    bundle = load_bundle(a_bundle(tmp_path, command=[]))
+
+    assert bundle.command == ()
+
+
+# Spec AC4: breaking_only is a bool.
+@pytest.mark.parametrize("value", ["true", 1, None])
+def test_non_bool_breaking_only_is_a_named_error(tmp_path, value):
+    a_named_error(tmp_path, a_data(breaking_only=value), "breaking_only")
+
+
+# Spec AC5: malformed or empty JSON is a named error.
+@pytest.mark.parametrize("text", ["{not json", ""])
+def test_bad_json_is_a_named_error(tmp_path, text):
+    path = tmp_path / "bundle.json"
+    path.write_text(text)
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+
+
+# Spec AC5: valid JSON that is not a bundle object is a named error.
+def test_non_object_json_is_a_named_error(tmp_path):
+    path = tmp_path / "bundle.json"
+    path.write_text("[]")
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+
+
+# Spec AC5: a missing bundle file is a named error.
+def test_missing_bundle_file_is_a_named_error(tmp_path):
+    path = tmp_path / "absent.json"
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
