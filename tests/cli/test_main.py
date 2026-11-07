@@ -1513,6 +1513,148 @@ def test_fix_build_only_json_is_byte_stable_across_hash_seeds(
     assert str(a_repo).encode() not in first.stdout
 
 
+PROOF_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "proof-basic"
+PROVIDER_CHECK = [sys.executable, "-c", "import acme.billing"]
+PROVIDER_OLD = """\
+openapi: 3.1.0
+components:
+  schemas:
+    Charge:
+      type: object
+      properties:
+        amount:
+          type: integer
+"""
+PROVIDER_NEW = PROVIDER_OLD.replace("amount:", "amount_cents:")
+PROVIDER_MIXED = """\
+openapi: 3.1.0
+components:
+  schemas:
+    Charge:
+      type: object
+      properties:
+        amount_cents:
+          type: integer
+        currency:
+          type: string
+"""
+
+
+def a_bundle(tmp_path, *, old=PROVIDER_OLD, new=PROVIDER_NEW, **overrides):
+    """One temp provider bundle over the proof-basic repo's acme.client SDK."""
+    (tmp_path / "old.yaml").write_text(old, encoding="utf-8")
+    (tmp_path / "new.yaml").write_text(new, encoding="utf-8")
+    data = {
+        "provider": "acme",
+        "migration": "amount-cents",
+        "source": "openapi",
+        "language": "python",
+        "old": "old.yaml",
+        "new": "new.yaml",
+        "locate": {"sdk_package": "acme.client"},
+        "command": PROVIDER_CHECK,
+    }
+    data.update(overrides)
+    path = tmp_path / "bundle.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def a_provider(bundle, *extra, repo=PROOF_BASIC, remote=None):
+    return main(
+        ["provider", "migrate", str(repo), "--bundle", str(bundle), *extra],
+        remote=remote,
+    )
+
+
+# Spec AC1: a valid bundle runs the fix pipeline on the fixture and leaves it alone.
+def test_provider_migrate_passing_bundle_exits_zero(a_snapshot, tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+    before = a_snapshot(PROOF_BASIC)
+
+    assert a_provider(bundle) == 0
+
+    out = capsys.readouterr().out
+    assert (
+        '+    return client.charges.create(amount_cents=amount, currency="usd")'
+        in out
+    )
+    assert "Proof: TESTS_PASSED" in out
+    assert a_snapshot(PROOF_BASIC) == before
+
+
+# Spec AC1: a red check is exit 1 and the proof names the failure.
+def test_provider_migrate_red_check_exits_one(tmp_path, capsys):
+    bundle = a_bundle(
+        tmp_path, command=[sys.executable, "-c", "raise SystemExit(1)"]
+    )
+
+    assert a_provider(bundle) == 1
+
+    out = capsys.readouterr().out
+    assert "Proof: UNVERIFIED" in out
+    assert "Cause: TESTS_FAILED_BEFORE" in out
+
+
+# Spec AC1: the provider and migrate help screens are zeros.
+@pytest.mark.parametrize(
+    "argv", [["provider", "--help"], ["provider", "migrate", "--help"]]
+)
+def test_provider_help_returns_zero(argv, capsys):
+    assert main(argv) == 0
+    assert "usage: tenon provider" in capsys.readouterr().out
+
+
+# Spec AC2: --check overrides the bundle's (empty) command.
+def test_provider_check_flag_overrides_the_bundle_command(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, command=[])
+
+    assert a_provider(bundle) == 1
+    assert "Cause: NO_PROOF_COMMAND" in capsys.readouterr().out
+
+    assert a_provider(bundle, "--check", shlex.join(PROVIDER_CHECK)) == 0
+    assert "Proof: TESTS_PASSED" in capsys.readouterr().out
+
+
+# Spec AC2: the bundle's require sets the bar; --require overrides it.
+def test_provider_require_comes_from_the_bundle_and_the_flag(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, command=[], require="UNVERIFIED")
+
+    assert a_provider(bundle) == 0
+    assert "Proof: UNVERIFIED" in capsys.readouterr().out
+
+    assert a_provider(bundle, "--require", "TESTS_PASSED") == 1
+    assert "Proof: UNVERIFIED" in capsys.readouterr().out
+
+
+# Spec AC2: the bundle's stage commands reach one plan.
+def test_provider_bundle_commands_reach_the_plan(tmp_path, monkeypatch):
+    bundle = a_bundle(tmp_path)
+    seen = []
+
+    def prove_plan_spy(proposal, repo, plan):
+        seen.append(plan)
+        return a_green_proof()
+
+    monkeypatch.setattr(cli_main, "prove_plan", prove_plan_spy)
+
+    assert a_provider(bundle) == 0
+    assert seen == [ProofPlan(tests=tuple(PROVIDER_CHECK))]
+
+
+# Spec AC2/S3: the bundle's breaking_only filters the diff.
+def test_provider_breaking_only_filters_changes(tmp_path, capsys):
+    breaking = a_bundle(tmp_path, new=PROVIDER_MIXED, breaking_only=True)
+
+    assert a_provider(breaking) == 0
+    assert "1 change, 1 proposal" in capsys.readouterr().out
+
+    everything = a_bundle(tmp_path, new=PROVIDER_MIXED)
+
+    assert a_provider(everything) == 1
+    assert "2 changes" in capsys.readouterr().out
+
+
 PROBE_FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"
 PROBE_SERVER = PROBE_FIXTURES / "probe_server.py"
 PROBE_AGENT = PROBE_FIXTURES / "probe_agent.py"
