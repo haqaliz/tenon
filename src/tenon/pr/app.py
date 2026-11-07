@@ -5,8 +5,6 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-import jwt
-
 from .api import _api_message
 from .remote import RemoteError
 
@@ -54,6 +52,13 @@ class GitHubAppToken:
         self._now = now or time.time
 
     def _signed_jwt(self) -> str:
+        try:
+            import jwt
+        except ImportError as exc:
+            raise RemoteError(
+                "GitHub App support needs the 'app' extra "
+                "(pyjwt and cryptography)"
+            ) from exc
         now = int(self._now())
         try:
             return jwt.encode(

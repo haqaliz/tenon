@@ -1,6 +1,8 @@
 """The GitHub App auth surface: a fixed token and a JWT exchange; no network."""
 
 import json
+import subprocess
+import sys
 
 import jwt
 import pytest
@@ -8,7 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from tenon.pr.api import GitHubApi, GitHubApiError
-from tenon.pr.app import GitHubAppToken, StaticToken
+from tenon.pr.app import GitHubAppToken, StaticToken, TokenProvider
 from tenon.pr.remote import RemoteError
 
 NOW = 1_800_000_000
@@ -267,3 +269,37 @@ def test_an_api_transport_failure_has_no_status():
     assert raised.value.status is None
     assert "network down" not in raised.value.detail
     assert "OSError" in raised.value.detail
+
+
+# Spec AC6: the whole app auth surface is importable from the package.
+def test_the_app_surface_is_exported_from_the_package():
+    import tenon.pr as pr
+
+    assert pr.GitHubApi is GitHubApi
+    assert pr.GitHubApiError is GitHubApiError
+    assert pr.GitHubAppToken is GitHubAppToken
+    assert pr.StaticToken is StaticToken
+    assert pr.TokenProvider is TokenProvider
+
+
+# Spec AC6: the app extra is optional; the core package still imports, and
+# minting without PyJWT names the extra instead of leaking an ImportError.
+def test_the_core_package_works_without_the_app_extra():
+    code = (
+        "import sys\n"
+        "sys.modules['jwt'] = None\n"
+        "from tenon.pr import GitHubAppToken, RemoteError, StaticToken\n"
+        "assert StaticToken('t').token() == 't'\n"
+        "try:\n"
+        "    GitHubAppToken(1, 2, 'pem', lambda *args: None).token()\n"
+        "except RemoteError as exc:\n"
+        "    assert 'app' in exc.detail, exc.detail\n"
+        "else:\n"
+        "    raise AssertionError('minting without PyJWT did not fail')\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
+
+    assert completed.returncode == 0, completed.stderr

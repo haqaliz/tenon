@@ -762,12 +762,17 @@ def test_package_exports_the_full_public_surface():
 
     assert __all__ == [
         "GitGhRemote",
+        "GitHubApi",
+        "GitHubApiError",
+        "GitHubAppToken",
         "PrDraft",
         "PrRefusal",
         "PrResult",
         "PrStatus",
         "Remote",
         "RemoteError",
+        "StaticToken",
+        "TokenProvider",
         "render_pr",
         "write_pr",
     ]
