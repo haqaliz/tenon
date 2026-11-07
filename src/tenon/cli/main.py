@@ -14,7 +14,10 @@ from tenon.corpus import (
     CorpusRecord,
     Outcome,
     append_records,
+    benchmark,
+    load_corpus,
     record_id,
+    update_outcome,
 )
 from tenon.detect import (
     Change,
@@ -193,6 +196,26 @@ def _parser() -> argparse.ArgumentParser:
     corpus_record.add_argument("--notes", default="", help="human context")
     corpus_record.add_argument("--evidence", default="", help="evidence path or URL")
     corpus_record.add_argument("--json", action="store_true", help="machine output")
+
+    corpus_outcome = corpus_commands.add_parser(
+        "outcome", help="update one record's outcome"
+    )
+    corpus_outcome.add_argument("--corpus", required=True, help="corpus JSONL path")
+    corpus_outcome.add_argument("--id", required=True, help="record id")
+    corpus_outcome.add_argument(
+        "--outcome",
+        required=True,
+        help="pending, merged, rejected, closed, incident, local_only",
+    )
+    corpus_outcome.add_argument("--outcome-url", default=None, help="PR/issue URL")
+    corpus_outcome.add_argument("--notes", default=None, help="human context")
+    corpus_outcome.add_argument("--json", action="store_true", help="machine output")
+
+    corpus_report = corpus_commands.add_parser(
+        "report", help="aggregate the corpus by proof level and outcome"
+    )
+    corpus_report.add_argument("--corpus", required=True, help="corpus JSONL path")
+    corpus_report.add_argument("--json", action="store_true", help="machine output")
     return parser
 
 
@@ -441,11 +464,42 @@ def _corpus_record(args: argparse.Namespace) -> int:
     return 0
 
 
+# Spec AC3: the human updates one id; the record keeps its identity.
+def _corpus_outcome(args: argparse.Namespace) -> int:
+    record = update_outcome(
+        args.corpus,
+        args.id,
+        _outcome(args.outcome),
+        outcome_url=args.outcome_url,
+        notes=args.notes,
+    )
+    if args.json:
+        print(record.to_json())
+    else:
+        print(f"updated {record.id}: {record.outcome.value}")
+    return 0
+
+
+# Spec AC4: the report is exactly the benchmark over the loaded history.
+def _corpus_report(args: argparse.Namespace) -> int:
+    report = benchmark(load_corpus(args.corpus))
+    if args.json:
+        print(report.to_json())
+    else:
+        print(report.render_text(), end="")
+    return 0
+
+
 # Spec AC2/AC7: every corpus failure is exit 2 with one named message.
 def _corpus(args: argparse.Namespace) -> int:
     json_mode = bool(args.json)
+    handlers = {
+        "record": _corpus_record,
+        "outcome": _corpus_outcome,
+        "report": _corpus_report,
+    }
     try:
-        return _corpus_record(args)
+        return handlers[args.corpus_command](args)
     except (CorpusError, ValueError, OSError) as error:
         return _fail("corpus", str(error), json_mode=json_mode)
 
