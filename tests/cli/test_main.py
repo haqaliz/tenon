@@ -1583,6 +1583,17 @@ def test_corpus_record_appends_one_record_per_result(tmp_path, capsys):
     assert capsys.readouterr().out == f"{first.id}\n{second.id}\n"
 
 
+# Spec AC1: a fix report with no results records nothing and prints no ids.
+def test_corpus_record_with_no_results_records_nothing(tmp_path, capsys):
+    fix = a_fix_json(tmp_path)
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus) == 0
+
+    assert capsys.readouterr().out == ""
+    assert load_corpus(corpus) == ()
+
+
 # Spec AC1: --json lists the recorded ids as one object.
 def test_corpus_record_json_lists_the_ids(tmp_path, capsys):
     fix = a_fix_json(
@@ -1984,3 +1995,114 @@ def test_corpus_report_malformed_corpus_json_is_one_object(tmp_path, capsys):
     assert payload["error"]["kind"] == "corpus"
     assert "line 1" in payload["error"]["message"]
     assert captured.out.count("\n") == 1
+
+
+BENCHMARK_CORPUS = (
+    Path(__file__).parent.parent.parent / "docs" / "benchmark" / "corpus.jsonl"
+)
+BENCHMARK_README = BENCHMARK_CORPUS.with_name("README.md")
+FHI_COMMIT = "56e69cfa4440aea0a42d016f84e6af336c5e0d3c"
+STRIPE_TEMPLATE_COMMIT = "9d9178c47a191112b86a6ce6edd71962faee80d1"
+
+
+# Spec AC5: the committed seed is exactly the two public M0.3 cases.
+def test_benchmark_seed_has_the_two_public_cases():
+    records = load_corpus(BENCHMARK_CORPUS)
+
+    assert len(records) == 2
+    by_commit = {record.commit: record for record in records}
+    assert set(by_commit) == {FHI_COMMIT, STRIPE_TEMPLATE_COMMIT}
+
+    fhi = by_commit[FHI_COMMIT]
+    assert fhi.repo == "https://github.com/fighthealthinsurance/fighthealthinsurance"
+    assert fhi.recorded == "2026-11-02"
+    assert fhi.evidence == "docs/planning/m0-3-first-real-case/evidence.md"
+    assert len(fhi.proposal["edits"]) == 3
+    assert fhi.proposal["files"] == [
+        "fhi_users/auth/rest_auth_views.py",
+        "fighthealthinsurance/views.py",
+    ]
+    assert sum(line.startswith("@@") for line in fhi.proposal["diff"].splitlines()) == 3
+
+    stripe_template = by_commit[STRIPE_TEMPLATE_COMMIT]
+    assert stripe_template.repo == "https://github.com/yezz123/stripe-template"
+    assert stripe_template.recorded == "2026-10-31"
+    assert stripe_template.evidence == "docs/planning/m0-3-real-case/evidence.md"
+    assert len(stripe_template.proposal["edits"]) == 2
+    assert stripe_template.proposal["files"] == [
+        "app/router/v1/payment.py",
+        "tests/test_payment.py",
+    ]
+    assert (
+        sum(
+            line.startswith("@@")
+            for line in stripe_template.proposal["diff"].splitlines()
+        )
+        == 2
+    )
+
+    for record in records:
+        assert record.id == record_id(
+            record.repo, record.commit, record.change, record.proposal
+        )
+        assert record.outcome is Outcome.LOCAL_ONLY
+        assert record.proof["level"] == "TESTS_PASSED"
+        assert record.proof["patch_applied"] is True
+        assert record.proof["cause"] is None
+        assert record.pr is None
+        assert record.change["kind"] == "renamed"
+        assert record.change["location"]["method"] == "post"
+        assert record.change["location"]["path"] == "/v1/checkout/sessions"
+        assert (
+            record.change["before"],
+            record.change["after"],
+        ) == ("payment_method_types", "allowed_payment_method_types")
+
+
+# Spec AC5: with no real outcomes, known is 0 and every merge rate is null.
+def test_benchmark_seed_report_has_no_known_outcomes():
+    report = benchmark(load_corpus(BENCHMARK_CORPUS))
+
+    assert report.total == 2
+    assert report.by_level[ProofLevel.TESTS_PASSED].count == 2
+    assert report.by_level[ProofLevel.TESTS_PASSED].known == 0
+    assert all(stats.merge_rate is None for stats in report.by_level.values())
+    assert report.outcomes[Outcome.LOCAL_ONLY] == 2
+
+
+# Spec AC4/AC5: the CLI report over the seed is the benchmark report.
+def test_corpus_report_on_the_seed_matches_benchmark(capsys):
+    assert (
+        main(["corpus", "report", "--corpus", str(BENCHMARK_CORPUS), "--json"])
+        == 0
+    )
+
+    assert capsys.readouterr().out == (
+        benchmark(load_corpus(BENCHMARK_CORPUS)).to_json() + "\n"
+    )
+
+
+# Spec AC5: the README states the method, the cases and the honest no-merge note.
+def test_benchmark_readme_documents_the_method_and_no_merge_outcomes():
+    text = BENCHMARK_README.read_text(encoding="utf-8")
+    lowered = text.lower()
+
+    assert "docs/benchmark/corpus.jsonl" in text
+    assert "tenon corpus record" in text
+    assert "tenon corpus outcome" in text
+    assert "tenon corpus report --corpus docs/benchmark/corpus.jsonl" in text
+    assert "no merge outcomes yet" in lowered
+    assert "merge rate n/a" in lowered
+    for outcome in (
+        "pending",
+        "merged",
+        "rejected",
+        "closed",
+        "incident",
+        "local_only",
+    ):
+        assert outcome in text
+    assert "fighthealthinsurance" in text
+    assert "stripe-template" in text
+    assert "local" in lowered
+    assert "opt-in" in lowered

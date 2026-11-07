@@ -459,7 +459,7 @@ def _corpus_record(args: argparse.Namespace) -> int:
                 separators=(",", ":"),
             )
         )
-    else:
+    elif ids:
         print("\n".join(ids))
     return 0
 
