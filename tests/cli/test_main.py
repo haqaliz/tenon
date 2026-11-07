@@ -1013,7 +1013,7 @@ def a_app_recorders(monkeypatch):
             app_id,
             installation_id,
             private_key_pem,
-            transport,
+            transport=None,
             api_url="https://api.github.com",
         ):
             self.record = {

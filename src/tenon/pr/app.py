@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Protocol
 
-from .api import _api_message
+from .api import _api_message, urllib_transport
 from .remote import RemoteError
 
 _ACCEPT = "application/vnd.github+json"
@@ -40,14 +40,14 @@ class GitHubAppToken:
         app_id: int | str,
         installation_id: int | str,
         private_key_pem: str,
-        transport,
+        transport=None,
         api_url: str = "https://api.github.com",
         now: Callable[[], float] | None = None,
     ) -> None:
         self._app_id = app_id
         self._installation_id = installation_id
         self._private_key_pem = private_key_pem
-        self._transport = transport
+        self._transport = transport or urllib_transport
         self._api_url = api_url.rstrip("/")
         self._now = now or time.time
 

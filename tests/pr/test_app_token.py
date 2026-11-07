@@ -303,3 +303,11 @@ def test_the_core_package_works_without_the_app_extra():
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+# Spec AC1: the token has a working default transport, so the CLI need not
+# reach into GitHubApi's private urllib helper.
+def test_the_app_token_has_a_default_transport():
+    token = GitHubAppToken(APP_ID, INSTALLATION_ID, PRIVATE_KEY_PEM)
+
+    assert callable(token._transport)

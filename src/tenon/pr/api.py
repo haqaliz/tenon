@@ -3,11 +3,35 @@
 import json
 import urllib.error
 import urllib.request
+from functools import partial
 
 from .remote import RemoteError
 
 _ACCEPT = "application/vnd.github+json"
 _API_VERSION = "2022-11-28"
+
+
+def urllib_transport(method, url, headers, body, timeout=30):
+    """The default stdlib transport: a status/headers/body triple, no exceptions."""
+    request = urllib.request.Request(
+        url,
+        data=body.encode("utf-8") if body is not None else None,
+        headers=headers,
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return (
+                response.status,
+                dict(response.headers),
+                response.read().decode("utf-8", errors="replace"),
+            )
+    except urllib.error.HTTPError as exc:
+        return (
+            exc.code,
+            dict(exc.headers or {}),
+            exc.read().decode("utf-8", errors="replace"),
+        )
 
 
 class GitHubApiError(RemoteError):
@@ -40,28 +64,9 @@ class GitHubApi:
     ) -> None:
         self._api_url = api_url.rstrip("/")
         self._timeout = timeout
-        self._transport = transport or self._urllib
-
-    def _urllib(self, method, url, headers, body):
-        request = urllib.request.Request(
-            url,
-            data=body.encode("utf-8") if body is not None else None,
-            headers=headers,
-            method=method,
+        self._transport = transport or partial(
+            urllib_transport, timeout=self._timeout
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
-                return (
-                    response.status,
-                    dict(response.headers),
-                    response.read().decode("utf-8", errors="replace"),
-                )
-        except urllib.error.HTTPError as exc:
-            return (
-                exc.code,
-                dict(exc.headers or {}),
-                exc.read().decode("utf-8", errors="replace"),
-            )
 
     def request(
         self,

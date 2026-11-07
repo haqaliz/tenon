@@ -39,7 +39,6 @@ from tenon.locate import (
 )
 from tenon.pr import (
     GitGhRemote,
-    GitHubApi,
     GitHubAppRemote,
     GitHubAppToken,
     Remote,
@@ -351,14 +350,12 @@ def _remote(args: argparse.Namespace) -> Remote:
         raise _Usage(
             f"cannot read the app private key {key_path}: {error}"
         ) from None
-    # The token has no default transport; reuse the REST client's urllib one.
-    transport = GitHubApi()._urllib
+    # The token and the REST client share the stdlib default transport.
     return GitHubAppRemote(
         GitHubAppToken(
             app_id,
             installation_id,
             pem,
-            transport,
             api_url=api_url,
         ),
         api_url=api_url,
