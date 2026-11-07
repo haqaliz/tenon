@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import shlex
 import sys
 import tomllib
@@ -314,18 +315,49 @@ def _check(args: argparse.Namespace, config: CliConfig) -> int:
     return check_exit(located)
 
 
-# Spec AC1/AC2: the gh default, or the app remote built from its inputs.
+# Spec AC1/AC2/AC3: the gh default, or the app remote from flags/env.
 def _remote(args: argparse.Namespace) -> Remote:
     if args.remote != "app":
         return GitGhRemote()
-    api_url = args.api_url or "https://api.github.com"
+    app_id = args.app_id or os.environ.get("TENON_GITHUB_APP_ID")
+    installation_id = args.app_installation_id or os.environ.get(
+        "TENON_GITHUB_APP_INSTALLATION_ID"
+    )
+    key_path = args.app_private_key or os.environ.get(
+        "TENON_GITHUB_APP_PRIVATE_KEY"
+    )
+    api_url = (
+        args.api_url
+        or os.environ.get("TENON_GITHUB_API_URL")
+        or "https://api.github.com"
+    )
+    if not app_id:
+        raise _Usage(
+            "--app-id or TENON_GITHUB_APP_ID is required for --remote app"
+        )
+    if not installation_id:
+        raise _Usage(
+            "--app-installation-id or TENON_GITHUB_APP_INSTALLATION_ID "
+            "is required for --remote app"
+        )
+    if not key_path:
+        raise _Usage(
+            "--app-private-key or TENON_GITHUB_APP_PRIVATE_KEY "
+            "is required for --remote app"
+        )
+    try:
+        pem = Path(key_path).read_text(encoding="utf-8")
+    except OSError as error:
+        raise _Usage(
+            f"cannot read the app private key {key_path}: {error}"
+        ) from None
     # The token has no default transport; reuse the REST client's urllib one.
     transport = GitHubApi()._urllib
     return GitHubAppRemote(
         GitHubAppToken(
-            args.app_id,
-            args.app_installation_id,
-            Path(args.app_private_key).read_text(encoding="utf-8"),
+            app_id,
+            installation_id,
+            pem,
             transport,
             api_url=api_url,
         ),
@@ -578,6 +610,9 @@ def main(argv: Sequence[str] | None = None, *, remote: Remote | None = None) -> 
         return int(status.code or 0)
 
     json_mode = bool(args.json)
+    # Spec AC4: an explicit remote is meaningless without --open-pr.
+    if args.command == "fix" and args.remote is not None and not args.open_pr:
+        return _fail("usage", "--remote requires --open-pr", json_mode=json_mode)
     try:
         # Spec AC1: corpus and probe are dispatched before _config, which needs a repo.
         if args.command == "corpus":
