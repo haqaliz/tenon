@@ -1,41 +1,45 @@
-# Card: feat/corpus
+# Card: feat/github-app
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T9 Benchmark and history** (`docs/technical/CAPABILITY_ROADMAP.md:15`)
-- **Milestone:** M2.4 (`docs/ROADMAP.md`)
-- **Branch:** `feat/corpus/aliz`
-- **Worktree:** `.claude/worktrees/feat-corpus`
+- **Capability:** **T10 Provider layer and GitHub App (hosted)** — first slice: **GitHub App remote**
+  (`docs/technical/CAPABILITY_ROADMAP.md:16`)
+- **Milestone:** Phase 3 (`docs/ROADMAP.md`), first slice
+- **Branch:** `feat/github-app/aliz`
+- **Worktree:** `.claude/worktrees/feat-github-app`
 
 ## Brief
 
-T1–T8 produce changes, patches, proof levels and probe reports, but nothing keeps the history that
-turns those runs into a benchmark. The risk register (R5) says the differentiator is the stated proof
-level *and the benchmark*; today there are two real cases in `docs/planning/m0-3-*/evidence.md` and no
-queryable record of them.
+T5 ships PRs through the user's own `gh` CLI and auth. The hosted/provider layer needs an app
+identity instead: a GitHub App installation token, no personal `gh` login, no interactive prompt, and
+the same four `Remote` operations T5 already depends on.
 
-T9 adds a `(change, patch, proof, outcome)` corpus: a JSONL record per change, built from a
-`tenon fix --json` result, with an outcome the user updates after a human merge/reject/incident. A
-report groups records by proof level and outcome and computes a merge rate only where real outcomes
-exist. The two public M0.3 cases seed a committed `docs/benchmark/corpus.jsonl` + a generated
-`README.md`, honestly marked `local_only` (no PR, no merge outcome yet).
+T10a adds a `GitHubAppRemote` implementing the T5 `Remote` protocol:
+- mint a GitHub App JWT from the app id + private key, exchange it for an installation token;
+- `default_branch` and `branch_exists` via the GitHub REST API;
+- push the proven branch with the token through a git credential helper (no token in argv);
+- `create_pr` via the REST API, draft flag included;
+- CLI `tenon fix --open-pr --remote app` with app id/installation/private-key inputs.
 
-The hard rules do not change: the corpus records what actually ran; `local_only`/`pending` never
-count as a successful merge; nothing is uploaded; the public seed uses only public repositories; the
-record id is deterministic and the date is user-supplied (no clock in tests).
+The provider-facing migration bundle, customer fan-out, webhooks and a hosted service are T10b/T10c.
+This card is the hosted writer foundation, not the marketplace.
+
+The hard rules do not change: no merge, no default-branch push, no force; the app token is a secret
+that never appears in argv, a report or an error detail; the remote is opt-in and self-hosted; the
+tests are offline with an injected transport/runner and a test RSA key.
 
 ## Constraints carried in from the repo
 
-- `CLAUDE.md` §2: honest levels; the corpus records the `ProofResult` level/cause, never upgrades it.
-- `CLAUDE.md` §4: no code egress; the corpus is local and opt-in. The public seed is public data.
-- `CLAUDE.md` §5: no merge; an outcome is a human fact recorded later.
-- `docs/ROADMAP.md` R5: differentiate on the proof level and the benchmark.
-- The `tenon fix --json` shape is the input: `{"command":"fix","results":[{"change","locate",
-  "proposal","proof","pr"}],"summary":...}`.
-- Offline, deterministic tests; no network, no GitHub outcome detection.
+- `CLAUDE.md` §4–5: no code egress by default; no merge/default branch; the app is the user's own
+  installation, self-hosted.
+- `CLAUDE.md` tech direction: "OSS CLI first, GitHub App and hosted later"; Python core; the app is
+  opt-in.
+- T5's `Remote` protocol and `RemoteError` are the seam; the writer's guardrails stay untouched.
+- `docs/ROADMAP.md` Phase 3: GitHub App, provider-facing PRs, hosted; T11 on demand.
+- Offline tests: no live GitHub, no network; a fake HTTP transport and git runner.
 
 ## Scope fence
 
-Not this card: a hosted/public benchmark site, automatic GitHub merge/incident detection, a corpus
-upload, T10/T11, new proof levels.
+Not this card: the provider migration bundle/fan-out, webhook server, tenancy/database, hosted
+deployment, OAuth/user tokens, T11 languages. Those are T10b/T10c.
