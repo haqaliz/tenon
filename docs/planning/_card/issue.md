@@ -1,46 +1,42 @@
-# Card: feat/github-app
+# Card: feat/provider-bundle
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T10 Provider layer and GitHub App (hosted)** — first slice: **GitHub App remote**
-  (`docs/technical/CAPABILITY_ROADMAP.md:16`)
-- **Milestone:** Phase 3 (`docs/ROADMAP.md`), first slice
-- **State:** shipped 2026-11-08 (`src/tenon/pr/{app,api,github_app}.py`, CLI; 1,635 tests)
-- **Branch:** `feat/github-app/aliz`
-- **Worktree:** `.claude/worktrees/feat-github-app`
+- **Capability:** **T10 Provider layer and GitHub App (hosted)** — second slice: **provider migration
+  bundle** (`docs/technical/CAPABILITY_ROADMAP.md:16`)
+- **Milestone:** Phase 3 (`docs/ROADMAP.md`), second slice
+- **Branch:** `feat/provider-bundle/aliz`
+- **Worktree:** `.claude/worktrees/feat-provider-bundle`
 
 ## Brief
 
-T5 ships PRs through the user's own `gh` CLI and auth. The hosted/provider layer needs an app
-identity instead: a GitHub App installation token, no personal `gh` login, no interactive prompt, and
-the same four `Remote` operations T5 already depends on.
+T10a gives the hosted writer an app identity. A provider still needs a portable way to describe a
+migration: which vendor and release, which OpenAPI/MCP documents, how to map the vendor's operations
+and fields to the customer's SDK, and what proof level the customer's repo must reach.
 
-T10a adds a `GitHubAppRemote` implementing the T5 `Remote` protocol:
-- mint a GitHub App JWT from the app id + private key, exchange it for an installation token;
-- `default_branch` and `branch_exists` via the GitHub REST API;
-- push the proven branch with the token through a git credential helper (no token in argv);
-- `create_pr` via the REST API, draft flag included;
-- CLI `tenon fix --open-pr --remote app` with app id/installation/private-key inputs.
+T10b adds a **migration bundle** (JSON) and `tenon provider migrate <repo> --bundle PATH`:
+- the bundle carries `provider`, `migration`, `source` (openapi/mcp), `language`, `old`/`new` spec
+  paths relative to the bundle, the locate config (`sdk_package`, `operations`, `fields`), the proof
+  requirement and the stage commands;
+- the command runs the shipped detect → locate → propose → prove pipeline on one target repo, prints
+  the same fix report with provider/migration identity, and with `--open-pr` opens the PR through
+  `gh` or the T10a app remote;
+- one repo per invocation. Multi-repo/installed fan-out, webhooks and the hosted service are T10c.
 
-The provider-facing migration bundle, customer fan-out, webhooks and a hosted service are T10b/T10c.
-This card is the hosted writer foundation, not the marketplace.
-
-The hard rules do not change: no merge, no default-branch push, no force; the app token is a secret
-that never appears in argv, a report or an error detail; the remote is opt-in and self-hosted; the
-tests are offline with an injected transport/runner and a test RSA key.
+The hard rules do not change: the bundle is untrusted input and is validated by name; the pipeline
+and T5 guardrails are unchanged; no merge/default branch/force; the provider identity is metadata,
+not a proof upgrade; no service or database in this slice.
 
 ## Constraints carried in from the repo
 
-- `CLAUDE.md` §4–5: no code egress by default; no merge/default branch; the app is the user's own
-  installation, self-hosted.
-- `CLAUDE.md` tech direction: "OSS CLI first, GitHub App and hosted later"; Python core; the app is
-  opt-in.
-- T5's `Remote` protocol and `RemoteError` are the seam; the writer's guardrails stay untouched.
-- `docs/ROADMAP.md` Phase 3: GitHub App, provider-facing PRs, hosted; T11 on demand.
-- Offline tests: no live GitHub, no network; a fake HTTP transport and git runner.
+- `CLAUDE.md` §1–5: execution decides, honest levels, no merge/default branch, no egress by default.
+- T5's `write_pr` and T10a's `GitHubAppRemote` are the writer paths; this card adds no new host.
+- `src/tenon/cli/config.py`'s `CliConfig` is the in-memory contract; the bundle maps to it.
+- The CLI `check`/`fix` behavior and exit codes stay as they are.
+- Offline tests: fixture repos/specs/bundles; no network, no live GitHub.
 
 ## Scope fence
 
-Not this card: the provider migration bundle/fan-out, webhook server, tenancy/database, hosted
-deployment, OAuth/user tokens, T11 languages. Those are T10b/T10c.
+Not this card: multi-repo/installed fan-out, webhook/installation discovery, a hosted service or
+database, provider branding in the PR body, T11 languages.
