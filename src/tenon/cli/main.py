@@ -1,6 +1,7 @@
 """The ``tenon`` command: parse, configure, compose the stages, report."""
 
 import argparse
+import json
 import shlex
 import sys
 import tomllib
@@ -26,9 +27,9 @@ from tenon.locate import (
     locate_ts,
 )
 from tenon.pr import GitGhRemote, Remote, write_pr
-from tenon.probe import load_tasks, probe
+from tenon.probe import AgentError, ProbeError, load_tasks, probe
 from tenon.propose import propose
-from tenon.prove import ProofPlan, proof_rank, prove_plan
+from tenon.prove import ProofPlan, proof_rank, prove_plan, tail
 
 from .config import (
     CliConfig,
@@ -274,12 +275,45 @@ def _fix(
     return fix_exit(len(changes), results, config.require)
 
 
+# Spec AC4: a setup failure is one named probe error, never a traceback.
+def _probe_fail(reason: str, detail: str, *, json_mode: bool) -> int:
+    message = tail(detail)
+    if json_mode:
+        print(
+            json.dumps(
+                {"error": {"kind": "probe", "reason": reason, "message": message}},
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print(f"tenon: probe: {reason}: {message}", file=sys.stderr)
+    return 2
+
+
 # Spec AC1/AC2: split the commands, load the tasks, probe, then render.
 def _probe(args: argparse.Namespace) -> int:
-    server_cmd = shlex.split(args.server_cmd)
-    agent_cmd = shlex.split(args.agent)
-    tasks = load_tasks(args.tasks)
-    report = probe(server_cmd, tasks, agent_cmd, args.timeout)
+    json_mode = bool(args.json)
+    if not args.timeout > 0:
+        return _probe_fail(
+            "invalid_timeout",
+            f"--timeout must be positive: {args.timeout}",
+            json_mode=json_mode,
+        )
+    try:
+        server_cmd = shlex.split(args.server_cmd)
+        agent_cmd = shlex.split(args.agent)
+    except ValueError as error:
+        return _probe_fail("invalid_command", str(error), json_mode=json_mode)
+    try:
+        tasks = load_tasks(args.tasks)
+    except (OSError, ValueError) as error:
+        return _probe_fail("invalid_tasks", str(error), json_mode=json_mode)
+    try:
+        report = probe(server_cmd, tasks, agent_cmd, args.timeout)
+    except (ProbeError, AgentError) as error:
+        return _probe_fail(error.reason, error.detail, json_mode=json_mode)
     # Spec AC2/AC3: a task failure is a report with exit 1, never an error envelope.
     if args.json:
         print(report.to_json())

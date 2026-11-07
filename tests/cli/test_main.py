@@ -1280,3 +1280,109 @@ def test_probe_empty_tasks_exits_zero(tmp_path, capsys):
 
     assert a_probe(tasks=tasks) == 0
     assert "0 tasks, 0 passed, 0 failed" in capsys.readouterr().out
+
+
+def a_probe_error(captured):
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert set(payload["error"]) == {"kind", "reason", "message"}
+    assert payload["error"]["kind"] == "probe"
+    assert captured.out.count("\n") == 1
+    return payload["error"]
+
+
+# Spec AC4: a bad tasks file is one probe error object and exit 2.
+def test_probe_bad_tasks_json_is_one_error(tmp_path, capsys):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{", encoding="utf-8")
+
+    assert a_probe("--json", tasks=bad) == 2
+
+    error = a_probe_error(capsys.readouterr())
+    assert error["reason"] == "invalid_tasks"
+    assert "invalid JSON" in error["message"]
+
+
+# Spec AC4: without --json the same setup failure is one stderr line.
+def test_probe_bad_tasks_text_is_one_stderr_line(tmp_path, capsys):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{", encoding="utf-8")
+
+    assert a_probe(tasks=bad) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("tenon: probe: invalid_tasks:")
+    assert "invalid JSON" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC4: a server that exits during the handshake is one probe error object.
+def test_probe_server_exit_json_is_one_error(capsys):
+    assert a_probe("--json", server=("--exit-after-first",)) == 2
+
+    error = a_probe_error(capsys.readouterr())
+    assert error["reason"] == "server_exit"
+
+
+# Spec AC4: an agent that cannot spawn is one probe error object.
+def test_probe_bad_agent_spawn_json_is_one_error(capsys):
+    command = [
+        "probe",
+        "--server-cmd",
+        shlex.join([sys.executable, str(PROBE_SERVER)]),
+        "--tasks",
+        str(PROBE_TASKS),
+        "--agent",
+        "/tenon-no-such-agent-xyz",
+        "--timeout",
+        "5",
+        "--json",
+    ]
+
+    assert main(command) == 2
+
+    error = a_probe_error(capsys.readouterr())
+    assert error["reason"] == "AGENT_SPAWN_FAILED"
+
+
+# Spec AC4: a non-positive --timeout is one probe error object in JSON mode.
+@pytest.mark.parametrize("timeout", ["0", "-1"])
+def test_probe_non_positive_timeout_json_is_one_error(timeout, a_pass_tasks, capsys):
+    assert a_probe("--json", tasks=a_pass_tasks, timeout=timeout) == 2
+
+    error = a_probe_error(capsys.readouterr())
+    assert error["reason"] == "invalid_timeout"
+    assert "positive" in error["message"]
+
+
+# Spec AC4: an unbalanced command quote is a named error, not a traceback.
+def test_probe_unbalanced_command_quote_is_one_error(a_pass_tasks, capsys):
+    command = [
+        "probe",
+        "--server-cmd",
+        "python 'unclosed",
+        "--tasks",
+        str(a_pass_tasks),
+        "--agent",
+        shlex.join([sys.executable, str(PROBE_AGENT)]),
+        "--timeout",
+        "5",
+        "--json",
+    ]
+
+    assert main(command) == 2
+
+    error = a_probe_error(capsys.readouterr())
+    assert error["reason"] == "invalid_command"
+    assert "quotation" in error["message"]
+
+
+# Spec AC1: a non-numeric --timeout stays an argparse usage error.
+def test_probe_non_numeric_timeout_is_usage(a_pass_tasks, capsys):
+    assert a_probe(tasks=a_pass_tasks, timeout="soon") == 2
+
+    err = capsys.readouterr().err
+    assert "--timeout" in err
+    assert "Traceback" not in err
