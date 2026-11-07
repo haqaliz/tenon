@@ -977,6 +977,115 @@ def test_fix_open_pr_builds_the_default_remote(a_repo, a_specs, monkeypatch):
     assert calls[0]["remote"] is marker
 
 
+APP_ENV = (
+    "TENON_GITHUB_APP_ID",
+    "TENON_GITHUB_APP_INSTALLATION_ID",
+    "TENON_GITHUB_APP_PRIVATE_KEY",
+    "TENON_GITHUB_API_URL",
+)
+
+
+@pytest.fixture
+def a_app_env(monkeypatch):
+    """No inherited app inputs; each test sets only what it needs."""
+    for name in APP_ENV:
+        monkeypatch.delenv(name, raising=False)
+    return monkeypatch
+
+
+def a_app_key(tmp_path, name="app.pem"):
+    path = tmp_path / name
+    path.write_text(
+        "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def a_app_recorders(monkeypatch):
+    """Record the app token and remote construction, in order."""
+    tokens = []
+    remotes = []
+
+    class Token:
+        def __init__(
+            self,
+            app_id,
+            installation_id,
+            private_key_pem,
+            transport,
+            api_url="https://api.github.com",
+        ):
+            self.record = {
+                "app_id": app_id,
+                "installation_id": installation_id,
+                "private_key_pem": private_key_pem,
+                "transport": transport,
+                "api_url": api_url,
+            }
+            tokens.append(self.record)
+
+    class Remote:
+        def __init__(self, provider, api_url="https://api.github.com"):
+            self.record = {"provider": provider, "api_url": api_url}
+            remotes.append(self.record)
+
+    monkeypatch.setattr(cli_main, "GitHubAppToken", Token)
+    monkeypatch.setattr(cli_main, "GitHubAppRemote", Remote)
+    return tokens, remotes
+
+
+# Spec AC1: an explicit gh remote keeps the shipped GitGhRemote path.
+def test_fix_open_pr_remote_gh_uses_gitgh(a_repo, a_specs, monkeypatch):
+    marker = object()
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "GitGhRemote", lambda: marker)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_fix(a_repo, a_specs, "--open-pr", "--remote", "gh") == 0
+    assert calls[0]["remote"] is marker
+
+
+# Spec AC2: --remote app builds the token and remote from the flags, and the
+# writer receives that remote.
+def test_fix_open_pr_remote_app_constructs_the_app_remote(
+    a_repo, a_specs, tmp_path, monkeypatch, a_app_env
+):
+    key = a_app_key(tmp_path)
+    tokens, remotes = a_app_recorders(monkeypatch)
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert (
+        a_fix(
+            a_repo,
+            a_specs,
+            "--open-pr",
+            "--remote",
+            "app",
+            "--app-id",
+            "123",
+            "--app-installation-id",
+            "456",
+            "--app-private-key",
+            str(key),
+            "--api-url",
+            "https://ghe.example/api/v3",
+        )
+        == 0
+    )
+
+    (token,) = tokens
+    assert token["app_id"] == "123"
+    assert token["installation_id"] == "456"
+    assert token["private_key_pem"] == key.read_text(encoding="utf-8")
+    assert token["api_url"] == "https://ghe.example/api/v3"
+    (remote,) = remotes
+    assert remote["provider"].record is token
+    assert remote["api_url"] == "https://ghe.example/api/v3"
+    assert calls[0]["remote"].record is remote
+
+
 # Spec AC8: a refused spec is exit 2, named, and never a traceback.
 def test_bad_spec_is_a_named_refusal(a_repo, a_specs, tmp_path, capsys):
     _old, new = a_specs

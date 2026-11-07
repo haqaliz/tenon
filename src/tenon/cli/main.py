@@ -36,7 +36,14 @@ from tenon.locate import (
     locate_mcp,
     locate_ts,
 )
-from tenon.pr import GitGhRemote, Remote, write_pr
+from tenon.pr import (
+    GitGhRemote,
+    GitHubApi,
+    GitHubAppRemote,
+    GitHubAppToken,
+    Remote,
+    write_pr,
+)
 from tenon.probe import AgentError, ProbeError, load_tasks, probe
 from tenon.propose import propose
 from tenon.prove import ProofPlan, proof_rank, prove_plan, tail
@@ -146,6 +153,23 @@ def _parser() -> argparse.ArgumentParser:
     fix.add_argument("--replay", default=None, help="replay command")
     fix.add_argument("--require", type=_require, default=None, help="proof level")
     fix.add_argument("--open-pr", action="store_true", help="open a pull request")
+    fix.add_argument(
+        "--remote",
+        choices=("gh", "app"),
+        default=None,
+        help="GitHub remote (default: gh)",
+    )
+    fix.add_argument("--app-id", default=None, help="GitHub App id")
+    fix.add_argument(
+        "--app-installation-id", default=None, help="GitHub App installation id"
+    )
+    fix.add_argument(
+        "--app-private-key",
+        default=None,
+        metavar="PATH",
+        help="GitHub App private key PEM path",
+    )
+    fix.add_argument("--api-url", default=None, help="GitHub API base URL")
     fix.add_argument(
         "--allow-below-required",
         "--allow-unverified",
@@ -290,12 +314,34 @@ def _check(args: argparse.Namespace, config: CliConfig) -> int:
     return check_exit(located)
 
 
+# Spec AC1/AC2: the gh default, or the app remote built from its inputs.
+def _remote(args: argparse.Namespace) -> Remote:
+    if args.remote != "app":
+        return GitGhRemote()
+    api_url = args.api_url or "https://api.github.com"
+    # The token has no default transport; reuse the REST client's urllib one.
+    transport = GitHubApi()._urllib
+    return GitHubAppRemote(
+        GitHubAppToken(
+            args.app_id,
+            args.app_installation_id,
+            Path(args.app_private_key).read_text(encoding="utf-8"),
+            transport,
+            api_url=api_url,
+        ),
+        api_url=api_url,
+    )
+
+
 # Spec AC4/AC5: locate, propose and prove each change; never write the checkout.
 def _fix(
     args: argparse.Namespace, config: CliConfig, remote: Remote | None
 ) -> int:
     result, changes = _diff_and_filter(args.old, args.new, config)
     repo = Path(args.repo)
+    target = remote
+    if args.open_pr and target is None:
+        target = _remote(args)
     plan = ProofPlan(
         tests=config.command,
         characterize=config.characterize,
@@ -315,7 +361,7 @@ def _fix(
                     proposal,
                     proof,
                     repo,
-                    remote=remote or GitGhRemote(),
+                    remote=target,
                     required=config.require,
                     allow_below_required=args.allow_below_required,
                     unanalyzed=result.unanalyzed,
