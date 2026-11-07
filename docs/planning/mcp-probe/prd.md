@@ -3,7 +3,7 @@
 - **Slug:** `mcp-probe`
 - **Capability:** T8 in `docs/technical/CAPABILITY_ROADMAP.md` — **final slice, probe mode**
 - **Milestone:** M2.3 in `docs/ROADMAP.md` (Phase 2), final slice
-- **Status:** draft for review
+- **Status:** implemented 2026-11-07 (`src/tenon/probe/`, 1,436 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

@@ -6,6 +6,7 @@
 - **Capability:** **T8 MCP diffs and probe mode** — final slice: **`tenon probe`**
   (`docs/technical/CAPABILITY_ROADMAP.md:14`)
 - **Milestone:** M2.3 (`docs/ROADMAP.md`), final slice
+- **State:** shipped 2026-11-07 (`src/tenon/probe/`, 1,436 tests)
 - **Branch:** `feat/mcp-probe/aliz`
 - **Worktree:** `.claude/worktrees/feat-mcp-probe`
 
