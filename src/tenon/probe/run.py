@@ -5,6 +5,7 @@ from typing import Sequence
 from tenon.probe.agent import AGENT_SPAWN_FAILED, AgentError, PlanCall, run_agent
 from tenon.probe.client import McpStdioClient, ProbeError
 from tenon.probe.report import (
+    MAX_EXCERPT,
     CallReport,
     ExpectationReport,
     ProbeReport,
@@ -45,7 +46,7 @@ def _result_text(result: dict) -> str:
         and entry.get("type") == "text"
         and isinstance(entry.get("text"), str)
     ]
-    return "\n".join(parts)
+    return "".join(parts)[:MAX_EXCERPT]
 
 
 def _error_text(error: ProbeError | AgentError) -> str:

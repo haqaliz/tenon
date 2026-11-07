@@ -13,6 +13,11 @@ def plan(task):
         return None
     if "empty" in text:
         return []
+    if "unknown" in text:
+        return [
+            {"tool": "nope", "arguments": {}},
+            {"tool": "echo", "arguments": {"text": "hello"}},
+        ]
     if "sequence" in text:
         return [
             {"tool": "fail", "arguments": {}},
@@ -20,6 +25,8 @@ def plan(task):
         ]
     if "fail" in text:
         return [{"tool": "fail", "arguments": {}}]
+    if "long" in text:
+        return [{"tool": "echo", "arguments": {"text": "x" * 5000}}]
     return [{"tool": "echo", "arguments": {"text": "hello"}}]
 
 
