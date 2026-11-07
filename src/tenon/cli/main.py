@@ -1,6 +1,7 @@
 """The ``tenon`` command: parse, configure, compose the stages, report."""
 
 import argparse
+import shlex
 import sys
 import tomllib
 from importlib.metadata import PackageNotFoundError, version
@@ -25,6 +26,7 @@ from tenon.locate import (
     locate_ts,
 )
 from tenon.pr import GitGhRemote, Remote, write_pr
+from tenon.probe import load_tasks, probe
 from tenon.propose import propose
 from tenon.prove import ProofPlan, proof_rank, prove_plan
 
@@ -140,6 +142,20 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow a draft PR below the required proof level",
     )
+
+    # Spec AC1: the third subcommand, with no repo/--old/--new.
+    probe_command = commands.add_parser("probe", help="probe an MCP server with an agent")
+    probe_command.add_argument(
+        "--server-cmd", required=True, help="MCP server command, shlex-split"
+    )
+    probe_command.add_argument("--tasks", required=True, help="probe tasks JSON file")
+    probe_command.add_argument(
+        "--agent", required=True, help="agent command, shlex-split"
+    )
+    probe_command.add_argument(
+        "--timeout", type=float, default=30, help="seconds per request (default: 30)"
+    )
+    probe_command.add_argument("--json", action="store_true", help="machine output")
     return parser
 
 
@@ -258,6 +274,16 @@ def _fix(
     return fix_exit(len(changes), results, config.require)
 
 
+# Spec AC1/AC2: split the commands, load the tasks, probe, then render.
+def _probe(args: argparse.Namespace) -> int:
+    server_cmd = shlex.split(args.server_cmd)
+    agent_cmd = shlex.split(args.agent)
+    tasks = load_tasks(args.tasks)
+    report = probe(server_cmd, tasks, agent_cmd, args.timeout)
+    print(report.render_text(), end="")
+    return 0
+
+
 def _fail(
     kind: str,
     message: str,
@@ -287,6 +313,9 @@ def main(argv: Sequence[str] | None = None, *, remote: Remote | None = None) -> 
 
     json_mode = bool(args.json)
     try:
+        # Spec AC1: probe is dispatched before _config, which needs a repo.
+        if args.command == "probe":
+            return _probe(args)
         config = _config(args)
         if args.command == "check":
             return _check(args, config)

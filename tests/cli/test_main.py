@@ -3,8 +3,10 @@
 import importlib
 import json
 import os
+import shlex
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -1165,3 +1167,71 @@ def test_fix_build_only_json_is_byte_stable_across_hash_seeds(
     assert first.stdout == second.stdout
     assert b"TYPES_BUILD_ONLY" in first.stdout
     assert str(a_repo).encode() not in first.stdout
+
+
+PROBE_FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"
+PROBE_SERVER = PROBE_FIXTURES / "probe_server.py"
+PROBE_AGENT = PROBE_FIXTURES / "probe_agent.py"
+PROBE_TASKS = PROBE_FIXTURES / "probe_tasks.json"
+
+
+def a_probe(*extra, tasks=PROBE_TASKS, server=(), agent=(), timeout="5"):
+    return main(
+        [
+            "probe",
+            "--server-cmd",
+            shlex.join([sys.executable, str(PROBE_SERVER), *server]),
+            "--tasks",
+            str(tasks),
+            "--agent",
+            shlex.join([sys.executable, str(PROBE_AGENT), *agent]),
+            "--timeout",
+            timeout,
+            *extra,
+        ]
+    )
+
+
+def a_tasks_file(tmp_path, tasks, name="tasks.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps({"tasks": tasks}), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def a_pass_tasks(tmp_path):
+    return a_tasks_file(
+        tmp_path,
+        [
+            {
+                "name": "echo",
+                "prompt": "Echo hello",
+                "expect": {"tools": ["echo"], "result_contains": "echo:hello"},
+            }
+        ],
+    )
+
+
+# Spec AC1: probe is the third subcommand and its own help is a 0.
+def test_probe_help_returns_zero(capsys):
+    assert main(["probe", "--help"]) == 0
+
+    out = capsys.readouterr().out
+    assert "usage: tenon probe" in out
+    assert "--server-cmd" in out
+    assert "--tasks" in out
+    assert "--agent" in out
+
+
+# Spec AC1: the probe flags are required, and the missing flag is named.
+def test_probe_missing_required_flags_exit_two(capsys):
+    assert main(["probe", "--tasks", str(PROBE_TASKS)]) == 2
+
+    err = capsys.readouterr().err
+    assert "--server-cmd" in err
+    assert "Traceback" not in err
+
+
+# Spec AC2: a valid fake server/agent/tasks run is a 0; probe takes no repo.
+def test_probe_passing_run_exits_zero(a_pass_tasks, capsys):
+    assert a_probe(tasks=a_pass_tasks) == 0
