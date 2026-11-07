@@ -9,6 +9,13 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Sequence
 
+from tenon.corpus import (
+    CorpusError,
+    CorpusRecord,
+    Outcome,
+    append_records,
+    record_id,
+)
 from tenon.detect import (
     Change,
     DiffResult,
@@ -157,6 +164,35 @@ def _parser() -> argparse.ArgumentParser:
         "--timeout", type=float, default=30, help="seconds per request (default: 30)"
     )
     probe_command.add_argument("--json", action="store_true", help="machine output")
+
+    # Spec AC1: the corpus subcommand takes a file, not a repo/spec pair.
+    corpus = commands.add_parser("corpus", help="record and report benchmark runs")
+    corpus_commands = corpus.add_subparsers(
+        dest="corpus_command", required=True
+    )
+    corpus_record = corpus_commands.add_parser("record", help="record a fix run")
+    corpus_record.add_argument(
+        "--from",
+        dest="fix_json",
+        required=True,
+        metavar="FIX_JSON",
+        help="a tenon fix --json file",
+    )
+    corpus_record.add_argument("--repo", required=True, help="repository URL")
+    corpus_record.add_argument("--commit", required=True, help="pinned commit SHA")
+    corpus_record.add_argument(
+        "--outcome",
+        required=True,
+        help="pending, merged, rejected, closed, incident, local_only",
+    )
+    corpus_record.add_argument(
+        "--date", required=True, help="recorded date, YYYY-MM-DD"
+    )
+    corpus_record.add_argument("--corpus", required=True, help="corpus JSONL path")
+    corpus_record.add_argument("--outcome-url", default=None, help="PR/issue URL")
+    corpus_record.add_argument("--notes", default="", help="human context")
+    corpus_record.add_argument("--evidence", default="", help="evidence path or URL")
+    corpus_record.add_argument("--json", action="store_true", help="machine output")
     return parser
 
 
@@ -322,6 +358,98 @@ def _probe(args: argparse.Namespace) -> int:
     return 0 if report.summary.failed == 0 else 1
 
 
+# Spec AC2: the lowercase user token is the CLI spelling of the uppercase enum.
+def _outcome(value: str) -> Outcome:
+    try:
+        return Outcome(value.upper())
+    except (AttributeError, ValueError):
+        raise ValueError(f"unknown outcome: {value}") from None
+
+
+# Spec AC1: read the shipped fix envelope; anything else is one named error.
+def _load_fix_json(path: str) -> dict:
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as error:
+        raise CorpusError(f"cannot read fix JSON {path}: {error}") from error
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise CorpusError(f"{path}: invalid JSON: {error}") from error
+    if not isinstance(payload, dict):
+        raise CorpusError(f"{path}: fix JSON must be a JSON object")
+    if payload.get("command") != "fix":
+        raise CorpusError(f'{path}: not a tenon fix report (command != "fix")')
+    if not isinstance(payload.get("results"), list):
+        raise CorpusError(f"{path}: fix JSON must have a results list")
+    return payload
+
+
+# Spec AC1/AC2: one record per result; the shared flags are carried verbatim.
+def _record_from_fix(
+    result: object, index: int, args: argparse.Namespace, outcome: Outcome
+) -> CorpusRecord:
+    if not isinstance(result, dict):
+        raise CorpusError(f"fix JSON result {index} must be an object")
+    for key in ("change", "proposal", "proof"):
+        if not isinstance(result.get(key), dict):
+            raise CorpusError(f"fix JSON result {index}: {key} must be a mapping")
+    pr = result.get("pr")
+    if pr is not None and not isinstance(pr, dict):
+        raise CorpusError(
+            f"fix JSON result {index}: pr must be a mapping or null"
+        )
+    change = result["change"]
+    proposal = result["proposal"]
+    return CorpusRecord(
+        id=record_id(args.repo, args.commit, change, proposal),
+        repo=args.repo,
+        commit=args.commit,
+        change=change,
+        proposal=proposal,
+        proof=result["proof"],
+        pr=pr,
+        outcome=outcome,
+        recorded=args.date,
+        outcome_url=args.outcome_url,
+        notes=args.notes,
+        evidence=args.evidence,
+    )
+
+
+# Spec AC1: build every record before appending, so a bad result appends nothing.
+def _corpus_record(args: argparse.Namespace) -> int:
+    payload = _load_fix_json(args.fix_json)
+    outcome = _outcome(args.outcome)
+    records = tuple(
+        _record_from_fix(result, index, args, outcome)
+        for index, result in enumerate(payload["results"], start=1)
+    )
+    append_records(args.corpus, records)
+    ids = [record.id for record in records]
+    if args.json:
+        print(
+            json.dumps(
+                {"ids": ids},
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+    else:
+        print("\n".join(ids))
+    return 0
+
+
+# Spec AC2/AC7: every corpus failure is exit 2 with one named message.
+def _corpus(args: argparse.Namespace) -> int:
+    json_mode = bool(args.json)
+    try:
+        return _corpus_record(args)
+    except (CorpusError, ValueError, OSError) as error:
+        return _fail("corpus", str(error), json_mode=json_mode)
+
+
 def _fail(
     kind: str,
     message: str,
@@ -351,7 +479,9 @@ def main(argv: Sequence[str] | None = None, *, remote: Remote | None = None) -> 
 
     json_mode = bool(args.json)
     try:
-        # Spec AC1: probe is dispatched before _config, which needs a repo.
+        # Spec AC1: corpus and probe are dispatched before _config, which needs a repo.
+        if args.command == "corpus":
+            return _corpus(args)
         if args.command == "probe":
             return _probe(args)
         config = _config(args)

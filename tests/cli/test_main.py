@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from tenon.cli import main
+from tenon.corpus import Outcome, load_corpus, record_id
 from tenon.detect import diff, diff_mcp, load, load_mcp
 from tenon.pr import PrDraft, PrRefusal, PrResult, PrStatus
 from tenon.prove import CheckResult, ProofLevel, ProofPlan, ProofResult
@@ -1386,3 +1387,325 @@ def test_probe_non_numeric_timeout_is_usage(a_pass_tasks, capsys):
     err = capsys.readouterr().err
     assert "--timeout" in err
     assert "Traceback" not in err
+
+
+CORPUS_REPO = "https://github.com/o/r"
+CORPUS_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+CORPUS_CHANGE = {
+    "kind": "renamed",
+    "location": {
+        "method": "post",
+        "path": "/v1/checkout/sessions",
+        "pointer": (
+            "#/paths/~1v1~1checkout~1sessions/post/requestBody/content/"
+            "application~1x-www-form-urlencoded/schema/properties"
+        ),
+    },
+    "before": "payment_method_types",
+    "after": "allowed_payment_method_types",
+    "breaking": True,
+    "confidence": "inferred",
+}
+CORPUS_DIFF = (
+    "--- a/app.py\n"
+    "+++ b/app.py\n"
+    "@@ -4,7 +4,7 @@\n"
+    '-    payment_method_types=["card"],\n'
+    '+    allowed_payment_method_types=["card"],\n'
+)
+CORPUS_PROPOSAL = {
+    "change": CORPUS_CHANGE,
+    "edits": [
+        {
+            "path": "app.py",
+            "line": 7,
+            "column": 13,
+            "shape": "keyword",
+            "old": "payment_method_types",
+            "new": "allowed_payment_method_types",
+        }
+    ],
+    "skipped": [],
+    "files": ["app.py"],
+    "diff": CORPUS_DIFF,
+    "reason": None,
+}
+CORPUS_PROOF = {
+    "level": "TESTS_PASSED",
+    "cause": None,
+    "baseline": {
+        "kind": "baseline",
+        "stage": "TESTS",
+        "command": ["pytest", "tests/test_app.py", "-q"],
+        "returncode": 0,
+        "timed_out": False,
+        "stdout_tail": "1 passed",
+        "stderr_tail": "",
+    },
+    "after": {
+        "kind": "after",
+        "stage": "TESTS",
+        "command": ["pytest", "tests/test_app.py", "-q"],
+        "returncode": 0,
+        "timed_out": False,
+        "stdout_tail": "1 passed",
+        "stderr_tail": "",
+    },
+    "patch_applied": True,
+    "checks": [],
+}
+SECOND_CHANGE = {**CORPUS_CHANGE, "before": "currency", "after": "currency_code"}
+SECOND_PROPOSAL = {
+    **CORPUS_PROPOSAL,
+    "change": SECOND_CHANGE,
+    "edits": [
+        {
+            **CORPUS_PROPOSAL["edits"][0],
+            "path": "other.py",
+            "line": 12,
+            "old": "currency",
+            "new": "currency_code",
+        }
+    ],
+    "files": ["other.py"],
+    "diff": (
+        "--- a/other.py\n"
+        "+++ b/other.py\n"
+        "@@ -10,7 +10,7 @@\n"
+        '-    currency="usd",\n'
+        '+    currency_code="usd",\n'
+    ),
+}
+
+
+def a_corpus_result(**overrides):
+    """One result shaped exactly like ``render_fix_json`` output."""
+    values = {
+        "change": CORPUS_CHANGE,
+        "locate": {
+            "change": CORPUS_CHANGE,
+            "certain": [],
+            "ambiguous": [],
+            "reason": None,
+        },
+        "proposal": CORPUS_PROPOSAL,
+        "proof": CORPUS_PROOF,
+        "pr": None,
+    }
+    values.update(overrides)
+    return values
+
+
+def a_fix_json(tmp_path, *results, name="fix.json"):
+    payload = {
+        "command": "fix",
+        "results": list(results),
+        "summary": {"changes": len(results)},
+    }
+    path = tmp_path / name
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def a_corpus_record(fix, corpus, *extra, outcome="local_only", date="2026-11-07"):
+    return main(
+        [
+            "corpus",
+            "record",
+            "--from",
+            str(fix),
+            "--repo",
+            CORPUS_REPO,
+            "--commit",
+            CORPUS_COMMIT,
+            "--outcome",
+            outcome,
+            "--date",
+            date,
+            "--corpus",
+            str(corpus),
+            *extra,
+        ]
+    )
+
+
+# Spec AC1: a valid two-result fix report appends one deterministic record each.
+def test_corpus_record_appends_one_record_per_result(tmp_path, capsys):
+    fix = a_fix_json(
+        tmp_path,
+        a_corpus_result(),
+        a_corpus_result(change=SECOND_CHANGE, proposal=SECOND_PROPOSAL),
+    )
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert (
+        a_corpus_record(
+            fix,
+            corpus,
+            "--outcome-url",
+            "https://github.com/o/r/pull/1",
+            "--notes",
+            "focused test",
+            "--evidence",
+            "docs/evidence.md",
+        )
+        == 0
+    )
+
+    records = load_corpus(corpus)
+    assert len(records) == 2
+    first, second = records
+    assert first.id == record_id(
+        CORPUS_REPO, CORPUS_COMMIT, CORPUS_CHANGE, CORPUS_PROPOSAL
+    )
+    assert second.id == record_id(
+        CORPUS_REPO, CORPUS_COMMIT, SECOND_CHANGE, SECOND_PROPOSAL
+    )
+    assert first.id != second.id
+    assert (first.repo, first.commit) == (CORPUS_REPO, CORPUS_COMMIT)
+    assert (first.change, first.proposal, first.proof) == (
+        CORPUS_CHANGE,
+        CORPUS_PROPOSAL,
+        CORPUS_PROOF,
+    )
+    assert first.pr is None
+    assert first.outcome is Outcome.LOCAL_ONLY
+    assert first.recorded == "2026-11-07"
+    assert first.outcome_url == "https://github.com/o/r/pull/1"
+    assert first.notes == "focused test"
+    assert first.evidence == "docs/evidence.md"
+    assert capsys.readouterr().out == f"{first.id}\n{second.id}\n"
+
+
+# Spec AC1: --json lists the recorded ids as one object.
+def test_corpus_record_json_lists_the_ids(tmp_path, capsys):
+    fix = a_fix_json(
+        tmp_path,
+        a_corpus_result(),
+        a_corpus_result(change=SECOND_CHANGE, proposal=SECOND_PROPOSAL),
+    )
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus, "--json") == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.loads(captured.out) == {
+        "ids": [
+            record_id(CORPUS_REPO, CORPUS_COMMIT, CORPUS_CHANGE, CORPUS_PROPOSAL),
+            record_id(
+                CORPUS_REPO, CORPUS_COMMIT, SECOND_CHANGE, SECOND_PROPOSAL
+            ),
+        ]
+    }
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC1/AC2: every lowercase outcome token maps to the uppercase enum.
+@pytest.mark.parametrize(
+    "token", ["pending", "merged", "rejected", "closed", "incident", "local_only"]
+)
+def test_corpus_record_maps_every_outcome_token(tmp_path, capsys, token):
+    fix = a_fix_json(tmp_path, a_corpus_result())
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus, outcome=token) == 0
+
+    (record,) = load_corpus(corpus)
+    assert record.outcome.value == token.upper()
+
+
+# Spec AC2: a non-fix report, a missing results list, a missing result key and
+# a non-object result are named errors that append nothing.
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"command": "check", "results": []}, 'command != "fix"'),
+        ({"command": "fix"}, "results list"),
+        (
+            {"command": "fix", "results": [{"change": {}, "proposal": {}}]},
+            "proof must be a mapping",
+        ),
+        ({"command": "fix", "results": ["not an object"]}, "must be an object"),
+    ],
+)
+def test_corpus_record_bad_fix_json_appends_nothing(
+    tmp_path, capsys, payload, message
+):
+    fix = tmp_path / "fix.json"
+    fix.write_text(json.dumps(payload), encoding="utf-8")
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus) == 2
+
+    captured = capsys.readouterr()
+    assert message in captured.err
+    assert "Traceback" not in captured.err
+    assert not corpus.exists()
+
+
+# Spec AC2: a malformed fix JSON body is a named error, not a traceback.
+def test_corpus_record_invalid_json_is_a_named_error(tmp_path, capsys):
+    fix = tmp_path / "fix.json"
+    fix.write_text("{", encoding="utf-8")
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus) == 2
+
+    captured = capsys.readouterr()
+    assert "invalid JSON" in captured.err
+    assert "Traceback" not in captured.err
+    assert not corpus.exists()
+
+
+# Spec AC2: a missing fix file is a named error.
+def test_corpus_record_missing_fix_file_exits_two(tmp_path, capsys):
+    assert a_corpus_record(tmp_path / "missing.json", tmp_path / "corpus.jsonl") == 2
+
+    err = capsys.readouterr().err
+    assert "cannot read fix JSON" in err
+    assert "Traceback" not in err
+
+
+# Spec AC2: a date that is not a real YYYY-MM-DD appends nothing.
+@pytest.mark.parametrize("date", ["2026-13-01", "07/11/2026", "2026-1-1"])
+def test_corpus_record_bad_date_exits_two(tmp_path, capsys, date):
+    fix = a_fix_json(tmp_path, a_corpus_result())
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus, date=date) == 2
+
+    captured = capsys.readouterr()
+    assert "YYYY-MM-DD" in captured.err
+    assert "Traceback" not in captured.err
+    assert not corpus.exists()
+
+
+# Spec AC2: an unknown outcome token appends nothing.
+def test_corpus_record_unknown_outcome_exits_two(tmp_path, capsys):
+    fix = a_fix_json(tmp_path, a_corpus_result())
+    corpus = tmp_path / "corpus.jsonl"
+
+    assert a_corpus_record(fix, corpus, outcome="bogus") == 2
+
+    captured = capsys.readouterr()
+    assert "unknown outcome" in captured.err
+    assert "Traceback" not in captured.err
+    assert not corpus.exists()
+
+
+# Spec AC2/AC7: a --json error is one object on stdout, never a traceback.
+def test_corpus_record_json_error_is_one_object(tmp_path, capsys):
+    fix = a_fix_json(tmp_path, a_corpus_result())
+
+    assert a_corpus_record(
+        fix, tmp_path / "corpus.jsonl", "--json", outcome="bogus"
+    ) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "corpus"
+    assert "unknown outcome" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
