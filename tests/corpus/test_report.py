@@ -240,6 +240,15 @@ def test_text_is_stable():
     assert benchmark(records).render_text() == benchmark(records).render_text()
 
 
+# Spec: the package exports the report surface.
+def test_package_exports_the_report_surface():
+    import tenon.corpus as corpus
+
+    assert corpus.LevelStats is LevelStats
+    assert corpus.CorpusReport is CorpusReport
+    assert corpus.benchmark is benchmark
+
+
 # Spec AC4: an empty corpus is a valid report with null rates.
 def test_empty_corpus_is_a_valid_report():
     report = benchmark([])

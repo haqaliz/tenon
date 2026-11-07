@@ -301,6 +301,9 @@ def test_package_exports_the_public_surface():
         "load_corpus",
         "append_records",
         "update_outcome",
+        "LevelStats",
+        "CorpusReport",
+        "benchmark",
     }
     assert corpus.Outcome is Outcome
     assert corpus.CorpusRecord is CorpusRecord
