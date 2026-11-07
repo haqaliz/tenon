@@ -491,7 +491,7 @@ def _bundle_config(bundle: MigrationBundle, args: argparse.Namespace) -> CliConf
     return overrides(config, command=args.check, require=args.require)
 
 
-# Spec AC1/AC2: one bundle, one repo, the shipped fix pipeline.
+# Spec AC1/AC2/AC4: one bundle, one repo, the shipped fix pipeline.
 def _provider(args: argparse.Namespace, remote: Remote | None) -> int:
     repo = Path(args.repo)
     if not repo.is_dir():
