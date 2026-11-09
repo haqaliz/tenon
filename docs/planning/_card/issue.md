@@ -6,6 +6,7 @@
 - **Capability:** **T10 Provider layer and GitHub App (hosted)** — third slice: **local multi-repo
   fan-out** (`docs/technical/CAPABILITY_ROADMAP.md:16`)
 - **Milestone:** Phase 3 (`docs/ROADMAP.md`), third slice
+- **State:** shipped 2026-11-09 (`src/tenon/provider/repos.py`, CLI; 1,774 tests)
 - **Branch:** `feat/provider-fanout/aliz`
 - **Worktree:** `.claude/worktrees/feat-provider-fanout`
 
