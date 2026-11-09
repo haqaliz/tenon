@@ -374,9 +374,8 @@ def _check(args: argparse.Namespace, config: CliConfig) -> int:
     return check_exit(located)
 
 
-# Spec AC1/AC2/AC3: the gh default, or the app remote from flags/env.
+# Spec AC2: the app identity from flags/env, shared by the remote and --installed.
 def _app(args: argparse.Namespace) -> tuple[GitHubAppToken, str]:
-    """The app identity from flags/env, shared by the remote and --installed."""
     app_id = args.app_id or os.environ.get("TENON_GITHUB_APP_ID")
     installation_id = args.app_installation_id or os.environ.get(
         "TENON_GITHUB_APP_INSTALLATION_ID"
@@ -421,6 +420,7 @@ def _app(args: argparse.Namespace) -> tuple[GitHubAppToken, str]:
     )
 
 
+# Spec AC1/AC3: the gh default, or the app remote built from that identity.
 def _remote(args: argparse.Namespace) -> Remote:
     if args.remote != "app":
         return GitGhRemote()

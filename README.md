@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -15,8 +15,9 @@ affected calls, and proves the fix against your own checks before it opens a pul
 **T1 (change detection), T2 (Python call-site location), T3 (patch proposal), T4 (proof runner),
 T5 (PR writer), T6 (TypeScript/JavaScript call-site location), T7 (proof ladder), T8 (MCP
 tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark corpus), T10a (GitHub
-App remote), T10b (provider migration bundle), T10c (local provider fan-out) and the `tenon check` /
-`tenon fix` / `tenon provider migrate` / `tenon probe` / `tenon corpus` CLI are shipped.**
+App remote), T10b (provider migration bundle), T10c (local provider fan-out), T10d (installed
+provider fan-out) and the `tenon check` / `tenon fix` / `tenon provider migrate` / `tenon probe` /
+`tenon corpus` CLI are shipped.**
 `src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed
 `Change` records; `src/tenon/locate/` turns one of those records into call sites with file, line and
 column, and keeps anything it cannot prove in a separate ambiguity list — Python via `ast`,
@@ -49,6 +50,8 @@ uv run tenon provider migrate path/to/customer-repo \
     --bundle stripe-v2500-v2596.json --open-pr --remote app
 uv run tenon provider migrate --repos repos.txt \
     --bundle stripe-v2500-v2596.json --open-pr --remote app
+uv run tenon provider migrate --installed \
+    --bundle stripe-v2500-v2596.json --open-pr --remote app
 uv run tenon probe \
     --server-cmd "python server.py" --tasks tasks.json --agent "python agent.py"
 uv run tenon corpus report --corpus docs/benchmark/corpus.jsonl
@@ -58,7 +61,8 @@ uv run tenon corpus report --corpus docs/benchmark/corpus.jsonl
 and `--open-pr` opens a PR whose title states the level. `--require` chooses the level a run must
 reach; `--build`/`--characterize`/`--replay` add the weaker stages; `--source mcp` selects the MCP
 loader/differ/locator. `provider migrate` runs the same pipeline from a portable JSON bundle and
-prints a provider report; `--repos FILE` runs it once per listed checkout. `probe` starts a local MCP
+prints a provider report; `--repos FILE` runs it once per listed checkout, and `--installed`
+discovers and runs it over the app installation's non-archived repositories. `probe` starts a local MCP
 server over stdio, runs the task file through your agent command and reports what worked (exit 0 all
 tasks, 1 a failed task, 2 usage/connection).
 `corpus` records a `fix --json` run, updates a human outcome and reports by level/outcome. `--json`
@@ -99,15 +103,16 @@ The inputs are flags or environment variables; a flag wins:
 
 The private key is read from a path; key content is never read from the environment. `--remote`
 requires `--open-pr`, and `--remote gh` (the default) keeps the existing `gh` path. The app remote is
-self-hosted: webhook/installation discovery, installed fan-out and a hosted service (T10d) are
-deferred. `--api-url` also targets a self-hosted GitHub Enterprise endpoint.
+self-hosted: webhooks and a hosted service are deferred, while `--installed` uses the same app
+identity for discovery and cloning. `--api-url` also targets a self-hosted GitHub Enterprise endpoint.
 
 ### Provider migration bundle
 
-A provider can package one migration as a JSON bundle and run it against one local checkout or a
-list of checkouts with `tenon provider migrate [<repo>|--repos FILE] --bundle PATH`. The bundle
-names the provider and migration, the source and language, the two spec files (resolved relative to
-the bundle), the locate config, the required proof level and the optional stage commands:
+A provider can package one migration as a JSON bundle and run it against one local checkout, a list
+of checkouts or the app installation with
+`tenon provider migrate [<repo>|--repos FILE|--installed] --bundle PATH`. The bundle names the
+provider and migration, the source and language, the two spec files (resolved relative to the
+bundle), the locate config, the required proof level and the optional stage commands:
 
 ```json
 {
@@ -141,10 +146,10 @@ the fix report; `--json` wraps the fix results and summary in a provider envelop
 uses the same T5 guardrails and gh/app remote. A bundle never upgrades the proof level: `require`
 is the bar and `fix_exit` decides whether it was met.
 
-`<repo>` and `--repos FILE` are mutually exclusive and exactly one is required. The repos file is
-UTF-8 text with one local path per line; blank lines and lines whose stripped form starts with `#`
-are ignored, `~` is expanded and relative paths resolve against the file's parent. A missing or
-unreadable file, a non-file, or an empty list exits 2.
+`<repo>`, `--repos FILE` and `--installed` are mutually exclusive and exactly one is required. The
+repos file is UTF-8 text with one local path per line; blank lines and lines whose stripped form
+starts with `#` are ignored, `~` is expanded and relative paths resolve against the file's parent. A
+missing or unreadable file, a non-file, or an empty list exits 2.
 
 `tenon provider migrate --repos FILE --bundle PATH` runs the bundle once per listed checkout. The
 bundle and its `CliConfig` are loaded once, so `--check`/`--require` apply to every repo; when
@@ -157,11 +162,24 @@ Repos run sequentially in file order. A listed path that is not a directory is a
 when every repo meets the requirement and every requested PR opened, 1 when any repo failed, and 2
 on usage/bundle/repos-file/global spec/config errors (a shared spec refusal aborts the whole run).
 
+`tenon provider migrate --installed --bundle PATH` discovers the app installation's non-archived
+repositories through `GET /installation/repositories` (paginated, API order) and runs the bundle
+over them. It uses the app identity above from flags or `TENON_GITHUB_APP_*`/`TENON_GITHUB_API_URL`;
+missing inputs or an unreadable key exit 2. `--remote gh` is rejected (`--installed requires
+--remote app`), and `--remote` is otherwise only meaningful with `--open-pr`. The installation token
+is minted once and shared by discovery, every clone and, under `--open-pr`, one `GitHubAppRemote`
+built from that same token; without `--open-pr` the run is a dry run with no PR call. Each repo is
+cloned with the app credential helper into a temp checkout (the token is in the git child's
+environment, never argv or the URL) and the temp dir is removed even when the clone fails; the
+pipeline runs in that checkout, so no local path is written. A repo whose clone fails is a per-repo
+`error: ...` and the remaining repos still run; a token or discovery failure aborts with exit 2. The
+report, summary and exits are the `--repos` fan-out's, with `repo` = `owner/name`.
+
 The fan-out has no rollback: earlier repos may already have branches or PRs when a later repo fails,
 and the report names every repo. It is sequential and mints one app token per run; parallelism,
-retries, installed/hosted fan-out (installation discovery, webhooks, a database, deployment — T10d)
-and a provider note in the PR body are deferred. The bundle and repos file are trusted operator
-input, not a sandbox: their stage commands run as given.
+retries, repo filtering, webhooks/a hosted service and a provider note in the PR body are deferred.
+The bundle and repos file are trusted operator input, not a sandbox: their stage commands run as
+given.
 
 `uv run pytest` — no network, no model calls.
 
