@@ -1,11 +1,16 @@
 """The installation lister and the authenticated temp clone, with no network."""
 
 import json
+import os
+import subprocess
+from pathlib import Path
 
 import pytest
 
 from tenon.pr.api import GitHubApi, GitHubApiError
-from tenon.pr.installed import InstalledRepo, list_installation_repos
+from tenon.pr.github_app import CREDENTIAL_HELPER
+from tenon.pr.installed import InstalledRepo, clone_repo, list_installation_repos
+from tenon.pr.remote import RemoteError
 
 API = "https://api.github.com"
 TOKEN = "ghs_test"
@@ -45,6 +50,26 @@ def a_page(*repos):
 def a_lister(*responses):
     transport = FakeTransport(*responses)
     return GitHubApi(transport=transport), transport
+
+
+def a_completed(argv=("git",), returncode=0, stdout="", stderr=""):
+    return subprocess.CompletedProcess(list(argv), returncode, stdout, stderr)
+
+
+class FakeRunner:
+    """Returns queued results and records every call, like subprocess.run."""
+
+    def __init__(self, *responses, default=None):
+        self.calls = []
+        self.responses = list(responses)
+        self.default = default if default is not None else a_completed()
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append((argv, kwargs))
+        response = self.responses.pop(0) if self.responses else self.default
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
 
 # Spec AC1: one page returns the repos in order with full_name/clone_url.
@@ -230,3 +255,124 @@ def test_the_page_cap_is_a_named_error():
 def test_an_installed_repo_refuses_blank_fields(full_name, clone_url):
     with pytest.raises(ValueError):
         InstalledRepo(full_name, clone_url)
+
+
+# Spec AC5: a real clone lands the fixture files and is removed on exit.
+def test_a_real_clone_lands_the_repo_and_is_removed_on_exit(repo_with_remote):
+    repo = InstalledRepo("acme/widgets", str(repo_with_remote.work))
+
+    with clone_repo(repo, TOKEN) as checkout:
+        assert checkout.name.startswith("tenon-installed-")
+        assert (checkout / "acme" / "client.py").is_file()
+        assert (checkout / ".git").is_dir()
+
+    assert not checkout.exists()
+
+
+# Spec AC5/AC6: the argv carries the helper and URL, never the token; the token
+# is only in the child env.
+def test_the_clone_argv_and_env_carry_no_token_in_argv():
+    runner = FakeRunner()
+    repo = InstalledRepo("acme/widgets", "https://github.com/acme/widgets.git")
+
+    with clone_repo(repo, TOKEN, runner=runner) as checkout:
+        argv, kwargs = runner.calls[0]
+        assert argv == [
+            "git",
+            "-c",
+            f"credential.helper={CREDENTIAL_HELPER}",
+            "clone",
+            "--depth",
+            "1",
+            "--",
+            repo.clone_url,
+            str(checkout),
+        ]
+        assert TOKEN not in " ".join(argv)
+        assert kwargs["capture_output"] is True
+        assert kwargs["text"] is True
+        assert kwargs["shell"] is False
+        assert kwargs["timeout"] == 30
+        assert kwargs["env"]["TENON_GITHUB_TOKEN"] == TOKEN
+        assert kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+        assert kwargs["env"]["PATH"] == os.environ["PATH"]
+
+
+# Spec AC6: a failing clone names the repo and removes the temp dir.
+def test_a_failing_clone_names_the_repo_and_removes_the_dir():
+    runner = FakeRunner(
+        a_completed(returncode=128, stderr="fatal: repository not found\n")
+    )
+    repo = InstalledRepo("acme/widgets", "https://github.com/acme/widgets.git")
+
+    with pytest.raises(RemoteError) as raised:
+        with clone_repo(repo, TOKEN, runner=runner):
+            pass
+
+    argv, _ = runner.calls[0]
+    assert repo.full_name in raised.value.detail
+    assert "repository not found" in raised.value.detail
+    assert not Path(argv[-1]).exists()
+
+
+# Spec AC6: a missing clone URL is a named RemoteError and the dir is removed.
+def test_a_missing_clone_url_is_a_named_error_and_removes_the_dir(
+    tmp_path, monkeypatch
+):
+    created = []
+
+    def a_mkdtemp(prefix):
+        path = tmp_path / f"{prefix}{len(created)}"
+        path.mkdir()
+        created.append(path)
+        return str(path)
+
+    monkeypatch.setattr("tenon.pr.installed.tempfile.mkdtemp", a_mkdtemp)
+    repo = InstalledRepo("acme/widgets", str(tmp_path / "missing"))
+
+    with pytest.raises(RemoteError) as raised:
+        with clone_repo(repo, TOKEN):
+            pass
+
+    assert repo.full_name in raised.value.detail
+    assert created and not created[0].exists()
+
+
+# Spec AC6: the token in the git stderr is scrubbed, never returned.
+def test_a_clone_failure_scrubs_the_token():
+    runner = FakeRunner(
+        a_completed(
+            returncode=128,
+            stderr=(
+                "fatal: unable to access "
+                f"'https://x-access-token:{TOKEN}@github.com/acme/widgets.git'\n"
+            ),
+        )
+    )
+    repo = InstalledRepo("acme/widgets", "https://github.com/acme/widgets.git")
+
+    with pytest.raises(RemoteError) as raised:
+        with clone_repo(repo, TOKEN, runner=runner):
+            pass
+
+    assert TOKEN not in raised.value.detail
+    assert "***" in raised.value.detail
+
+
+# Spec AC6: a timeout or OSError is a named RemoteError and still cleans up.
+@pytest.mark.parametrize(
+    "failure",
+    [subprocess.TimeoutExpired(["git"], 30), OSError("boom")],
+    ids=["timeout", "oserror"],
+)
+def test_a_clone_that_cannot_run_is_a_named_error(failure):
+    runner = FakeRunner(failure)
+    repo = InstalledRepo("acme/widgets", "https://github.com/acme/widgets.git")
+
+    with pytest.raises(RemoteError) as raised:
+        with clone_repo(repo, TOKEN, runner=runner):
+            pass
+
+    argv, _ = runner.calls[0]
+    assert repo.full_name in raised.value.detail
+    assert not Path(argv[-1]).exists()

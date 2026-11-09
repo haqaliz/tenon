@@ -11,7 +11,7 @@ from .remote import RemoteError
 _ORIGIN = re.compile(
     r"^(?:https://github\.com/|git@github\.com:)([^/\s]+)/([^/\s]+?)(?:\.git)?$"
 )
-_CREDENTIAL_HELPER = (
+CREDENTIAL_HELPER = (
     '!f() { echo "username=x-access-token"; '
     'echo "password=$TENON_GITHUB_TOKEN"; }; f'
 )
@@ -104,7 +104,7 @@ class GitHubAppRemote:
     def push(self, repo: str | Path, branch: str) -> None:
         token = self._token()
         completed = self._invoke(
-            ["git", "-c", _CREDENTIAL_HELPER, "push", "origin", branch],
+            ["git", "-c", CREDENTIAL_HELPER, "push", "origin", branch],
             repo=repo,
             env={"TENON_GITHUB_TOKEN": token, "GIT_TERMINAL_PROMPT": "0"},
         )
