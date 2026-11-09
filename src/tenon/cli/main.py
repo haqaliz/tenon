@@ -58,11 +58,14 @@ from .config import (
 )
 from .report import (
     FixResult,
+    ProviderRepoResult,
     check_exit,
     fix_exit,
     render_check_json,
     render_check_text,
     render_error,
+    render_fanout_json,
+    render_fanout_text,
     render_fix_json,
     render_fix_text,
     render_provider_json,
@@ -503,10 +506,14 @@ def _fanout(args: argparse.Namespace, remote: Remote | None) -> int:
     target = remote
     if args.open_pr and target is None:
         target = _remote(args)
-    exit_code = 0
+    outcomes = []
     for repo in repos:
         if not repo.is_dir():
-            exit_code = 1
+            outcomes.append(
+                ProviderRepoResult(
+                    repo=str(repo), results=(), exit=1, error="not a directory"
+                )
+            )
             continue
         changes, results = _fix_results(
             repo,
@@ -517,9 +524,20 @@ def _fanout(args: argparse.Namespace, remote: Remote | None) -> int:
             open_pr=args.open_pr,
             allow_below=args.allow_below_required,
         )
-        exit_code = exit_code or fix_exit(len(changes), results, config.require)
-        print(render_fix_text(results), end="")
-    return exit_code
+        outcomes.append(
+            ProviderRepoResult(
+                repo=str(repo),
+                results=tuple(results),
+                exit=fix_exit(len(changes), results, config.require),
+            )
+        )
+    text = (
+        render_fanout_json(bundle.provider, bundle.migration, outcomes)
+        if args.json
+        else render_fanout_text(bundle.provider, bundle.migration, outcomes)
+    )
+    print(text, end="")
+    return 0 if all(outcome.exit == 0 for outcome in outcomes) else 1
 
 
 # Spec AC1/AC2/AC4: one bundle, one repo, the shipped fix pipeline.

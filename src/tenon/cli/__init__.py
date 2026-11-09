@@ -2,6 +2,7 @@ from .config import CliConfig, load_cli_config, overrides, resolve_config_path
 from .main import main
 from .report import (
     FixResult,
+    ProviderRepoResult,
     check_exit,
     fix_exit,
     fix_result_dict,
@@ -9,6 +10,8 @@ from .report import (
     render_check_json,
     render_check_text,
     render_error,
+    render_fanout_json,
+    render_fanout_text,
     render_fix_json,
     render_fix_text,
     render_provider_json,
@@ -18,6 +21,7 @@ from .report import (
 __all__ = [
     "CliConfig",
     "FixResult",
+    "ProviderRepoResult",
     "check_exit",
     "fix_exit",
     "fix_result_dict",
@@ -28,6 +32,8 @@ __all__ = [
     "render_check_json",
     "render_check_text",
     "render_error",
+    "render_fanout_json",
+    "render_fanout_text",
     "render_fix_json",
     "render_fix_text",
     "render_provider_json",

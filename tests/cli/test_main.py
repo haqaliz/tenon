@@ -2060,6 +2060,128 @@ def test_fanout_missing_directory_fails_while_the_other_repo_runs(tmp_path, caps
     assert "Proof: TESTS_PASSED" in out
 
 
+# Spec AC4: the text has the provider header, one block per repo and the summary.
+def test_fanout_text_has_the_header_blocks_and_summary(tmp_path, capsys):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path)
+    repos = a_repos_file(tmp_path, first, second)
+
+    assert a_fanout(bundle, repos) == 0
+
+    out = capsys.readouterr().out
+    assert out.startswith("provider: acme\nmigration: amount-cents\n\n")
+    assert out.count(f"repo: {first}\n") == 1
+    assert out.count(f"repo: {second}\n") == 1
+    assert f"\n\nrepo: {second}\n" in out
+    assert out.count("Proof: TESTS_PASSED") == 2
+    assert out.endswith("repos: 2, passed: 2, failed: 0\n")
+
+
+# Spec AC2/AC4: a repo that did not run is one named error block, not a fake report.
+def test_fanout_text_names_a_missing_directory_and_counts_it(tmp_path, capsys):
+    first, _second = a_repo_copies(tmp_path)
+    missing = tmp_path / "missing"
+    bundle = a_bundle(tmp_path)
+    repos = a_repos_file(tmp_path, missing, first)
+
+    assert a_fanout(bundle, repos) == 1
+
+    out = capsys.readouterr().out
+    assert f"repo: {missing}\nerror: not a directory" in out
+    assert out.endswith("repos: 2, passed: 1, failed: 1\n")
+
+
+# Spec AC3: the fan-out envelope has exactly the shipped top-level and per-repo keys.
+def test_fanout_json_has_the_exact_envelope(tmp_path, capsys):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path)
+    repos = a_repos_file(tmp_path, first, second)
+
+    assert a_fanout(bundle, repos, "--json") == 0
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert set(payload) == {"command", "provider", "migration", "repos", "summary"}
+    assert payload["command"] == "provider"
+    assert payload["provider"] == "acme"
+    assert payload["migration"] == "amount-cents"
+    assert [repo["repo"] for repo in payload["repos"]] == [str(first), str(second)]
+    for repo in payload["repos"]:
+        assert set(repo) == {"repo", "results", "summary", "exit", "error"}
+        (result,) = repo["results"]
+        assert set(result) == {"change", "locate", "proposal", "proof", "pr"}
+        assert result["proof"]["level"] == "TESTS_PASSED"
+        assert repo["summary"]["passed"] == 1
+        assert repo["exit"] == 0
+        assert repo["error"] is None
+    assert payload["summary"] == {"repos": 2, "passed": 2, "failed": 0}
+    assert out.count("\n") == 1
+
+
+# Spec AC3: a repo that did not run has a zero fix summary, not an invented one.
+def test_fanout_json_zero_summary_for_a_repo_that_did_not_run(tmp_path, capsys):
+    missing = tmp_path / "missing"
+    bundle = a_bundle(tmp_path)
+    repos = a_repos_file(tmp_path, missing)
+
+    assert a_fanout(bundle, repos, "--json") == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    (repo,) = payload["repos"]
+    assert repo["repo"] == str(missing)
+    assert repo["results"] == []
+    assert repo["summary"] == {
+        "changes": 0,
+        "proposals": 0,
+        "passed": 0,
+        "characterized": 0,
+        "replayed": 0,
+        "build_only": 0,
+        "unverified": 0,
+        "prs_opened": 0,
+        "prs_refused": 0,
+    }
+    assert repo["exit"] == 1
+    assert repo["error"] == "not a directory"
+    assert payload["summary"] == {"repos": 1, "passed": 0, "failed": 1}
+
+
+def a_run_module_fanout(bundle, repos, seed):
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tenon",
+            "provider",
+            "migrate",
+            "--bundle",
+            str(bundle),
+            "--repos",
+            str(repos),
+            "--json",
+        ],
+        capture_output=True,
+        env={**os.environ, "PYTHONHASHSEED": seed},
+    )
+
+
+# Spec AC3: the fan-out JSON is byte-identical across hash seeds.
+def test_fanout_json_is_byte_stable_across_hash_seeds(tmp_path):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path)
+    repos = a_repos_file(tmp_path, first, second)
+
+    zero = a_run_module_fanout(bundle, repos, "0")
+    one = a_run_module_fanout(bundle, repos, "1")
+
+    assert zero.returncode == 0
+    assert one.returncode == 0
+    assert zero.stdout == one.stdout
+    assert b'"command":"provider"' in zero.stdout
+    assert b'"repos":[' in zero.stdout
+    assert str(first).encode() in zero.stdout
+
+
 PROBE_FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"
 PROBE_SERVER = PROBE_FIXTURES / "probe_server.py"
 PROBE_AGENT = PROBE_FIXTURES / "probe_agent.py"
