@@ -3,9 +3,9 @@
 Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR), T6
 (locate, TypeScript/JavaScript), T7 (proof ladder), T8a (MCP tool-schema diffs), T8b (Python MCP
 tool-call locator), T8c (`tenon probe`), T9 (benchmark corpus), T10a (GitHub App remote), T10b
-(provider migration bundle) and the `tenon check` / `tenon fix` / `tenon provider migrate` /
-`tenon probe` / `tenon corpus` CLI are implemented** under `src/tenon/detect/`,
-`src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`,
+(provider migration bundle), T10c (local provider fan-out) and the `tenon check` / `tenon fix` /
+`tenon provider migrate` / `tenon probe` / `tenon corpus` CLI are implemented** under
+`src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`,
 `src/tenon/provider/`, `src/tenon/probe/`, `src/tenon/corpus/` and `src/tenon/cli/`. The later
 stages are not.
 
@@ -39,7 +39,7 @@ src/tenon/
   propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
   prove/      T4/T7: working-copy runner, proof ladder  <- built (all five levels)
   pr/         T5/T10a: branch and PR writer              <- built (gh + GitHub App)
-  provider/   T10b: migration bundle schema and loader   <- built (JSON)
+  provider/   T10b/T10c: bundle and repos-file loaders    <- built (JSON + text)
   probe/      T8c: MCP stdio probe, agent plan, report  <- built (tools only)
   corpus/     T9: benchmark records                         <- built (JSONL + report)
   cli/        tenon check | fix | provider migrate | probe | corpus <- built
@@ -78,9 +78,11 @@ tests/        offline; fixture repos and specs; no network, no model calls
   The token is kept out of argv, the remote URL and error details; the app is self-hosted.
 - **The bundle is config, not a new pipeline.** T10b serializes the provider-side `CliConfig`
   (identity, spec paths, locate, require, stage commands) and `tenon provider migrate` loads it into
-  the same detect → locate → propose → prove → optional PR flow. The bundle never upgrades a proof
-  level and adds no PR branding; one repository per invocation. Fan-out and a hosted service are
-  T10c.
+  the same detect → locate → propose → prove → optional PR flow. T10c adds a local repos file
+  and runs that flow sequentially once per listed checkout, reusing one bundle/config and one PR
+  remote; a bad path is a per-repo failure, a shared spec refusal aborts, and there is no rollback.
+  The bundle never upgrades a proof level and adds no PR branding. Installed/hosted fan-out and a
+  service are T10d.
 - **The benchmark is descriptive, not a claim.** T9 records `(change, patch, proof, outcome)` in a
   local JSONL corpus. A merge rate uses only real outcomes (`merged`, `rejected`, `closed`,
   `incident`); `local_only`/`pending` never count as success. The public seed has no merge outcomes,
@@ -95,8 +97,10 @@ tests/        offline; fixture repos and specs; no network, no model calls
   `REPLAY_FAILED_BEFORE`, `REPLAY_FAILED_AFTER`, `CHECK_TIMED_OUT`, `COPY_FAILED`.
 - **A thin CLI with honest exit codes.** `tenon check`, `tenon fix` and `tenon provider migrate`
   parse, configure, compose and render; they add no detection or proof logic. `check` exits 0 clean /
-  1 affected or unanalyzable / 2 usage; `fix` exits 0 required proof / 1 not / 2 usage. `--json` is
-  one byte-stable object; `fix` prints unless `--open-pr`, which delegates to T5. No traceback.
+  1 affected or unanalyzable / 2 usage; `fix` exits 0 required proof / 1 not / 2 usage.
+  `provider migrate` exits 0 every repo passed / 1 any repo failed / 2 usage, bundle, repos-file or
+  shared spec/config errors. `--json` is one byte-stable object; `fix` prints unless `--open-pr`,
+  which delegates to T5. No traceback.
 - **Baseline first.** Run the user's checks before patching, so a red baseline is reported as such
   and not blamed on the patch.
 
@@ -115,16 +119,25 @@ needs `contents:write` and `pull_requests:write`. Its inputs come from those fla
 `TENON_GITHUB_APP_ID`, `TENON_GITHUB_APP_INSTALLATION_ID`, `TENON_GITHUB_APP_PRIVATE_KEY` (a path)
 and `TENON_GITHUB_API_URL`; a flag wins. An explicit `--remote` requires `--open-pr`; missing inputs
 or an unreadable key exit 2. The app remote is self-hosted: webhook/installation discovery,
-multi-repo/installed fan-out and a hosted service (T10c) are deferred.
-`tenon provider migrate <repo> --bundle PATH [--open-pr] [--remote gh|app] [--app-id ID]
-[--app-installation-id ID] [--app-private-key PATH] [--api-url URL] [--check CMD] [--require LEVEL]
-[--allow-below-required] [--allow-unverified] [--json]` builds the `CliConfig` from a JSON migration
-bundle (provider/migration, source/language, relative spec paths, locate config, required proof,
-stage commands, `breaking_only`), applies `--check`/`--require` over it and runs the same fix
-pipeline and exit code. The text is a `provider`/`migration` header plus the fix report; `--json` is
-the provider envelope (`command`, `provider`, `migration`, `repo`, `results`, `summary`). The bundle
-never upgrades the proof level; `--open-pr` uses the same T5 gate and gh/app remote. One repo per
-run; fan-out/hosted (T10c) and PR branding are deferred.
+installed fan-out and a hosted service (T10d) are deferred.
+`tenon provider migrate [<repo>|--repos FILE] --bundle PATH [--open-pr] [--remote gh|app]
+[--app-id ID] [--app-installation-id ID] [--app-private-key PATH] [--api-url URL] [--check CMD]
+[--require LEVEL] [--allow-below-required] [--allow-unverified] [--json]` builds the `CliConfig`
+from a JSON migration bundle (provider/migration, source/language, relative spec paths, locate
+config, required proof, stage commands, `breaking_only`), applies `--check`/`--require` over it and
+runs the same fix pipeline and exit code. The text is a `provider`/`migration` header plus the fix
+report; `--json` is the provider envelope (`command`, `provider`, `migration`, `repo`, `results`,
+`summary`). The bundle never upgrades the proof level; `--open-pr` uses the same T5 gate and gh/app
+remote. `<repo>` and `--repos` are mutually exclusive and exactly one is required.
+`--repos FILE` reads a UTF-8 list (one local path per line; blanks and `#` comments ignored, `~`
+expanded, relative paths resolved against the file) and runs the bundle sequentially once per
+checkout with one config and, under `--open-pr`, one remote and one PR per repo. A non-directory
+path is a per-repo `error: not a directory` and the others still run; text adds one `repo:` block
+per repo and `repos: N, passed: X, failed: Y`, and `--json` is the fan-out envelope
+(`command`, `provider`, `migration`, `repos: [{repo, results, summary, exit, error}]`, `summary`).
+Exit 0 only when every repo passed and every requested PR opened, 1 when any repo failed, 2 on
+usage/bundle/repos-file/global spec/config errors; a shared spec refusal aborts. There is no
+rollback and no parallelism; installed/hosted fan-out (T10d) and PR branding are deferred.
 `tenon probe --server-cmd CMD --tasks FILE --agent CMD [--timeout SEC] [--json]` starts an MCP
 server over stdio, lists its tools, runs every task through the agent command and reports what
 worked. Exit 0 when every task passed, 1 when one failed, 2 on usage/connection. The task file and
@@ -155,5 +168,6 @@ pattern is the only locator in this slice. `language=ts` + `source=mcp` is a nam
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
-- Phase 3: T10a (GitHub App remote) and T10b (provider migration bundle) shipped; T10c
-  (multi-repo/installed fan-out and hosted service), and T11 (Go/Rust/C#), are not started.
+- Phase 3: T10a (GitHub App remote), T10b (provider migration bundle) and T10c (local provider
+  fan-out) shipped; T10d (installed/hosted fan-out and hosted service) and T11 (Go/Rust/C#) are not
+  started.
