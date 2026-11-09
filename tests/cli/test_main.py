@@ -7,6 +7,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -20,7 +22,16 @@ from tenon.corpus import (
     record_id,
 )
 from tenon.detect import diff, diff_mcp, load, load_mcp
-from tenon.pr import PrDraft, PrRefusal, PrResult, PrStatus
+from tenon.pr import (
+    InstalledRepo,
+    PrDraft,
+    PrRefusal,
+    PrResult,
+    PrStatus,
+    RemoteError,
+    StaticToken,
+    clone_repo as real_clone_repo,
+)
 from tenon.prove import CheckResult, ProofLevel, ProofPlan, ProofResult
 
 # ``tenon.cli.main`` the submodule is shadowed by the exported function.
@@ -2331,21 +2342,34 @@ def test_fanout_require_flag_reaches_every_repo(tmp_path, capsys):
     assert out.endswith("repos: 2, passed: 0, failed: 2\n")
 
 
-@pytest.mark.parametrize(
-    "selection, message",
-    [
-        ("neither", "a repository or --repos is required"),
-        ("both", "provide either <repo> or --repos, not both"),
-    ],
-)
+SELECTIONS = [
+    ("neither", "a repository, --repos or --installed is required"),
+    ("repo_repos", "provide only one of <repo>, --repos or --installed"),
+    ("repo_installed", "provide only one of <repo>, --repos or --installed"),
+    ("repos_installed", "provide only one of <repo>, --repos or --installed"),
+    ("all", "provide only one of <repo>, --repos or --installed"),
+]
+
+
+def a_selection_argv(selection, bundle, first, repos):
+    argv = ["provider", "migrate", "--bundle", str(bundle)]
+    if selection in ("repo_repos", "repo_installed", "all"):
+        argv.append(str(first))
+    if selection in ("repo_repos", "repos_installed", "all"):
+        argv += ["--repos", str(repos)]
+    if selection in ("repo_installed", "repos_installed", "all"):
+        argv.append("--installed")
+    return argv
+
+
+@pytest.mark.parametrize("selection, message", SELECTIONS)
 def test_fanout_selection_errors_are_named(
     selection, message, tmp_path, capsys
 ):
     bundle = a_bundle(tmp_path)
     first, _second = a_repo_copies(tmp_path)
-    argv = ["provider", "migrate", "--bundle", str(bundle)]
-    if selection == "both":
-        argv += [str(first), "--repos", str(a_repos_file(tmp_path, first))]
+    repos = a_repos_file(tmp_path, first)
+    argv = a_selection_argv(selection, bundle, first, repos)
 
     assert main(argv) == 2
 
@@ -2355,21 +2379,14 @@ def test_fanout_selection_errors_are_named(
     assert "Traceback" not in captured.err
 
 
-@pytest.mark.parametrize(
-    "selection, message",
-    [
-        ("neither", "a repository or --repos is required"),
-        ("both", "provide either <repo> or --repos, not both"),
-    ],
-)
+@pytest.mark.parametrize("selection, message", SELECTIONS)
 def test_fanout_selection_errors_json_are_one_object(
     selection, message, tmp_path, capsys
 ):
     bundle = a_bundle(tmp_path)
     first, _second = a_repo_copies(tmp_path)
-    argv = ["provider", "migrate", "--bundle", str(bundle), "--json"]
-    if selection == "both":
-        argv += [str(first), "--repos", str(a_repos_file(tmp_path, first))]
+    repos = a_repos_file(tmp_path, first)
+    argv = a_selection_argv(selection, bundle, first, repos) + ["--json"]
 
     assert main(argv) == 2
 
@@ -2438,6 +2455,523 @@ def test_fanout_shared_bad_spec_exits_two(tmp_path, capsys):
     assert "tenon: spec:" in captured.err
     assert "UNSUPPORTED_VERSION" in captured.err
     assert "Traceback" not in captured.err
+
+
+def a_installed(bundle, *extra, remote=None):
+    return main(
+        ["provider", "migrate", "--installed", "--bundle", str(bundle), *extra],
+        remote=remote,
+    )
+
+
+# Spec AC4: installed discovery needs the app identity, never a gh remote.
+def test_installed_remote_gh_is_usage(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_installed(bundle, "--open-pr", "--remote", "gh") == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--installed requires --remote app" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC4/AC7: each missing app input is exit 2 before any discovery.
+@pytest.mark.parametrize(
+    ("omitted", "message"),
+    [
+        ("--app-id", "--app-id or TENON_GITHUB_APP_ID"),
+        (
+            "--app-installation-id",
+            "--app-installation-id or TENON_GITHUB_APP_INSTALLATION_ID",
+        ),
+        (
+            "--app-private-key",
+            "--app-private-key or TENON_GITHUB_APP_PRIVATE_KEY",
+        ),
+    ],
+)
+def test_installed_missing_app_input_is_usage(
+    omitted, message, tmp_path, monkeypatch, a_app_env, capsys
+):
+    bundle = a_bundle(tmp_path)
+    key = a_app_key(tmp_path)
+    inputs = {
+        "--app-id": "123",
+        "--app-installation-id": "456",
+        "--app-private-key": str(key),
+    }
+    del inputs[omitted]
+    flat = [part for pair in inputs.items() for part in pair]
+
+    def bomb(*_args, **_kwargs):
+        raise AssertionError("no discovery may run")
+
+    monkeypatch.setattr(cli_main, "list_installation_repos", bomb)
+
+    assert a_installed(bundle, *flat) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert message in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC7: an unreadable private key is exit 2 and names the path.
+def test_installed_unreadable_key_is_usage(tmp_path, a_app_env, capsys):
+    bundle = a_bundle(tmp_path)
+    missing = tmp_path / "missing.pem"
+
+    assert (
+        a_installed(
+            bundle,
+            "--app-id",
+            "123",
+            "--app-installation-id",
+            "456",
+            "--app-private-key",
+            str(missing),
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "cannot read the app private key" in captured.err
+    assert str(missing) in captured.err
+    assert "Traceback" not in captured.err
+
+
+INSTALLED_TOKEN = "ghs_installed_token"
+INSTALLED_API_URL = "https://ghe.example/api/v3"
+
+
+def a_installed_repos(*names, clone_url="https://example.test/acme/repo.git"):
+    """Installation repos in API order, named owner/name for the report."""
+    return tuple(InstalledRepo(name, clone_url) for name in names)
+
+
+def a_installed_app(monkeypatch, repos, *, api_url=INSTALLED_API_URL):
+    """Patch the app seam and the lister; record the mint count and lister call."""
+
+    class Provider:
+        mints = 0
+
+        def token(self):
+            Provider.mints += 1
+            return INSTALLED_TOKEN
+
+    provider = Provider()
+    seen = []
+
+    def lister(api, token):
+        seen.append((api, token))
+        return tuple(repos)
+
+    monkeypatch.setattr(cli_main, "_app", lambda args: (provider, api_url))
+    monkeypatch.setattr(cli_main, "list_installation_repos", lister)
+    return provider, seen
+
+
+def a_clone_source(tmp_path):
+    """A local git repo seeded from proof-basic, cloneable by the real helper."""
+    source = tmp_path / "source"
+    shutil.copytree(
+        PROOF_BASIC, source, ignore=shutil.ignore_patterns("__pycache__")
+    )
+    for argv in (
+        ["git", "init", "-b", "main"],
+        ["git", "config", "user.name", "Tenon Tests"],
+        ["git", "config", "user.email", "tenon@example.test"],
+        ["git", "add", "."],
+        ["git", "commit", "-m", "fixture"],
+    ):
+        subprocess.run(
+            argv, cwd=source, check=True, capture_output=True, text=True
+        )
+    return source
+
+
+def a_fake_installed_clone(monkeypatch, tmp_path, *, fail=()):
+    """Yield a fresh proof-basic copy per repo; ``fail`` names raise first."""
+    checkouts = []
+
+    @contextmanager
+    def clone(repo, token):
+        if repo.full_name in fail:
+            raise RemoteError(
+                f"could not clone {repo.full_name}: {INSTALLED_TOKEN} boom"
+            )
+        path = tmp_path / f"clone-{len(checkouts)}"
+        shutil.copytree(
+            PROOF_BASIC, path, ignore=shutil.ignore_patterns("__pycache__")
+        )
+        checkouts.append((repo, token, path))
+        yield path
+
+    monkeypatch.setattr(cli_main, "clone_repo", clone)
+    return checkouts
+
+
+def a_real_clone_recorder(monkeypatch):
+    """Record the repo/token each real clone receives, then clone for real."""
+    calls = []
+
+    def clone(repo, token):
+        calls.append((repo, token))
+        return real_clone_repo(repo, token)
+
+    monkeypatch.setattr(cli_main, "clone_repo", clone)
+    return calls
+
+
+# Spec AC1/AC5: two installed repos clone with the real helper and pass on one token.
+def test_installed_two_repos_clone_and_pass(tmp_path, monkeypatch, capsys):
+    source = a_clone_source(tmp_path)
+    bundle = a_bundle(tmp_path)
+    repos = (
+        InstalledRepo("acme/one", str(source)),
+        InstalledRepo("acme/two", str(source)),
+    )
+    provider, seen = a_installed_app(monkeypatch, repos)
+    clones = a_real_clone_recorder(monkeypatch)
+    before = set(Path(tempfile.gettempdir()).glob("tenon-installed-*"))
+
+    assert a_installed(bundle) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.startswith("provider: acme\nmigration: amount-cents\n\n")
+    assert captured.out.count("repo: acme/") == 2
+    assert captured.out.count("Proof: TESTS_PASSED") == 2
+    assert captured.out.endswith("repos: 2, passed: 2, failed: 0\n")
+    assert provider.mints == 1
+    (api, token), = seen
+    assert token == INSTALLED_TOKEN
+    assert api._api_url == INSTALLED_API_URL
+    assert [call[1] for call in clones] == [INSTALLED_TOKEN, INSTALLED_TOKEN]
+    assert set(Path(tempfile.gettempdir()).glob("tenon-installed-*")) == before
+    assert INSTALLED_TOKEN not in captured.out + captured.err
+
+
+# Spec AC2: a clone error is one per-repo error; the other repo still runs.
+def test_installed_clone_error_is_per_repo_and_the_other_runs(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    repos = a_installed_repos("acme/bad", "acme/one")
+    a_installed_app(monkeypatch, repos)
+    a_fake_installed_clone(monkeypatch, tmp_path, fail={"acme/bad"})
+
+    assert a_installed(bundle, "--json") == 1
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    bad, good = payload["repos"]
+    assert bad["repo"] == "acme/bad"
+    assert bad["results"] == []
+    assert bad["exit"] == 1
+    assert bad["error"] == "could not clone acme/bad: *** boom"
+    assert good["repo"] == "acme/one"
+    assert good["exit"] == 0
+    assert good["results"][0]["proof"]["level"] == "TESTS_PASSED"
+    assert payload["summary"] == {"repos": 2, "passed": 1, "failed": 1}
+    assert INSTALLED_TOKEN not in out
+
+
+# Spec AC3: the text has the provider header, owner/name blocks and the summary.
+def test_installed_text_has_the_header_blocks_and_summary(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    a_installed_app(monkeypatch, a_installed_repos("acme/one", "acme/two"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    assert a_installed(bundle) == 0
+
+    out = capsys.readouterr().out
+    assert out.startswith("provider: acme\nmigration: amount-cents\n\n")
+    assert out.count("repo: acme/one\n") == 1
+    assert out.count("repo: acme/two\n") == 1
+    assert out.count("Proof: TESTS_PASSED") == 2
+    assert out.endswith("repos: 2, passed: 2, failed: 0\n")
+
+
+# Spec AC3: the T10c fan-out envelope keyed by owner/name is byte-stable.
+def test_installed_json_has_the_exact_envelope_and_is_byte_stable(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    a_installed_app(monkeypatch, a_installed_repos("acme/one", "acme/two"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    assert a_installed(bundle, "--json") == 0
+    first = capsys.readouterr().out
+    payload = json.loads(first)
+    assert set(payload) == {"command", "provider", "migration", "repos", "summary"}
+    assert payload["command"] == "provider"
+    assert payload["provider"] == "acme"
+    assert payload["migration"] == "amount-cents"
+    assert [repo["repo"] for repo in payload["repos"]] == ["acme/one", "acme/two"]
+    for repo in payload["repos"]:
+        assert set(repo) == {"repo", "results", "summary", "exit", "error"}
+        (result,) = repo["results"]
+        assert set(result) == {"change", "locate", "proposal", "proof", "pr"}
+        assert result["proof"]["level"] == "TESTS_PASSED"
+        assert repo["summary"]["passed"] == 1
+        assert repo["exit"] == 0
+        assert repo["error"] is None
+    assert payload["summary"] == {"repos": 2, "passed": 2, "failed": 0}
+    assert first.count("\n") == 1
+
+    assert a_installed(bundle, "--json") == 0
+    assert capsys.readouterr().out == first
+
+
+# Spec AC5/AC6: one injected remote opens one PR per installed repo.
+def test_installed_open_pr_writes_one_pr_per_repo_with_the_injected_remote(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    repos = a_installed_repos("acme/one", "acme/two")
+    a_installed_app(monkeypatch, repos)
+    clones = a_fake_installed_clone(monkeypatch, tmp_path)
+    marker = object()
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_installed(bundle, "--open-pr", remote=marker) == 0
+
+    assert [call["repo"] for call in calls] == [entry[2] for entry in clones]
+    assert all(call["remote"] is marker for call in calls)
+    assert [entry[1] for entry in clones] == [INSTALLED_TOKEN, INSTALLED_TOKEN]
+    out = capsys.readouterr().out
+    assert out.count("PR: https://github.com/example/repo/pull/7") == 2
+    assert out.endswith("repos: 2, passed: 2, failed: 0\n")
+    assert INSTALLED_TOKEN not in out
+
+
+# Spec S3/AC5: the dry run discovers and runs but never calls the writer.
+def test_installed_dry_run_makes_no_pr_call(tmp_path, monkeypatch, capsys):
+    bundle = a_bundle(tmp_path)
+    a_installed_app(monkeypatch, a_installed_repos("acme/one"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_installed(bundle) == 0
+
+    assert calls == []
+    assert "PR:" not in capsys.readouterr().out
+
+
+# Spec AC5: --open-pr with no injected remote builds one app remote from the token.
+def test_installed_open_pr_constructs_the_app_remote_once_from_the_token(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    repos = a_installed_repos("acme/one", "acme/two")
+    provider, seen = a_installed_app(monkeypatch, repos)
+    clones = a_fake_installed_clone(monkeypatch, tmp_path)
+    remotes = []
+
+    class Remote:
+        def __init__(self, token_provider, api_url="https://api.github.com"):
+            self.record = {"provider": token_provider, "api_url": api_url}
+            remotes.append(self.record)
+
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "GitHubAppRemote", Remote)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_installed(bundle, "--open-pr", "--remote", "app") == 0
+
+    assert provider.mints == 1
+    (remote,) = remotes
+    assert isinstance(remote["provider"], StaticToken)
+    assert remote["provider"].token() == INSTALLED_TOKEN
+    assert remote["api_url"] == INSTALLED_API_URL
+    assert all(call["remote"].record is remote for call in calls)
+    assert [entry[1] for entry in clones] == [INSTALLED_TOKEN, INSTALLED_TOKEN]
+    assert [entry[1] for entry in seen] == [INSTALLED_TOKEN]
+    assert INSTALLED_TOKEN not in capsys.readouterr().out
+
+
+# Spec AC6: a refused PR fails only that repo; the overall exit is 1.
+def test_installed_refused_pr_makes_the_overall_exit_one(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    repos = a_installed_repos("acme/one", "acme/two")
+    a_installed_app(monkeypatch, repos)
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    def write_pr(proposal, proof, repo, **_kwargs):
+        if repo.name == "clone-1":
+            return a_pr(
+                proof,
+                status=PrStatus.REFUSED,
+                refusal=PrRefusal.DIRTY_CHECKOUT,
+            )
+        return a_pr(proof)
+
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_installed(bundle, "--open-pr", remote=object()) == 1
+
+    out = capsys.readouterr().out
+    assert out.count("PR: https://github.com/example/repo/pull/7") == 1
+    assert "PR refused: DIRTY_CHECKOUT" in out
+    assert out.endswith("repos: 2, passed: 1, failed: 1\n")
+
+
+# Spec AC6/AC7: --check overrides the bundle command for every installed repo.
+def test_installed_check_flag_reaches_every_repo(tmp_path, monkeypatch, capsys):
+    bundle = a_bundle(tmp_path, command=[])
+    a_installed_app(monkeypatch, a_installed_repos("acme/one", "acme/two"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    assert a_installed(bundle) == 1
+    assert capsys.readouterr().out.count("Cause: NO_PROOF_COMMAND") == 2
+
+    assert a_installed(bundle, "--check", shlex.join(PROVIDER_CHECK)) == 0
+    out = capsys.readouterr().out
+    assert out.count("Proof: TESTS_PASSED") == 2
+    assert out.endswith("repos: 2, passed: 2, failed: 0\n")
+
+
+# Spec AC6/AC7: --require overrides the bundle bar for every installed repo.
+def test_installed_require_flag_reaches_every_repo(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path, command=[], require="UNVERIFIED")
+    a_installed_app(monkeypatch, a_installed_repos("acme/one", "acme/two"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    assert a_installed(bundle) == 0
+    assert capsys.readouterr().out.count("Proof: UNVERIFIED") == 2
+
+    assert a_installed(bundle, "--require", "TESTS_PASSED") == 1
+    out = capsys.readouterr().out
+    assert out.count("Proof: UNVERIFIED") == 2
+    assert out.endswith("repos: 2, passed: 0, failed: 2\n")
+
+
+# Spec AC7: a token or discovery failure is one named usage error, exit 2.
+@pytest.mark.parametrize("where", ["token", "list"])
+def test_installed_discovery_failure_exits_two(
+    where, tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+
+    class Provider:
+        def token(self):
+            if where == "token":
+                raise RemoteError("ghs_test boom")
+            return INSTALLED_TOKEN
+
+    monkeypatch.setattr(
+        cli_main, "_app", lambda args: (Provider(), INSTALLED_API_URL)
+    )
+
+    def lister(api, token):
+        raise RemoteError("GET /installation/repositories failed: 401")
+
+    if where == "list":
+        monkeypatch.setattr(cli_main, "list_installation_repos", lister)
+
+    assert a_installed(bundle) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "could not list installed repositories" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC7: the same discovery failure in --json mode is one object.
+def test_installed_discovery_failure_json_is_one_object(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    a_installed_app(monkeypatch, ())
+
+    def lister(api, token):
+        raise RemoteError("GET /installation/repositories failed: 401")
+
+    monkeypatch.setattr(cli_main, "list_installation_repos", lister)
+
+    assert a_installed(bundle, "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "usage"
+    assert "could not list installed repositories" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC7: a shared spec refusal aborts the whole installed fan-out with exit 2.
+def test_installed_shared_bad_spec_exits_two(tmp_path, monkeypatch, capsys):
+    bundle = a_bundle(tmp_path, new_text="openapi: 2.0\n")
+    a_installed_app(monkeypatch, a_installed_repos("acme/one", "acme/two"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    assert a_installed(bundle) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "tenon: spec:" in captured.err
+    assert "UNSUPPORTED_VERSION" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC7: a missing app input in --json mode is one object.
+@pytest.mark.parametrize(
+    "omitted", ["--app-id", "--app-installation-id", "--app-private-key"]
+)
+def test_installed_missing_app_input_json_is_one_object(
+    omitted, tmp_path, monkeypatch, a_app_env, capsys
+):
+    bundle = a_bundle(tmp_path)
+    key = a_app_key(tmp_path)
+    inputs = {
+        "--app-id": "123",
+        "--app-installation-id": "456",
+        "--app-private-key": str(key),
+    }
+    del inputs[omitted]
+    flat = [part for pair in inputs.items() for part in pair]
+
+    def bomb(*_args, **_kwargs):
+        raise AssertionError("no discovery may run")
+
+    monkeypatch.setattr(cli_main, "list_installation_repos", bomb)
+
+    assert a_installed(bundle, *flat, "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "usage"
+    assert omitted in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC4/AC7: --installed --remote gh in --json mode is one object.
+def test_installed_remote_gh_json_is_one_object(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_installed(bundle, "--open-pr", "--remote", "gh", "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "usage"
+    assert payload["error"]["message"] == "--installed requires --remote app"
+    assert captured.out.count("\n") == 1
 
 
 PROBE_FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"

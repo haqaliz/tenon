@@ -766,6 +766,7 @@ def test_package_exports_the_full_public_surface():
         "GitHubApiError",
         "GitHubAppRemote",
         "GitHubAppToken",
+        "InstalledRepo",
         "PrDraft",
         "PrRefusal",
         "PrResult",
@@ -774,6 +775,8 @@ def test_package_exports_the_full_public_surface():
         "RemoteError",
         "StaticToken",
         "TokenProvider",
+        "clone_repo",
+        "list_installation_repos",
         "render_pr",
         "write_pr",
     ]

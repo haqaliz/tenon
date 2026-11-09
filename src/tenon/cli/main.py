@@ -39,9 +39,14 @@ from tenon.locate import (
 )
 from tenon.pr import (
     GitGhRemote,
+    GitHubApi,
     GitHubAppRemote,
     GitHubAppToken,
     Remote,
+    RemoteError,
+    StaticToken,
+    clone_repo,
+    list_installation_repos,
     write_pr,
 )
 from tenon.probe import AgentError, ProbeError, load_tasks, probe
@@ -198,6 +203,11 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument("--bundle", required=True, help="migration bundle JSON")
     migrate.add_argument(
         "--repos", default=None, metavar="FILE", help="repos file for fan-out"
+    )
+    migrate.add_argument(
+        "--installed",
+        action="store_true",
+        help="fan out over the app installation's repositories",
     )
     migrate.add_argument("--check", dest="check", default=None, help="check command")
     migrate.add_argument("--require", default=None, help="proof level")
@@ -364,10 +374,8 @@ def _check(args: argparse.Namespace, config: CliConfig) -> int:
     return check_exit(located)
 
 
-# Spec AC1/AC2/AC3: the gh default, or the app remote from flags/env.
-def _remote(args: argparse.Namespace) -> Remote:
-    if args.remote != "app":
-        return GitGhRemote()
+# Spec AC2: the app identity from flags/env, shared by the remote and --installed.
+def _app(args: argparse.Namespace) -> tuple[GitHubAppToken, str]:
     app_id = args.app_id or os.environ.get("TENON_GITHUB_APP_ID")
     installation_id = args.app_installation_id or os.environ.get(
         "TENON_GITHUB_APP_INSTALLATION_ID"
@@ -382,17 +390,18 @@ def _remote(args: argparse.Namespace) -> Remote:
     )
     if not app_id:
         raise _Usage(
-            "--app-id or TENON_GITHUB_APP_ID is required for --remote app"
+            "--app-id or TENON_GITHUB_APP_ID is required for "
+            "--remote app or --installed"
         )
     if not installation_id:
         raise _Usage(
             "--app-installation-id or TENON_GITHUB_APP_INSTALLATION_ID "
-            "is required for --remote app"
+            "is required for --remote app or --installed"
         )
     if not key_path:
         raise _Usage(
             "--app-private-key or TENON_GITHUB_APP_PRIVATE_KEY "
-            "is required for --remote app"
+            "is required for --remote app or --installed"
         )
     try:
         pem = Path(key_path).read_text(encoding="utf-8")
@@ -401,15 +410,23 @@ def _remote(args: argparse.Namespace) -> Remote:
             f"cannot read the app private key {key_path}: {error}"
         ) from None
     # The token and the REST client share the stdlib default transport.
-    return GitHubAppRemote(
+    return (
         GitHubAppToken(
             app_id,
             installation_id,
             pem,
             api_url=api_url,
         ),
-        api_url=api_url,
+        api_url,
     )
+
+
+# Spec AC1/AC3: the gh default, or the app remote built from that identity.
+def _remote(args: argparse.Namespace) -> Remote:
+    if args.remote != "app":
+        return GitGhRemote()
+    token, api_url = _app(args)
+    return GitHubAppRemote(token, api_url=api_url)
 
 
 # Spec AC4/AC5: locate, propose and prove each change; never write the checkout.
@@ -540,12 +557,73 @@ def _fanout(args: argparse.Namespace, remote: Remote | None) -> int:
     return 0 if all(outcome.exit == 0 for outcome in outcomes) else 1
 
 
+# Spec AC1/AC2: discovery, one token and a temp clone per installed repo.
+def _installed(args: argparse.Namespace, remote: Remote | None) -> int:
+    if args.remote not in (None, "app"):
+        raise _Usage("--installed requires --remote app")
+    bundle = load_bundle(args.bundle)
+    config = _bundle_config(bundle, args)
+    token_provider, api_url = _app(args)
+    try:
+        token = token_provider.token()
+        repos = list_installation_repos(GitHubApi(api_url=api_url), token)
+    except RemoteError as error:
+        raise _Usage(
+            f"could not list installed repositories: {error}"
+        ) from None
+    target = remote
+    if args.open_pr and target is None:
+        target = GitHubAppRemote(StaticToken(token), api_url=api_url)
+    outcomes = []
+    for repo in repos:
+        try:
+            with clone_repo(repo, token) as checkout:
+                changes, results = _fix_results(
+                    checkout,
+                    str(bundle.old),
+                    str(bundle.new),
+                    config,
+                    target,
+                    open_pr=args.open_pr,
+                    allow_below=args.allow_below_required,
+                )
+        except RemoteError as error:
+            outcomes.append(
+                ProviderRepoResult(
+                    repo=repo.full_name,
+                    results=(),
+                    exit=1,
+                    error=tail(str(error).replace(token, "***")),
+                )
+            )
+            continue
+        outcomes.append(
+            ProviderRepoResult(
+                repo=repo.full_name,
+                results=tuple(results),
+                exit=fix_exit(len(changes), results, config.require),
+            )
+        )
+    text = (
+        render_fanout_json(bundle.provider, bundle.migration, outcomes)
+        if args.json
+        else render_fanout_text(bundle.provider, bundle.migration, outcomes)
+    )
+    print(text, end="")
+    return 0 if all(outcome.exit == 0 for outcome in outcomes) else 1
+
+
 # Spec AC1/AC2/AC4: one bundle, one repo, the shipped fix pipeline.
 def _provider(args: argparse.Namespace, remote: Remote | None) -> int:
-    if args.repo is None and args.repos is None:
-        raise _Usage("a repository or --repos is required")
-    if args.repo is not None and args.repos is not None:
-        raise _Usage("provide either <repo> or --repos, not both")
+    selected = sum(
+        (args.repo is not None, args.repos is not None, args.installed)
+    )
+    if selected == 0:
+        raise _Usage("a repository, --repos or --installed is required")
+    if selected > 1:
+        raise _Usage("provide only one of <repo>, --repos or --installed")
+    if args.installed:
+        return _installed(args, remote)
     if args.repos is not None:
         return _fanout(args, remote)
     repo = Path(args.repo)
