@@ -9,6 +9,12 @@ def a_repos(tmp_path, text):
     return path
 
 
+def a_named_error(path):
+    with pytest.raises(ValueError) as error:
+        load_repos(path)
+    assert str(path) in str(error.value)
+
+
 # Spec AC1: comments, blanks and surrounding whitespace are ignored.
 def test_parse_ignores_comments_blanks_and_whitespace(tmp_path):
     path = a_repos(
@@ -77,3 +83,41 @@ def test_resolve_nested_relative_path(tmp_path):
     path = a_repos(tmp_path, "customers/acme/checkout\n")
 
     assert load_repos(path) == ((tmp_path / "customers/acme/checkout").resolve(),)
+
+
+# Spec AC3: an empty list is a named error.
+def test_empty_file_is_a_named_error(tmp_path):
+    a_named_error(a_repos(tmp_path, ""))
+
+
+# Spec AC3: a comment-only list is a named error.
+def test_comment_only_file_is_a_named_error(tmp_path):
+    a_named_error(a_repos(tmp_path, "# nothing\n\n   # still nothing\n"))
+
+
+# Spec AC4: a missing file is a named error.
+def test_missing_file_is_a_named_error(tmp_path):
+    a_named_error(tmp_path / "missing.txt")
+
+
+# Spec AC4: a directory is not a repos file.
+def test_directory_is_a_named_error(tmp_path):
+    path = tmp_path / "repos"
+    path.mkdir()
+
+    a_named_error(path)
+
+
+# Spec AC4: non-UTF-8 bytes are a named error.
+def test_non_utf8_file_is_a_named_error(tmp_path):
+    path = tmp_path / "repos.txt"
+    path.write_bytes(b"\xff\xfecheckout\n")
+
+    a_named_error(path)
+
+
+# Spec AC5: listed paths are not checked for existence or directory-ness.
+def test_nonexistent_listed_path_is_returned(tmp_path):
+    path = a_repos(tmp_path, "missing-checkout\n")
+
+    assert load_repos(path) == ((tmp_path / "missing-checkout").resolve(),)
