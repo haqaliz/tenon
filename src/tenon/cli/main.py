@@ -556,12 +556,52 @@ def _fanout(args: argparse.Namespace, remote: Remote | None) -> int:
     return 0 if all(outcome.exit == 0 for outcome in outcomes) else 1
 
 
-# Spec AC4/AC5: the installed selector resolves the app identity; discovery follows.
+# Spec AC1/AC2: discovery, one token and a temp clone per installed repo.
 def _installed(args: argparse.Namespace, remote: Remote | None) -> int:
     if args.remote not in (None, "app"):
         raise _Usage("--installed requires --remote app")
-    _app(args)
-    raise _Usage("installed discovery is not implemented")
+    bundle = load_bundle(args.bundle)
+    config = _bundle_config(bundle, args)
+    token_provider, api_url = _app(args)
+    token = token_provider.token()
+    repos = list_installation_repos(GitHubApi(api_url=api_url), token)
+    outcomes = []
+    for repo in repos:
+        try:
+            with clone_repo(repo, token) as checkout:
+                changes, results = _fix_results(
+                    checkout,
+                    str(bundle.old),
+                    str(bundle.new),
+                    config,
+                    remote,
+                    open_pr=args.open_pr,
+                    allow_below=args.allow_below_required,
+                )
+        except RemoteError as error:
+            outcomes.append(
+                ProviderRepoResult(
+                    repo=repo.full_name,
+                    results=(),
+                    exit=1,
+                    error=tail(str(error)),
+                )
+            )
+            continue
+        outcomes.append(
+            ProviderRepoResult(
+                repo=repo.full_name,
+                results=tuple(results),
+                exit=fix_exit(len(changes), results, config.require),
+            )
+        )
+    text = (
+        render_fanout_json(bundle.provider, bundle.migration, outcomes)
+        if args.json
+        else render_fanout_text(bundle.provider, bundle.migration, outcomes)
+    )
+    print(text, end="")
+    return 0 if all(outcome.exit == 0 for outcome in outcomes) else 1
 
 
 # Spec AC1/AC2/AC4: one bundle, one repo, the shipped fix pipeline.

@@ -7,6 +7,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -20,7 +22,16 @@ from tenon.corpus import (
     record_id,
 )
 from tenon.detect import diff, diff_mcp, load, load_mcp
-from tenon.pr import PrDraft, PrRefusal, PrResult, PrStatus
+from tenon.pr import (
+    InstalledRepo,
+    PrDraft,
+    PrRefusal,
+    PrResult,
+    PrStatus,
+    RemoteError,
+    StaticToken,
+    clone_repo as real_clone_repo,
+)
 from tenon.prove import CheckResult, ProofLevel, ProofPlan, ProofResult
 
 # ``tenon.cli.main`` the submodule is shadowed by the exported function.
@@ -2529,6 +2540,190 @@ def test_installed_unreadable_key_is_usage(tmp_path, a_app_env, capsys):
     assert "cannot read the app private key" in captured.err
     assert str(missing) in captured.err
     assert "Traceback" not in captured.err
+
+
+INSTALLED_TOKEN = "ghs_installed_token"
+INSTALLED_API_URL = "https://ghe.example/api/v3"
+
+
+def a_installed_repos(*names, clone_url="https://example.test/acme/repo.git"):
+    """Installation repos in API order, named owner/name for the report."""
+    return tuple(InstalledRepo(name, clone_url) for name in names)
+
+
+def a_installed_app(monkeypatch, repos, *, api_url=INSTALLED_API_URL):
+    """Patch the app seam and the lister; record the mint count and lister call."""
+
+    class Provider:
+        mints = 0
+
+        def token(self):
+            Provider.mints += 1
+            return INSTALLED_TOKEN
+
+    provider = Provider()
+    seen = []
+
+    def lister(api, token):
+        seen.append((api, token))
+        return tuple(repos)
+
+    monkeypatch.setattr(cli_main, "_app", lambda args: (provider, api_url))
+    monkeypatch.setattr(cli_main, "list_installation_repos", lister)
+    return provider, seen
+
+
+def a_clone_source(tmp_path):
+    """A local git repo seeded from proof-basic, cloneable by the real helper."""
+    source = tmp_path / "source"
+    shutil.copytree(
+        PROOF_BASIC, source, ignore=shutil.ignore_patterns("__pycache__")
+    )
+    for argv in (
+        ["git", "init", "-b", "main"],
+        ["git", "config", "user.name", "Tenon Tests"],
+        ["git", "config", "user.email", "tenon@example.test"],
+        ["git", "add", "."],
+        ["git", "commit", "-m", "fixture"],
+    ):
+        subprocess.run(
+            argv, cwd=source, check=True, capture_output=True, text=True
+        )
+    return source
+
+
+def a_fake_installed_clone(monkeypatch, tmp_path, *, fail=()):
+    """Yield a fresh proof-basic copy per repo; ``fail`` names raise first."""
+    checkouts = []
+
+    @contextmanager
+    def clone(repo, token):
+        if repo.full_name in fail:
+            raise RemoteError(f"could not clone {repo.full_name}: ghs_test boom")
+        path = tmp_path / f"clone-{len(checkouts)}"
+        shutil.copytree(
+            PROOF_BASIC, path, ignore=shutil.ignore_patterns("__pycache__")
+        )
+        checkouts.append((repo, token, path))
+        yield path
+
+    monkeypatch.setattr(cli_main, "clone_repo", clone)
+    return checkouts
+
+
+def a_real_clone_recorder(monkeypatch):
+    """Record the repo/token each real clone receives, then clone for real."""
+    calls = []
+
+    def clone(repo, token):
+        calls.append((repo, token))
+        return real_clone_repo(repo, token)
+
+    monkeypatch.setattr(cli_main, "clone_repo", clone)
+    return calls
+
+
+# Spec AC1/AC5: two installed repos clone with the real helper and pass on one token.
+def test_installed_two_repos_clone_and_pass(tmp_path, monkeypatch, capsys):
+    source = a_clone_source(tmp_path)
+    bundle = a_bundle(tmp_path)
+    repos = (
+        InstalledRepo("acme/one", str(source)),
+        InstalledRepo("acme/two", str(source)),
+    )
+    provider, seen = a_installed_app(monkeypatch, repos)
+    clones = a_real_clone_recorder(monkeypatch)
+    before = set(Path(tempfile.gettempdir()).glob("tenon-installed-*"))
+
+    assert a_installed(bundle) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out.startswith("provider: acme\nmigration: amount-cents\n\n")
+    assert captured.out.count("repo: acme/") == 2
+    assert captured.out.count("Proof: TESTS_PASSED") == 2
+    assert captured.out.endswith("repos: 2, passed: 2, failed: 0\n")
+    assert provider.mints == 1
+    (api, token), = seen
+    assert token == INSTALLED_TOKEN
+    assert api._api_url == INSTALLED_API_URL
+    assert [call[1] for call in clones] == [INSTALLED_TOKEN, INSTALLED_TOKEN]
+    assert set(Path(tempfile.gettempdir()).glob("tenon-installed-*")) == before
+    assert INSTALLED_TOKEN not in captured.out + captured.err
+
+
+# Spec AC2: a clone error is one per-repo error; the other repo still runs.
+def test_installed_clone_error_is_per_repo_and_the_other_runs(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    repos = a_installed_repos("acme/bad", "acme/one")
+    a_installed_app(monkeypatch, repos)
+    a_fake_installed_clone(monkeypatch, tmp_path, fail={"acme/bad"})
+
+    assert a_installed(bundle, "--json") == 1
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    bad, good = payload["repos"]
+    assert bad["repo"] == "acme/bad"
+    assert bad["results"] == []
+    assert bad["exit"] == 1
+    assert bad["error"] == "could not clone acme/bad: ghs_test boom"
+    assert good["repo"] == "acme/one"
+    assert good["exit"] == 0
+    assert good["results"][0]["proof"]["level"] == "TESTS_PASSED"
+    assert payload["summary"] == {"repos": 2, "passed": 1, "failed": 1}
+    assert INSTALLED_TOKEN not in out
+
+
+# Spec AC3: the text has the provider header, owner/name blocks and the summary.
+def test_installed_text_has_the_header_blocks_and_summary(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    a_installed_app(monkeypatch, a_installed_repos("acme/one", "acme/two"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    assert a_installed(bundle) == 0
+
+    out = capsys.readouterr().out
+    assert out.startswith("provider: acme\nmigration: amount-cents\n\n")
+    assert out.count("repo: acme/one\n") == 1
+    assert out.count("repo: acme/two\n") == 1
+    assert out.count("Proof: TESTS_PASSED") == 2
+    assert out.endswith("repos: 2, passed: 2, failed: 0\n")
+
+
+# Spec AC3: the T10c fan-out envelope keyed by owner/name is byte-stable.
+def test_installed_json_has_the_exact_envelope_and_is_byte_stable(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    a_installed_app(monkeypatch, a_installed_repos("acme/one", "acme/two"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    assert a_installed(bundle, "--json") == 0
+    first = capsys.readouterr().out
+    payload = json.loads(first)
+    assert set(payload) == {"command", "provider", "migration", "repos", "summary"}
+    assert payload["command"] == "provider"
+    assert payload["provider"] == "acme"
+    assert payload["migration"] == "amount-cents"
+    assert [repo["repo"] for repo in payload["repos"]] == ["acme/one", "acme/two"]
+    for repo in payload["repos"]:
+        assert set(repo) == {"repo", "results", "summary", "exit", "error"}
+        (result,) = repo["results"]
+        assert set(result) == {"change", "locate", "proposal", "proof", "pr"}
+        assert result["proof"]["level"] == "TESTS_PASSED"
+        assert repo["summary"]["passed"] == 1
+        assert repo["exit"] == 0
+        assert repo["error"] is None
+    assert payload["summary"] == {"repos": 2, "passed": 2, "failed": 0}
+    assert first.count("\n") == 1
+
+    assert a_installed(bundle, "--json") == 0
+    assert capsys.readouterr().out == first
 
 
 PROBE_FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"
