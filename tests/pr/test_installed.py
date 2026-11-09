@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from tenon.pr.api import GitHubApi
+from tenon.pr.api import GitHubApi, GitHubApiError
 from tenon.pr.installed import InstalledRepo, list_installation_repos
 
 API = "https://api.github.com"
@@ -133,6 +133,86 @@ def test_the_same_pages_produce_the_same_tuple():
     assert list_installation_repos(first, TOKEN, per_page=2) == (
         list_installation_repos(second, TOKEN, per_page=2)
     )
+
+
+# Spec AC4: a page without a repositories list is a named GitHubApiError.
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"repositories": None},
+        {"repositories": {}},
+        {"repositories": "nope"},
+    ],
+)
+def test_a_missing_or_non_list_repositories_is_a_named_error(payload):
+    api, _ = a_lister((200, {}, json.dumps(payload)))
+
+    with pytest.raises(GitHubApiError):
+        list_installation_repos(api, TOKEN)
+
+
+# Spec AC4: a listing item that is not an object is a named GitHubApiError.
+@pytest.mark.parametrize("item", ["acme/one", ["acme/one"], None])
+def test_a_listing_item_that_is_not_an_object_is_a_named_error(item):
+    api, _ = a_lister(
+        (200, {}, json.dumps({"total_count": 1, "repositories": [item]}))
+    )
+
+    with pytest.raises(GitHubApiError):
+        list_installation_repos(api, TOKEN)
+
+
+# Spec AC4: a non-bool archived flag is a named GitHubApiError.
+@pytest.mark.parametrize("archived", [0, 1, "false", None])
+def test_a_listing_with_a_non_bool_archived_is_a_named_error(archived):
+    item = a_repo("acme/one")
+    item["archived"] = archived
+    api, _ = a_lister(
+        (200, {}, json.dumps({"total_count": 1, "repositories": [item]}))
+    )
+
+    with pytest.raises(GitHubApiError):
+        list_installation_repos(api, TOKEN)
+
+
+# Spec AC4: a blank full_name or clone_url is a named GitHubApiError.
+@pytest.mark.parametrize("field", ["full_name", "clone_url"])
+@pytest.mark.parametrize("value", ["", "  ", None])
+def test_a_listing_with_a_blank_field_is_a_named_error(field, value):
+    item = a_repo("acme/one")
+    item[field] = value
+    api, _ = a_lister(
+        (200, {}, json.dumps({"total_count": 1, "repositories": [item]}))
+    )
+
+    with pytest.raises(GitHubApiError) as raised:
+        list_installation_repos(api, TOKEN)
+
+    assert field in raised.value.detail
+
+
+# Spec AC4: an API failure stays the named GitHubApiError with its status.
+def test_a_listing_api_error_is_a_named_github_api_error():
+    api, _ = a_lister((500, {}, json.dumps({"message": "boom"})))
+
+    with pytest.raises(GitHubApiError) as raised:
+        list_installation_repos(api, TOKEN)
+
+    assert raised.value.status == 500
+    assert "boom" in raised.value.detail
+
+
+# Spec AC2: 100 full pages without a short one is a named error, not a loop.
+def test_the_page_cap_is_a_named_error():
+    full_page = a_page(a_repo("acme/one"), a_repo("acme/two"))
+    api, transport = a_lister(*([full_page] * 100))
+
+    with pytest.raises(GitHubApiError) as raised:
+        list_installation_repos(api, TOKEN, per_page=2)
+
+    assert len(transport.calls) == 100
+    assert "100" in raised.value.detail
 
 
 # Spec AC1: InstalledRepo keeps exactly two non-empty strings.
