@@ -376,3 +376,12 @@ def test_a_clone_that_cannot_run_is_a_named_error(failure):
     argv, _ = runner.calls[0]
     assert repo.full_name in raised.value.detail
     assert not Path(argv[-1]).exists()
+
+
+# Spec AC1/AC5: the installation discovery surface is exported from the package.
+def test_the_installed_surface_is_exported_from_the_package():
+    import tenon.pr as pr
+
+    assert pr.InstalledRepo is InstalledRepo
+    assert pr.list_installation_repos is list_installation_repos
+    assert pr.clone_repo is clone_repo

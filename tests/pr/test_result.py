@@ -341,6 +341,7 @@ def test_package_exports_the_public_contract():
         "GitHubApiError",
         "GitHubAppRemote",
         "GitHubAppToken",
+        "InstalledRepo",
         "PrDraft",
         "PrRefusal",
         "PrResult",
@@ -349,6 +350,8 @@ def test_package_exports_the_public_contract():
         "RemoteError",
         "StaticToken",
         "TokenProvider",
+        "clone_repo",
+        "list_installation_repos",
         "render_pr",
         "write_pr",
     ]

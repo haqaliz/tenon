@@ -1,6 +1,7 @@
 from .api import GitHubApi, GitHubApiError
 from .app import GitHubAppToken, StaticToken, TokenProvider
 from .github_app import GitHubAppRemote
+from .installed import InstalledRepo, clone_repo, list_installation_repos
 from .remote import GitGhRemote, Remote, RemoteError
 from .render import render_pr
 from .result import PrDraft, PrRefusal, PrResult, PrStatus
@@ -12,6 +13,7 @@ __all__ = [
     "GitHubApiError",
     "GitHubAppRemote",
     "GitHubAppToken",
+    "InstalledRepo",
     "PrDraft",
     "PrRefusal",
     "PrResult",
@@ -20,6 +22,8 @@ __all__ = [
     "RemoteError",
     "StaticToken",
     "TokenProvider",
+    "clone_repo",
+    "list_installation_repos",
     "render_pr",
     "write_pr",
 ]
