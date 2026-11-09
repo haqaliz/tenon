@@ -13,7 +13,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | **Shipped 2026-11-06** |
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Shipped 2026-11-07** |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
-| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Partial 2026-11-08** — GitHub App remote + provider migration bundle shipped; hosted service/fan-out not started |
+| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Partial 2026-11-09** — GitHub App remote, provider migration bundle and local fan-out shipped; installed/hosted fan-out and hosted service not started |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | Not started |
 
 ### T1 as shipped (2026-10-26)
@@ -203,10 +203,10 @@ credential helper, PR creation). `tenon fix --open-pr --remote app` constructs i
 default remains the user's `gh`. `PyJWT`/`cryptography` are an optional `[app]` extra and dev
 dependency; the core install is unchanged. 1,635 tests, offline (test RSA key, fake transport/runner).
 
-Known limits: self-hosted only; no provider migration bundle, customer fan-out, webhook/installation
-discovery or hosted service (T10b/T10c); the private key is the operator's secret; a malicious git
-hook or `GIT_TRACE` can still expose the token; Windows is not a target; no token-expiry refresh
-beyond one mint per remote.
+Known limits: self-hosted only; the provider bundle and local fan-out shipped in T10b/T10c, while
+webhook/installation discovery and installed/hosted fan-out remain T10d; the private key is the
+operator's secret; a malicious git hook or `GIT_TRACE` can still expose the token; Windows is not a
+target; no token-expiry refresh beyond one mint per remote.
 
 ### T10b as built (2026-11-08)
 
@@ -217,9 +217,27 @@ runs the shipped detect → locate → propose → prove pipeline (the same `_fi
 provider/migration header plus the fix report or a provider JSON envelope, and with `--open-pr` uses
 `gh`/the T10a app remote. `--check`/`--require` override the bundle. 1,738 tests, offline.
 
-Known limits: one repo per run; no multi-repo/installed fan-out, webhooks, database or hosted service
-(T10c); no provider note in the PR body; the bundle is trusted local input (paths/commands), not a
-sandbox; `command` is accepted as a `tenon.toml` alias for the documented `check` key.
+Known limits: one repo per run (local multi-repo fan-out shipped in T10c); no installed/hosted
+fan-out, webhooks, database or hosted service (T10d); no provider note in the PR body; the bundle is
+trusted local input (paths/commands), not a sandbox; `command` is accepted as a `tenon.toml` alias
+for the documented `check` key.
+
+### T10c as built (2026-11-09)
+
+`src/tenon/provider/repos.py`: `load_repos` parses a UTF-8 repos file (one local path per line,
+blank lines and `#` comments ignored, `~` expanded, relative paths resolved against the file's
+parent) with named errors for a missing/non-file/non-UTF-8/empty list. `tenon provider migrate
+[<repo>|--repos FILE] --bundle PATH` loads the bundle and `CliConfig` once and runs the shipped
+`_fix_results` sequentially per listed checkout, constructing the gh/app remote once; a missing
+path is a per-repo `not a directory` failure that does not stop the rest. Text is one `repo:` block
+per repo plus a `repos/passed/failed` summary; `--json` is a fan-out envelope
+(`command`, `provider`, `migration`, `repos:[{repo, results, summary, exit, error}]`, `summary`).
+Exit 0 iff every repo passes, 1 if any failed, 2 on usage/bundle/list/global spec errors. 1,774
+tests, offline.
+
+Known limits: sequential, no rollback or retries, one app token per run; a listed repo must already
+be a local checkout; no provider note in the PR body. Installed/hosted fan-out (installation
+discovery, webhooks, a database, deployment) is T10d.
 
 
 

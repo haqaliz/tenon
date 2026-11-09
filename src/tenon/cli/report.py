@@ -378,6 +378,73 @@ def render_provider_json(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderRepoResult:
+    """One repository's outcome in a provider fan-out."""
+
+    repo: str
+    results: tuple[FixResult, ...]
+    exit: int
+    error: str | None = None
+
+    @property
+    def summary(self) -> dict[str, int]:
+        """The shipped fix counts; zeros for a repo that did not run."""
+        return fix_summary(self.results)
+
+
+def _repo_block(repo: ProviderRepoResult) -> str:
+    if repo.error is not None:
+        return f"repo: {repo.repo}\nerror: {repo.error}"
+    report = render_fix_text(repo.results).removesuffix("\n")
+    return f"repo: {repo.repo}\n{report}"
+
+
+def _fanout_counts(repos: Sequence[ProviderRepoResult]) -> dict[str, int]:
+    passed = sum(1 for repo in repos if repo.exit == 0)
+    return {"repos": len(repos), "passed": passed, "failed": len(repos) - passed}
+
+
+def render_fanout_text(
+    provider: str, migration: str, repos: Sequence[ProviderRepoResult]
+) -> str:
+    """The provider header, one block per repo, then the fan-out counts."""
+    blocks = [_repo_block(repo) for repo in repos]
+    counts = _fanout_counts(repos)
+    summary = "repos: {repos}, passed: {passed}, failed: {failed}".format(**counts)
+    return (
+        f"provider: {provider}\nmigration: {migration}\n\n"
+        + "\n\n".join([*blocks, summary])
+        + "\n"
+    )
+
+
+def render_fanout_json(
+    provider: str, migration: str, repos: Sequence[ProviderRepoResult]
+) -> str:
+    """One byte-stable fan-out envelope wrapping the shipped fix items."""
+    return _canonical_json(
+        {
+            "command": "provider",
+            "provider": provider,
+            "migration": migration,
+            "repos": [
+                {
+                    "repo": repo.repo,
+                    "results": [
+                        fix_result_dict(result) for result in repo.results
+                    ],
+                    "summary": repo.summary,
+                    "exit": repo.exit,
+                    "error": repo.error,
+                }
+                for repo in repos
+            ],
+            "summary": _fanout_counts(repos),
+        }
+    )
+
+
 def render_error(
     kind: str,
     message: str,
