@@ -104,7 +104,14 @@ class GitHubAppRemote:
     def push(self, repo: str | Path, branch: str) -> None:
         token = self._token()
         completed = self._invoke(
-            ["git", "-c", CREDENTIAL_HELPER, "push", "origin", branch],
+            [
+                "git",
+                "-c",
+                f"credential.helper={CREDENTIAL_HELPER}",
+                "push",
+                "origin",
+                branch,
+            ],
             repo=repo,
             env={"TENON_GITHUB_TOKEN": token, "GIT_TERMINAL_PROMPT": "0"},
         )

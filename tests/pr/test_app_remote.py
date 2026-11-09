@@ -228,6 +228,7 @@ HELPER = (
     '!f() { echo "username=x-access-token"; '
     'echo "password=$TENON_GITHUB_TOKEN"; }; f'
 )
+HELPER_CONFIG = f"credential.helper={HELPER}"
 
 
 # Spec AC3/AC7: push is exactly one git command with the credential helper and
@@ -238,7 +239,7 @@ def test_push_builds_the_exact_argv_and_env(tmp_path):
     remote.push(tmp_path, "tenon/x")
 
     argv, kwargs = runner.calls[0]
-    assert argv == ["git", "-c", HELPER, "push", "origin", "tenon/x"]
+    assert argv == ["git", "-c", HELPER_CONFIG, "push", "origin", "tenon/x"]
     assert kwargs["cwd"] == tmp_path
     assert kwargs["capture_output"] is True
     assert kwargs["text"] is True
@@ -251,6 +252,18 @@ def test_push_builds_the_exact_argv_and_env(tmp_path):
     assert "--force" not in argv
     assert "-f" not in argv
     assert "merge" not in argv
+
+
+# Spec AC3: `git -c` needs a `name=value` config; a bare helper value is rejected.
+def test_push_helper_is_a_valid_git_config():
+    completed = subprocess.run(
+        ["git", "-c", HELPER_CONFIG, "config", "--get", "credential.helper"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0
+    assert completed.stdout.strip() == HELPER
 
 
 # Spec AC3: a non-zero push is a RemoteError carrying the stderr tail.
