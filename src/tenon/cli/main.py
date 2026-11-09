@@ -390,17 +390,18 @@ def _app(args: argparse.Namespace) -> tuple[GitHubAppToken, str]:
     )
     if not app_id:
         raise _Usage(
-            "--app-id or TENON_GITHUB_APP_ID is required for --remote app"
+            "--app-id or TENON_GITHUB_APP_ID is required for "
+            "--remote app or --installed"
         )
     if not installation_id:
         raise _Usage(
             "--app-installation-id or TENON_GITHUB_APP_INSTALLATION_ID "
-            "is required for --remote app"
+            "is required for --remote app or --installed"
         )
     if not key_path:
         raise _Usage(
             "--app-private-key or TENON_GITHUB_APP_PRIVATE_KEY "
-            "is required for --remote app"
+            "is required for --remote app or --installed"
         )
     try:
         pem = Path(key_path).read_text(encoding="utf-8")
@@ -592,7 +593,7 @@ def _installed(args: argparse.Namespace, remote: Remote | None) -> int:
                     repo=repo.full_name,
                     results=(),
                     exit=1,
-                    error=tail(str(error)),
+                    error=tail(str(error).replace(token, "***")),
                 )
             )
             continue

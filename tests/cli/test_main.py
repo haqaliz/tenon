@@ -2599,7 +2599,9 @@ def a_fake_installed_clone(monkeypatch, tmp_path, *, fail=()):
     @contextmanager
     def clone(repo, token):
         if repo.full_name in fail:
-            raise RemoteError(f"could not clone {repo.full_name}: ghs_test boom")
+            raise RemoteError(
+                f"could not clone {repo.full_name}: {INSTALLED_TOKEN} boom"
+            )
         path = tmp_path / f"clone-{len(checkouts)}"
         shutil.copytree(
             PROOF_BASIC, path, ignore=shutil.ignore_patterns("__pycache__")
@@ -2669,7 +2671,7 @@ def test_installed_clone_error_is_per_repo_and_the_other_runs(
     assert bad["repo"] == "acme/bad"
     assert bad["results"] == []
     assert bad["exit"] == 1
-    assert bad["error"] == "could not clone acme/bad: ghs_test boom"
+    assert bad["error"] == "could not clone acme/bad: *** boom"
     assert good["repo"] == "acme/one"
     assert good["exit"] == 0
     assert good["results"][0]["proof"]["level"] == "TESTS_PASSED"
