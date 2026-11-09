@@ -40,9 +40,9 @@ Milestone order is my proposal; reorder freely.
 
 GitHub App, provider-facing migration PRs, hosted. Go, Rust and C# locators on demand.
 
-**T10a (GitHub App remote), T10b (provider migration bundle) and T10c (local provider fan-out)
-shipped 2026-11-09** (`src/tenon/pr/{app,api,github_app}.py`, `src/tenon/provider/`, CLI; 1,774
-tests). T10d (installed/hosted fan-out and hosted service) and T11 are not started.
+**T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider fan-out) and
+T10d (installed provider fan-out) shipped 2026-11-10** (`src/tenon/pr/{app,api,github_app,installed}.py`,
+`src/tenon/provider/`, CLI; 1,843 tests). The hosted/webhook-driven service and T11 are not started.
 
 ---
 

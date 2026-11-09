@@ -82,8 +82,8 @@ tests/        offline; fixture repos and specs; no network, no model calls
   the same detect → locate → propose → prove → optional PR flow. T10c adds a local repos file
   and runs that flow sequentially once per listed checkout, reusing one bundle/config and one PR
   remote; a bad path is a per-repo failure, a shared spec refusal aborts, and there is no rollback.
-  The bundle never upgrades a proof level and adds no PR branding. Installed/hosted fan-out and a
-  service are T10d.
+  The bundle never upgrades a proof level and adds no PR branding. Installed fan-out shipped in
+  T10d; a hosted/webhook-driven service is later.
 - **The benchmark is descriptive, not a claim.** T9 records `(change, patch, proof, outcome)` in a
   local JSONL corpus. A merge rate uses only real outcomes (`merged`, `rejected`, `closed`,
   `incident`); `local_only`/`pending` never count as success. The public seed has no merge outcomes,

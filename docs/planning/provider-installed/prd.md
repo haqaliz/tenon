@@ -4,7 +4,7 @@
 - **Capability:** T10 in `docs/technical/CAPABILITY_ROADMAP.md` — **fourth slice, installed repo
   discovery and fan-out**
 - **Milestone:** Phase 3 in `docs/ROADMAP.md`, fourth slice
-- **Status:** draft for review
+- **Status:** implemented 2026-11-10 (`src/tenon/pr/installed.py`, CLI; 1,843 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

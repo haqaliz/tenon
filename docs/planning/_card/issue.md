@@ -6,6 +6,7 @@
 - **Capability:** **T10 Provider layer and GitHub App (hosted)** — fourth slice: **installed repo
   discovery and fan-out** (`docs/technical/CAPABILITY_ROADMAP.md:16`)
 - **Milestone:** Phase 3 (`docs/ROADMAP.md`), fourth slice
+- **State:** shipped 2026-11-10 (`src/tenon/pr/installed.py`, CLI; 1,843 tests)
 - **Branch:** `feat/provider-installed/aliz`
 - **Worktree:** `.claude/worktrees/feat-provider-installed`
 

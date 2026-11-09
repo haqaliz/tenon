@@ -13,7 +13,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | **Shipped 2026-11-06** |
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Shipped 2026-11-07** |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
-| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Partial 2026-11-09** — GitHub App remote, provider migration bundle and local fan-out shipped; installed/hosted fan-out and hosted service not started |
+| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Partial 2026-11-10** — GitHub App remote, provider bundle, local fan-out and installed fan-out shipped; hosted/webhook-driven service not started |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | Not started |
 
 ### T1 as shipped (2026-10-26)
@@ -203,8 +203,8 @@ credential helper, PR creation). `tenon fix --open-pr --remote app` constructs i
 default remains the user's `gh`. `PyJWT`/`cryptography` are an optional `[app]` extra and dev
 dependency; the core install is unchanged. 1,635 tests, offline (test RSA key, fake transport/runner).
 
-Known limits: self-hosted only; the provider bundle and local fan-out shipped in T10b/T10c, while
-webhook/installation discovery and installed/hosted fan-out remain T10d; the private key is the
+Known limits: self-hosted only; the provider bundle, local fan-out and installed discovery shipped
+in T10b/T10c/T10d, while webhook events and a hosted service remain later; the private key is the
 operator's secret; a malicious git hook or `GIT_TRACE` can still expose the token; Windows is not a
 target; no token-expiry refresh beyond one mint per remote.
 
@@ -217,8 +217,8 @@ runs the shipped detect → locate → propose → prove pipeline (the same `_fi
 provider/migration header plus the fix report or a provider JSON envelope, and with `--open-pr` uses
 `gh`/the T10a app remote. `--check`/`--require` override the bundle. 1,738 tests, offline.
 
-Known limits: one repo per run (local multi-repo fan-out shipped in T10c); no installed/hosted
-fan-out, webhooks, database or hosted service (T10d); no provider note in the PR body; the bundle is
+Known limits: one repo per run (local multi-repo fan-out shipped in T10c and installed fan-out in
+T10d); no webhooks, database or hosted service; no provider note in the PR body; the bundle is
 trusted local input (paths/commands), not a sandbox; `command` is accepted as a `tenon.toml` alias
 for the documented `check` key.
 
@@ -236,8 +236,24 @@ Exit 0 iff every repo passes, 1 if any failed, 2 on usage/bundle/list/global spe
 tests, offline.
 
 Known limits: sequential, no rollback or retries, one app token per run; a listed repo must already
-be a local checkout; no provider note in the PR body. Installed/hosted fan-out (installation
-discovery, webhooks, a database, deployment) is T10d.
+be a local checkout; no provider note in the PR body. Installed fan-out (app discovery and temp
+clones) shipped in T10d; a hosted/webhook-driven service remains a later milestone.
+
+### T10d as built (2026-11-10)
+
+`src/tenon/pr/installed.py`: `InstalledRepo` plus `list_installation_repos` (paginated
+`GET /installation/repositories` with the installation token, archived repos skipped, named errors
+for malformed pages and a 100-page cap) and `clone_repo` (a `tenon-installed-*` temp dir, a shallow
+`git clone` with the T10a credential helper and `TENON_GITHUB_TOKEN` in the child env, token scrubbed
+from errors, the dir always removed). `tenon provider migrate --installed --bundle PATH` resolves the
+T10a app identity, mints one token, discovers the installation's repos, clones each, runs the shipped
+`_fix_results` and reuses T10c's text/JSON fan-out report with `repo` = `owner/name`; `--open-pr`
+constructs one `GitHubAppRemote` from the same token, while a dry run makes no PR call. A clone
+failure is per-repo (exit 1); a token/list failure or a shared bad spec exits 2. 1,843 tests, offline.
+
+Known limits: sequential clones with no retries/rate-limit handling and no rollback; one token per
+run; a malicious git hook can read the token from the child env; archived repos are not counted; the
+hosted/webhook-driven service is not built.
 
 
 

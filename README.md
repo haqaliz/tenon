@@ -247,7 +247,8 @@ label.
 Languages in order: Python, TypeScript/JavaScript, then Go, Rust, C#. Change sources: OpenAPI and MCP
 tools/list diffs, with the Python MCP tool-call locator; SDK metadata later. Consumer side first;
 the provider bundle (T10b) packages that run for one repo, local fan-out over a repos file (T10c)
-runs it across checkouts, and installed/hosted fan-out is T10d.
+and installed fan-out through the app (T10d) run it across checkouts; a hosted/webhook-driven
+service is later.
 
 ## Docs
 
