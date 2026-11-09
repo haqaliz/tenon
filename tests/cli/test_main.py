@@ -2726,6 +2726,252 @@ def test_installed_json_has_the_exact_envelope_and_is_byte_stable(
     assert capsys.readouterr().out == first
 
 
+# Spec AC5/AC6: one injected remote opens one PR per installed repo.
+def test_installed_open_pr_writes_one_pr_per_repo_with_the_injected_remote(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    repos = a_installed_repos("acme/one", "acme/two")
+    a_installed_app(monkeypatch, repos)
+    clones = a_fake_installed_clone(monkeypatch, tmp_path)
+    marker = object()
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_installed(bundle, "--open-pr", remote=marker) == 0
+
+    assert [call["repo"] for call in calls] == [entry[2] for entry in clones]
+    assert all(call["remote"] is marker for call in calls)
+    assert [entry[1] for entry in clones] == [INSTALLED_TOKEN, INSTALLED_TOKEN]
+    out = capsys.readouterr().out
+    assert out.count("PR: https://github.com/example/repo/pull/7") == 2
+    assert out.endswith("repos: 2, passed: 2, failed: 0\n")
+    assert INSTALLED_TOKEN not in out
+
+
+# Spec S3/AC5: the dry run discovers and runs but never calls the writer.
+def test_installed_dry_run_makes_no_pr_call(tmp_path, monkeypatch, capsys):
+    bundle = a_bundle(tmp_path)
+    a_installed_app(monkeypatch, a_installed_repos("acme/one"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_installed(bundle) == 0
+
+    assert calls == []
+    assert "PR:" not in capsys.readouterr().out
+
+
+# Spec AC5: --open-pr with no injected remote builds one app remote from the token.
+def test_installed_open_pr_constructs_the_app_remote_once_from_the_token(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    repos = a_installed_repos("acme/one", "acme/two")
+    provider, seen = a_installed_app(monkeypatch, repos)
+    clones = a_fake_installed_clone(monkeypatch, tmp_path)
+    remotes = []
+
+    class Remote:
+        def __init__(self, token_provider, api_url="https://api.github.com"):
+            self.record = {"provider": token_provider, "api_url": api_url}
+            remotes.append(self.record)
+
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "GitHubAppRemote", Remote)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_installed(bundle, "--open-pr", "--remote", "app") == 0
+
+    assert provider.mints == 1
+    (remote,) = remotes
+    assert isinstance(remote["provider"], StaticToken)
+    assert remote["provider"].token() == INSTALLED_TOKEN
+    assert remote["api_url"] == INSTALLED_API_URL
+    assert all(call["remote"].record is remote for call in calls)
+    assert [entry[1] for entry in clones] == [INSTALLED_TOKEN, INSTALLED_TOKEN]
+    assert [entry[1] for entry in seen] == [INSTALLED_TOKEN]
+    assert INSTALLED_TOKEN not in capsys.readouterr().out
+
+
+# Spec AC6: a refused PR fails only that repo; the overall exit is 1.
+def test_installed_refused_pr_makes_the_overall_exit_one(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    repos = a_installed_repos("acme/one", "acme/two")
+    a_installed_app(monkeypatch, repos)
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    def write_pr(proposal, proof, repo, **_kwargs):
+        if repo.name == "clone-1":
+            return a_pr(
+                proof,
+                status=PrStatus.REFUSED,
+                refusal=PrRefusal.DIRTY_CHECKOUT,
+            )
+        return a_pr(proof)
+
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_installed(bundle, "--open-pr", remote=object()) == 1
+
+    out = capsys.readouterr().out
+    assert out.count("PR: https://github.com/example/repo/pull/7") == 1
+    assert "PR refused: DIRTY_CHECKOUT" in out
+    assert out.endswith("repos: 2, passed: 1, failed: 1\n")
+
+
+# Spec AC6/AC7: --check overrides the bundle command for every installed repo.
+def test_installed_check_flag_reaches_every_repo(tmp_path, monkeypatch, capsys):
+    bundle = a_bundle(tmp_path, command=[])
+    a_installed_app(monkeypatch, a_installed_repos("acme/one", "acme/two"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    assert a_installed(bundle) == 1
+    assert capsys.readouterr().out.count("Cause: NO_PROOF_COMMAND") == 2
+
+    assert a_installed(bundle, "--check", shlex.join(PROVIDER_CHECK)) == 0
+    out = capsys.readouterr().out
+    assert out.count("Proof: TESTS_PASSED") == 2
+    assert out.endswith("repos: 2, passed: 2, failed: 0\n")
+
+
+# Spec AC6/AC7: --require overrides the bundle bar for every installed repo.
+def test_installed_require_flag_reaches_every_repo(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path, command=[], require="UNVERIFIED")
+    a_installed_app(monkeypatch, a_installed_repos("acme/one", "acme/two"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    assert a_installed(bundle) == 0
+    assert capsys.readouterr().out.count("Proof: UNVERIFIED") == 2
+
+    assert a_installed(bundle, "--require", "TESTS_PASSED") == 1
+    out = capsys.readouterr().out
+    assert out.count("Proof: UNVERIFIED") == 2
+    assert out.endswith("repos: 2, passed: 0, failed: 2\n")
+
+
+# Spec AC7: a token or discovery failure is one named usage error, exit 2.
+@pytest.mark.parametrize("where", ["token", "list"])
+def test_installed_discovery_failure_exits_two(
+    where, tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+
+    class Provider:
+        def token(self):
+            if where == "token":
+                raise RemoteError("ghs_test boom")
+            return INSTALLED_TOKEN
+
+    monkeypatch.setattr(
+        cli_main, "_app", lambda args: (Provider(), INSTALLED_API_URL)
+    )
+
+    def lister(api, token):
+        raise RemoteError("GET /installation/repositories failed: 401")
+
+    if where == "list":
+        monkeypatch.setattr(cli_main, "list_installation_repos", lister)
+
+    assert a_installed(bundle) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "could not list installed repositories" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC7: the same discovery failure in --json mode is one object.
+def test_installed_discovery_failure_json_is_one_object(
+    tmp_path, monkeypatch, capsys
+):
+    bundle = a_bundle(tmp_path)
+    a_installed_app(monkeypatch, ())
+
+    def lister(api, token):
+        raise RemoteError("GET /installation/repositories failed: 401")
+
+    monkeypatch.setattr(cli_main, "list_installation_repos", lister)
+
+    assert a_installed(bundle, "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "usage"
+    assert "could not list installed repositories" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC7: a shared spec refusal aborts the whole installed fan-out with exit 2.
+def test_installed_shared_bad_spec_exits_two(tmp_path, monkeypatch, capsys):
+    bundle = a_bundle(tmp_path, new_text="openapi: 2.0\n")
+    a_installed_app(monkeypatch, a_installed_repos("acme/one", "acme/two"))
+    a_fake_installed_clone(monkeypatch, tmp_path)
+
+    assert a_installed(bundle) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "tenon: spec:" in captured.err
+    assert "UNSUPPORTED_VERSION" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC7: a missing app input in --json mode is one object.
+@pytest.mark.parametrize(
+    "omitted", ["--app-id", "--app-installation-id", "--app-private-key"]
+)
+def test_installed_missing_app_input_json_is_one_object(
+    omitted, tmp_path, monkeypatch, a_app_env, capsys
+):
+    bundle = a_bundle(tmp_path)
+    key = a_app_key(tmp_path)
+    inputs = {
+        "--app-id": "123",
+        "--app-installation-id": "456",
+        "--app-private-key": str(key),
+    }
+    del inputs[omitted]
+    flat = [part for pair in inputs.items() for part in pair]
+
+    def bomb(*_args, **_kwargs):
+        raise AssertionError("no discovery may run")
+
+    monkeypatch.setattr(cli_main, "list_installation_repos", bomb)
+
+    assert a_installed(bundle, *flat, "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "usage"
+    assert omitted in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC4/AC7: --installed --remote gh in --json mode is one object.
+def test_installed_remote_gh_json_is_one_object(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_installed(bundle, "--open-pr", "--remote", "gh", "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "usage"
+    assert payload["error"]["message"] == "--installed requires --remote app"
+    assert captured.out.count("\n") == 1
+
+
 PROBE_FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"
 PROBE_SERVER = PROBE_FIXTURES / "probe_server.py"
 PROBE_AGENT = PROBE_FIXTURES / "probe_agent.py"

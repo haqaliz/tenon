@@ -563,8 +563,16 @@ def _installed(args: argparse.Namespace, remote: Remote | None) -> int:
     bundle = load_bundle(args.bundle)
     config = _bundle_config(bundle, args)
     token_provider, api_url = _app(args)
-    token = token_provider.token()
-    repos = list_installation_repos(GitHubApi(api_url=api_url), token)
+    try:
+        token = token_provider.token()
+        repos = list_installation_repos(GitHubApi(api_url=api_url), token)
+    except RemoteError as error:
+        raise _Usage(
+            f"could not list installed repositories: {error}"
+        ) from None
+    target = remote
+    if args.open_pr and target is None:
+        target = GitHubAppRemote(StaticToken(token), api_url=api_url)
     outcomes = []
     for repo in repos:
         try:
@@ -574,7 +582,7 @@ def _installed(args: argparse.Namespace, remote: Remote | None) -> int:
                     str(bundle.old),
                     str(bundle.new),
                     config,
-                    remote,
+                    target,
                     open_pr=args.open_pr,
                     allow_below=args.allow_below_required,
                 )
