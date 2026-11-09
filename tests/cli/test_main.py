@@ -2182,6 +2182,264 @@ def test_fanout_json_is_byte_stable_across_hash_seeds(tmp_path):
     assert str(first).encode() in zero.stdout
 
 
+# Spec AC6: one injected remote opens one PR per repo.
+def test_fanout_open_pr_writes_one_pr_per_repo_with_one_remote(
+    tmp_path, monkeypatch, capsys
+):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path)
+    repos = a_repos_file(tmp_path, first, second)
+    marker = object()
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_fanout(bundle, repos, "--open-pr", remote=marker) == 0
+
+    assert [call["repo"] for call in calls] == [first, second]
+    assert all(call["remote"] is marker for call in calls)
+    out = capsys.readouterr().out
+    assert out.count("PR: https://github.com/example/repo/pull/7") == 2
+    assert out.endswith("repos: 2, passed: 2, failed: 0\n")
+
+
+# Spec AC6: the app remote is constructed once for the whole fan-out.
+def test_fanout_open_pr_constructs_the_app_remote_once(
+    tmp_path, monkeypatch, capsys
+):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path)
+    repos = a_repos_file(tmp_path, first, second)
+    marker = object()
+    seen = []
+
+    def remote_spy(args):
+        seen.append(args)
+        return marker
+
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "_remote", remote_spy)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_fanout(bundle, repos, "--open-pr", "--remote", "app") == 0
+
+    assert len(seen) == 1
+    assert [call["remote"] for call in calls] == [marker, marker]
+
+
+# Spec AC6: a refused PR fails only its repo; the other still opens.
+def test_fanout_refused_pr_fails_that_repo_only(tmp_path, monkeypatch, capsys):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path)
+    repos = a_repos_file(tmp_path, first, second)
+    calls = []
+
+    def write_pr(
+        proposal,
+        proof,
+        repo,
+        *,
+        remote,
+        required=ProofLevel.TESTS_PASSED,
+        allow_below_required=False,
+        unanalyzed=(),
+    ):
+        calls.append(repo)
+        if repo == second:
+            return a_pr(
+                proof,
+                status=PrStatus.REFUSED,
+                refusal=PrRefusal.DIRTY_CHECKOUT,
+            )
+        return a_pr(proof)
+
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_fanout(bundle, repos, "--open-pr", remote=object()) == 1
+
+    assert calls == [first, second]
+    out = capsys.readouterr().out
+    assert out.count("PR: https://github.com/example/repo/pull/7") == 1
+    assert "PR refused: DIRTY_CHECKOUT" in out
+    assert out.endswith("repos: 2, passed: 1, failed: 1\n")
+
+
+# Spec AC6: below the requirement with no opt-in, no repo calls the writer.
+def test_fanout_open_pr_below_required_makes_no_pr_calls(tmp_path, monkeypatch):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path, command=[])
+    repos = a_repos_file(tmp_path, first, second)
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert a_fanout(bundle, repos, "--open-pr", remote=object()) == 1
+    assert calls == []
+
+
+# Spec AC6: the below-required opt-in reaches the writer for every repo.
+def test_fanout_allow_below_required_reaches_every_writer_call(
+    tmp_path, monkeypatch
+):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path, command=[])
+    repos = a_repos_file(tmp_path, first, second)
+    write_pr, calls = a_recorder(a_pr)
+    monkeypatch.setattr(cli_main, "write_pr", write_pr)
+
+    assert (
+        a_fanout(
+            bundle,
+            repos,
+            "--open-pr",
+            "--allow-below-required",
+            remote=object(),
+        )
+        == 1
+    )
+
+    assert [call["repo"] for call in calls] == [first, second]
+    assert all(call["allow_below_required"] is True for call in calls)
+    assert all(call["required"] is ProofLevel.TESTS_PASSED for call in calls)
+
+
+# Spec AC7: --check overrides the bundle command for every repo.
+def test_fanout_check_flag_reaches_every_repo(tmp_path, capsys):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path, command=[])
+    repos = a_repos_file(tmp_path, first, second)
+
+    assert a_fanout(bundle, repos) == 1
+    assert capsys.readouterr().out.count("Cause: NO_PROOF_COMMAND") == 2
+
+    assert a_fanout(bundle, repos, "--check", shlex.join(PROVIDER_CHECK)) == 0
+    out = capsys.readouterr().out
+    assert out.count("Proof: TESTS_PASSED") == 2
+    assert out.endswith("repos: 2, passed: 2, failed: 0\n")
+
+
+# Spec AC7: --require overrides the bundle bar for every repo.
+def test_fanout_require_flag_reaches_every_repo(tmp_path, capsys):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path, command=[], require="UNVERIFIED")
+    repos = a_repos_file(tmp_path, first, second)
+
+    assert a_fanout(bundle, repos) == 0
+    assert capsys.readouterr().out.count("Proof: UNVERIFIED") == 2
+
+    assert a_fanout(bundle, repos, "--require", "TESTS_PASSED") == 1
+    out = capsys.readouterr().out
+    assert out.count("Proof: UNVERIFIED") == 2
+    assert out.endswith("repos: 2, passed: 0, failed: 2\n")
+
+
+@pytest.mark.parametrize(
+    "selection, message",
+    [
+        ("neither", "a repository or --repos is required"),
+        ("both", "provide either <repo> or --repos, not both"),
+    ],
+)
+def test_fanout_selection_errors_are_named(
+    selection, message, tmp_path, capsys
+):
+    bundle = a_bundle(tmp_path)
+    first, _second = a_repo_copies(tmp_path)
+    argv = ["provider", "migrate", "--bundle", str(bundle)]
+    if selection == "both":
+        argv += [str(first), "--repos", str(a_repos_file(tmp_path, first))]
+
+    assert main(argv) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert message in captured.err
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "selection, message",
+    [
+        ("neither", "a repository or --repos is required"),
+        ("both", "provide either <repo> or --repos, not both"),
+    ],
+)
+def test_fanout_selection_errors_json_are_one_object(
+    selection, message, tmp_path, capsys
+):
+    bundle = a_bundle(tmp_path)
+    first, _second = a_repo_copies(tmp_path)
+    argv = ["provider", "migrate", "--bundle", str(bundle), "--json"]
+    if selection == "both":
+        argv += [str(first), "--repos", str(a_repos_file(tmp_path, first))]
+
+    assert main(argv) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "usage"
+    assert payload["error"]["message"] == message
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC7: a missing repos file is a named config error.
+def test_fanout_missing_repos_file_is_a_named_error(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+    missing = tmp_path / "missing.txt"
+
+    assert a_fanout(bundle, missing) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert str(missing) in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC7: an empty repos file is one JSON config error object.
+def test_fanout_empty_repos_file_json_is_one_error(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+    empty = tmp_path / "repos.txt"
+    empty.write_text("", encoding="utf-8")
+
+    assert a_fanout(bundle, empty, "--json") == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {"error"}
+    assert payload["error"]["kind"] == "config"
+    assert "no paths" in payload["error"]["message"]
+    assert captured.out.count("\n") == 1
+
+
+# Spec AC7: a bad bundle with --repos is a named config error, not a traceback.
+def test_fanout_bad_bundle_is_a_named_error(tmp_path, capsys):
+    first, _second = a_repo_copies(tmp_path)
+    repos = a_repos_file(tmp_path, first)
+    missing = tmp_path / "missing.json"
+
+    assert a_fanout(missing, repos) == 2
+
+    err = capsys.readouterr().err
+    assert str(missing) in err
+    assert "Traceback" not in err
+
+
+# Spec AC7: a shared spec refusal aborts the whole fan-out with exit 2.
+def test_fanout_shared_bad_spec_exits_two(tmp_path, capsys):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path, new_text="openapi: 2.0\n")
+    repos = a_repos_file(tmp_path, first, second)
+
+    assert a_fanout(bundle, repos) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "tenon: spec:" in captured.err
+    assert "UNSUPPORTED_VERSION" in captured.err
+    assert "Traceback" not in captured.err
+
+
 PROBE_FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"
 PROBE_SERVER = PROBE_FIXTURES / "probe_server.py"
 PROBE_AGENT = PROBE_FIXTURES / "probe_agent.py"
