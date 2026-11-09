@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1996,6 +1997,67 @@ def test_provider_missing_repo_is_usage(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "repository is not a directory" in err
     assert "Traceback" not in err
+
+
+def a_repo_copies(tmp_path):
+    """Two independent copies of the proof-basic fixture, in file order."""
+    first = tmp_path / "a"
+    second = tmp_path / "b"
+    shutil.copytree(PROOF_BASIC, first)
+    shutil.copytree(PROOF_BASIC, second)
+    return first, second
+
+
+def a_repos_file(tmp_path, *repos):
+    """One repos file listing the given checkouts, one per line."""
+    path = tmp_path / "repos.txt"
+    path.write_text("".join(f"{repo}\n" for repo in repos), encoding="utf-8")
+    return path
+
+
+def a_fanout(bundle, repos, *extra, remote=None):
+    return main(
+        [
+            "provider",
+            "migrate",
+            "--bundle",
+            str(bundle),
+            "--repos",
+            str(repos),
+            *extra,
+        ],
+        remote=remote,
+    )
+
+
+# Spec AC1: two fixture copies and one bundle pass; each checkout is unchanged.
+def test_fanout_two_repos_pass_and_leave_the_checkouts_unchanged(
+    a_snapshot, tmp_path, capsys
+):
+    first, second = a_repo_copies(tmp_path)
+    bundle = a_bundle(tmp_path)
+    repos = a_repos_file(tmp_path, first, second)
+    before = {first: a_snapshot(first), second: a_snapshot(second)}
+
+    assert a_fanout(bundle, repos) == 0
+
+    out = capsys.readouterr().out
+    assert out.count("Proof: TESTS_PASSED") == 2
+    assert a_snapshot(first) == before[first]
+    assert a_snapshot(second) == before[second]
+
+
+# Spec AC2: one missing directory is a per-repo failure; the other repo still runs.
+def test_fanout_missing_directory_fails_while_the_other_repo_runs(tmp_path, capsys):
+    first, _second = a_repo_copies(tmp_path)
+    missing = tmp_path / "missing"
+    bundle = a_bundle(tmp_path)
+    repos = a_repos_file(tmp_path, missing, first)
+
+    assert a_fanout(bundle, repos) == 1
+
+    out = capsys.readouterr().out
+    assert "Proof: TESTS_PASSED" in out
 
 
 PROBE_FIXTURES = Path(__file__).parent.parent / "fixtures" / "mcp"

@@ -47,7 +47,7 @@ from tenon.pr import (
 from tenon.probe import AgentError, ProbeError, load_tasks, probe
 from tenon.propose import propose
 from tenon.prove import ProofPlan, proof_rank, prove_plan, tail
-from tenon.provider import MigrationBundle, load_bundle
+from tenon.provider import MigrationBundle, load_bundle, load_repos
 
 from .config import (
     CliConfig,
@@ -191,8 +191,11 @@ def _parser() -> argparse.ArgumentParser:
     migrate = provider_commands.add_parser(
         "migrate", help="migrate one repository"
     )
-    migrate.add_argument("repo", help="repository to migrate")
+    migrate.add_argument("repo", nargs="?", help="repository to migrate")
     migrate.add_argument("--bundle", required=True, help="migration bundle JSON")
+    migrate.add_argument(
+        "--repos", default=None, metavar="FILE", help="repos file for fan-out"
+    )
     migrate.add_argument("--check", dest="check", default=None, help="check command")
     migrate.add_argument("--require", default=None, help="proof level")
     migrate.add_argument("--open-pr", action="store_true", help="open a pull request")
@@ -491,8 +494,42 @@ def _bundle_config(bundle: MigrationBundle, args: argparse.Namespace) -> CliConf
     return overrides(config, command=args.check, require=args.require)
 
 
+# Spec AC1/AC2/AC4: the repos file fans the shipped pipeline out in file order.
+def _fanout(args: argparse.Namespace, remote: Remote | None) -> int:
+    """Run the shipped fix pipeline once per listed checkout."""
+    bundle = load_bundle(args.bundle)
+    config = _bundle_config(bundle, args)
+    repos = load_repos(args.repos)
+    target = remote
+    if args.open_pr and target is None:
+        target = _remote(args)
+    exit_code = 0
+    for repo in repos:
+        if not repo.is_dir():
+            exit_code = 1
+            continue
+        changes, results = _fix_results(
+            repo,
+            str(bundle.old),
+            str(bundle.new),
+            config,
+            target,
+            open_pr=args.open_pr,
+            allow_below=args.allow_below_required,
+        )
+        exit_code = exit_code or fix_exit(len(changes), results, config.require)
+        print(render_fix_text(results), end="")
+    return exit_code
+
+
 # Spec AC1/AC2/AC4: one bundle, one repo, the shipped fix pipeline.
 def _provider(args: argparse.Namespace, remote: Remote | None) -> int:
+    if args.repo is None and args.repos is None:
+        raise _Usage("a repository or --repos is required")
+    if args.repo is not None and args.repos is not None:
+        raise _Usage("provide either <repo> or --repos, not both")
+    if args.repos is not None:
+        return _fanout(args, remote)
     repo = Path(args.repo)
     if not repo.is_dir():
         raise _Usage(f"repository is not a directory: {args.repo}")
