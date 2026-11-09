@@ -2331,21 +2331,34 @@ def test_fanout_require_flag_reaches_every_repo(tmp_path, capsys):
     assert out.endswith("repos: 2, passed: 0, failed: 2\n")
 
 
-@pytest.mark.parametrize(
-    "selection, message",
-    [
-        ("neither", "a repository or --repos is required"),
-        ("both", "provide either <repo> or --repos, not both"),
-    ],
-)
+SELECTIONS = [
+    ("neither", "a repository, --repos or --installed is required"),
+    ("repo_repos", "provide only one of <repo>, --repos or --installed"),
+    ("repo_installed", "provide only one of <repo>, --repos or --installed"),
+    ("repos_installed", "provide only one of <repo>, --repos or --installed"),
+    ("all", "provide only one of <repo>, --repos or --installed"),
+]
+
+
+def a_selection_argv(selection, bundle, first, repos):
+    argv = ["provider", "migrate", "--bundle", str(bundle)]
+    if selection in ("repo_repos", "repo_installed", "all"):
+        argv.append(str(first))
+    if selection in ("repo_repos", "repos_installed", "all"):
+        argv += ["--repos", str(repos)]
+    if selection in ("repo_installed", "repos_installed", "all"):
+        argv.append("--installed")
+    return argv
+
+
+@pytest.mark.parametrize("selection, message", SELECTIONS)
 def test_fanout_selection_errors_are_named(
     selection, message, tmp_path, capsys
 ):
     bundle = a_bundle(tmp_path)
     first, _second = a_repo_copies(tmp_path)
-    argv = ["provider", "migrate", "--bundle", str(bundle)]
-    if selection == "both":
-        argv += [str(first), "--repos", str(a_repos_file(tmp_path, first))]
+    repos = a_repos_file(tmp_path, first)
+    argv = a_selection_argv(selection, bundle, first, repos)
 
     assert main(argv) == 2
 
@@ -2355,21 +2368,14 @@ def test_fanout_selection_errors_are_named(
     assert "Traceback" not in captured.err
 
 
-@pytest.mark.parametrize(
-    "selection, message",
-    [
-        ("neither", "a repository or --repos is required"),
-        ("both", "provide either <repo> or --repos, not both"),
-    ],
-)
+@pytest.mark.parametrize("selection, message", SELECTIONS)
 def test_fanout_selection_errors_json_are_one_object(
     selection, message, tmp_path, capsys
 ):
     bundle = a_bundle(tmp_path)
     first, _second = a_repo_copies(tmp_path)
-    argv = ["provider", "migrate", "--bundle", str(bundle), "--json"]
-    if selection == "both":
-        argv += [str(first), "--repos", str(a_repos_file(tmp_path, first))]
+    repos = a_repos_file(tmp_path, first)
+    argv = a_selection_argv(selection, bundle, first, repos) + ["--json"]
 
     assert main(argv) == 2
 
@@ -2437,6 +2443,91 @@ def test_fanout_shared_bad_spec_exits_two(tmp_path, capsys):
     assert captured.out == ""
     assert "tenon: spec:" in captured.err
     assert "UNSUPPORTED_VERSION" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def a_installed(bundle, *extra, remote=None):
+    return main(
+        ["provider", "migrate", "--installed", "--bundle", str(bundle), *extra],
+        remote=remote,
+    )
+
+
+# Spec AC4: installed discovery needs the app identity, never a gh remote.
+def test_installed_remote_gh_is_usage(tmp_path, capsys):
+    bundle = a_bundle(tmp_path)
+
+    assert a_installed(bundle, "--open-pr", "--remote", "gh") == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--installed requires --remote app" in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC4/AC7: each missing app input is exit 2 before any discovery.
+@pytest.mark.parametrize(
+    ("omitted", "message"),
+    [
+        ("--app-id", "--app-id or TENON_GITHUB_APP_ID"),
+        (
+            "--app-installation-id",
+            "--app-installation-id or TENON_GITHUB_APP_INSTALLATION_ID",
+        ),
+        (
+            "--app-private-key",
+            "--app-private-key or TENON_GITHUB_APP_PRIVATE_KEY",
+        ),
+    ],
+)
+def test_installed_missing_app_input_is_usage(
+    omitted, message, tmp_path, monkeypatch, a_app_env, capsys
+):
+    bundle = a_bundle(tmp_path)
+    key = a_app_key(tmp_path)
+    inputs = {
+        "--app-id": "123",
+        "--app-installation-id": "456",
+        "--app-private-key": str(key),
+    }
+    del inputs[omitted]
+    flat = [part for pair in inputs.items() for part in pair]
+
+    def bomb(*_args, **_kwargs):
+        raise AssertionError("no discovery may run")
+
+    monkeypatch.setattr(cli_main, "list_installation_repos", bomb)
+
+    assert a_installed(bundle, *flat) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert message in captured.err
+    assert "Traceback" not in captured.err
+
+
+# Spec AC7: an unreadable private key is exit 2 and names the path.
+def test_installed_unreadable_key_is_usage(tmp_path, a_app_env, capsys):
+    bundle = a_bundle(tmp_path)
+    missing = tmp_path / "missing.pem"
+
+    assert (
+        a_installed(
+            bundle,
+            "--app-id",
+            "123",
+            "--app-installation-id",
+            "456",
+            "--app-private-key",
+            str(missing),
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "cannot read the app private key" in captured.err
+    assert str(missing) in captured.err
     assert "Traceback" not in captured.err
 
 
