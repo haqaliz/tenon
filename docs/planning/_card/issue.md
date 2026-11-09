@@ -1,45 +1,41 @@
-# Card: feat/provider-fanout
+# Card: feat/provider-installed
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T10 Provider layer and GitHub App (hosted)** — third slice: **local multi-repo
-  fan-out** (`docs/technical/CAPABILITY_ROADMAP.md:16`)
-- **Milestone:** Phase 3 (`docs/ROADMAP.md`), third slice
-- **State:** shipped 2026-11-09 (`src/tenon/provider/repos.py`, CLI; 1,774 tests)
-- **Branch:** `feat/provider-fanout/aliz`
-- **Worktree:** `.claude/worktrees/feat-provider-fanout`
+- **Capability:** **T10 Provider layer and GitHub App (hosted)** — fourth slice: **installed repo
+  discovery and fan-out** (`docs/technical/CAPABILITY_ROADMAP.md:16`)
+- **Milestone:** Phase 3 (`docs/ROADMAP.md`), fourth slice
+- **Branch:** `feat/provider-installed/aliz`
+- **Worktree:** `.claude/worktrees/feat-provider-installed`
 
 ## Brief
 
-T10b runs one migration bundle against one repo. A provider with several customers needs to run the
-same bundle across many local checkouts, open a PR per repo, and see which repos passed — without a
-service, database or webhook yet.
+T10c fans a bundle out over a local repos file. A provider using the GitHub App still has to clone
+every customer checkout by hand and keep the list current. The app already knows its installation's
+repositories.
 
-T10c adds `tenon provider migrate --repos FILE` (alongside the existing single positional repo):
-- the file lists local checkout paths, one per line, relative to the file;
-- the bundle is loaded once, the pipeline runs sequentially per repo, and `--open-pr` opens one PR
-  per repo through `gh` or the T10a app remote;
-- the report is per repo (text) or a provider fan-out JSON envelope; the exit is 0 when every repo
-  meets the requirement and every requested PR opened, 1 when any repo failed, 2 on usage/bundle/list
-  errors;
-- a missing/invalid repo is a per-repo failure, not an abort; all repos are attempted by default.
+T10d adds **installed repo discovery and fan-out**:
+- a selector that lists the app installation's repositories through the GitHub API
+  (`GET /installation/repositories`, paginated) instead of a local repos file;
+- one temp clone per repo using the installation token through the existing credential-helper
+  mechanism (never in argv or a URL), then the shipped T10b/T10c pipeline and one PR per repo;
+- the same per-repo text/JSON fan-out report, per-repo failure isolation and exit codes as T10c;
+- no webhooks, database, deployment or hosted service in this slice.
 
-Installed/hosted fan-out (GitHub App installation discovery, webhooks, a database, deployment) is
-T10d. No service in this slice.
-
-The hard rules do not change: the same bundle/pipeline/guardrails per repo; no merge/default
-branch/force; no provider branding; the bundle is trusted local input, not a sandbox; the order is
-deterministic and the JSON byte-stable.
+The hard rules do not change: the app identity is the T10a one; T5/T10a guardrails apply per repo;
+no merge/default branch/force; the token never enters argv or the report; offline tests use the
+injectable API transport and local fixture remotes.
 
 ## Constraints carried in from the repo
 
-- T10b's `MigrationBundle`/`load_bundle`, `_fix_results`, `_remote` and the provider envelope are the
-  seams to reuse; no new pipeline.
-- T5/T10a's PR gate and guardrails apply per repo.
-- `CLAUDE.md` §1–5: execution decides, honest levels, no merge/default branch, no egress.
-- Offline tests: fixture repo copies and bundles; no network/live GitHub.
+- T10a's `GitHubAppToken`, `GitHubApi` (injectable transport), `GitHubAppRemote` and its
+  `TENON_GITHUB_TOKEN` credential helper are the seams to reuse; no new auth scheme.
+- T10c's `ProviderRepoResult`, `render_fanout_*` and per-repo exit semantics are the report seam.
+- `CLAUDE.md` §1–5: execution decides, honest levels, no merge/default branch, no egress by default.
+- Offline tests: fake API transport, fixture repos, local git remotes; no network/live GitHub.
 
 ## Scope fence
 
-Not this card: installed/hosted fan-out, webhooks, a database, deployment, provider branding, T11.
+Not this card: webhooks, installation discovery events, a database, a hosted service, deployment,
+parallelism, rollback, provider branding, T11.
