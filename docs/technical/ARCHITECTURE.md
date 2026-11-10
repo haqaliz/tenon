@@ -4,8 +4,8 @@ Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 
 (locate, TypeScript/JavaScript), T7 (proof ladder), T8a (MCP tool-schema diffs), T8b (Python MCP
 tool-call locator), T8c (`tenon probe`), T9 (benchmark corpus), T10a (GitHub App remote), T10b
 (provider migration bundle), T10c (local provider fan-out), T10d (installed provider fan-out), T11a
-(locate, Rust), T11b (locate, Go) and the `tenon check` / `tenon fix` / `tenon provider migrate` /
-`tenon probe` / `tenon corpus` CLI are implemented** under
+(locate, Rust), T11b (locate, Go), T11c (locate, C#) and the `tenon check` / `tenon fix` /
+`tenon provider migrate` / `tenon probe` / `tenon corpus` CLI are implemented** under
 `src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`,
 `src/tenon/provider/`, `src/tenon/probe/`, `src/tenon/corpus/` and `src/tenon/cli/`. The later
 stages are not.
@@ -36,7 +36,8 @@ API change source (OpenAPI v1 -> v2 | MCP schema | SDK metadata)
 ```text
 src/tenon/
   detect/     T1/T8a: spec parsers, differ, Change records <- built (OpenAPI + MCP)
-  locate/     T2/T6/T8b/T11a/T11b: per-language finders <- built (Python + TS/JS + Rust + Go + MCP)
+  locate/     T2/T6/T8b/T11a/T11b/T11c: per-language finders <- built
+              (Python + TS/JS + Rust + Go + C# + MCP)
   propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
   prove/      T4/T7: working-copy runner, proof ladder  <- built (all five levels)
   pr/         T5/T10a/T10d: branch/PR writer + installed discovery <- built (gh + GitHub App)
@@ -54,16 +55,18 @@ tests/        offline; fixture repos and specs; no network, no model calls
   a synthetic `method="tool"` operation; the only taxonomy extension is
   `ADDITIONAL_PROPERTIES_CHANGED`. T8b adds `locate_mcp` for the high-level Python `call_tool`
   pattern behind the same `LocateResult`.
-- **One certainty policy, per-language scanners.** T2, T6, T11a and T11b all emit `Hit`/`Dynamic`/
-  `ScanResult` evidence and call the same `resolve` rule table. Python parses with `ast`,
-  TypeScript/JavaScript, Rust and Go with tree-sitter; none runs the scanned code, needs Node or a
-  Rust/Go toolchain, or infers types. The Rust scan roots names through `use` declarations and
+- **One certainty policy, per-language scanners.** T2, T6, T11a, T11b and T11c all emit `Hit`/
+  `Dynamic`/`ScanResult` evidence and call the same `resolve` rule table. Python parses with `ast`,
+  TypeScript/JavaScript, Rust, Go and C# with tree-sitter; none runs the scanned code, needs Node or
+  a Rust/Go/.NET toolchain, or infers types. The Rust scan roots names through `use` declarations and
   aliases and reports associated calls, struct-literal fields and field access through a tracked
   binding. The Go scan roots names through an import root, its subpackages and import aliases, and
   reports package-qualified calls, composite-literal fields and field access through a tracked
-  binding; `package_name` overrides the root import's inferred package clause. Method chains,
-  macros, re-exported crates, Go dot imports, reflection and multi-hop data flow are not followed and
-  produce no site, never a guess.
+  binding; `package_name` overrides the root import's inferred package clause. The C# scan roots
+  names through namespace usings and aliases, and reports static and tracked-`new` instance calls,
+  object-initializer properties and property access through a tracked binding. Method chains,
+  macros, re-exported crates, Go dot imports, C# fluent chains/`using static`/`dynamic`, reflection
+  and multi-hop data flow are not followed and produce no site, never a guess.
 - **Proof is a ladder, chosen by the user.** `--require
   TESTS_PASSED|CHARACTERIZED|REPLAYED|TYPES_BUILD_ONLY|UNVERIFIED`. The runner configures up to four
   stage commands (`build`, `characterize`, `replay`, `tests`), runs every baseline, applies the patch
@@ -114,10 +117,10 @@ tests/        offline; fixture repos and specs; no network, no model calls
 
 ## CLI
 
-`tenon check <repo> --old SPEC --new SPEC [--source openapi|mcp] [--language python|ts|rust|go]
+`tenon check <repo> --old SPEC --new SPEC [--source openapi|mcp] [--language python|ts|rust|go|csharp]
 [--package-name NAME] [--json]` lists affected call sites and exits 0 when clean, 1 when a site or
 an unanalyzable repository is found.
-`tenon fix <repo> --old SPEC --new SPEC [--source openapi|mcp] [--language python|ts|rust|go]
+`tenon fix <repo> --old SPEC --new SPEC [--source openapi|mcp] [--language python|ts|rust|go|csharp]
 [--package-name NAME] [--build CMD] [--characterize CMD] [--replay CMD] [--check CMD]
 [--require LEVEL] [--allow-below-required]
 [--open-pr] [--remote gh|app] [--app-id ID] [--app-installation-id ID] [--app-private-key PATH]
@@ -168,14 +171,15 @@ report` prints the level/outcome table and merge rate. `docs/benchmark/` holds t
 
 `tenon.toml` provides `[locate]` (`source`, `language`, `sdk_package`, `package_name`, mappings) and
 `[tenon]` defaults; flags override. Exit 2 on usage or bad input. Never a traceback. `language` is
-`python`, `ts`, `rust` or `go`; for Rust, `sdk_package` is one crate identifier as written in `use`
-(for example `stripe`); for Go it is the import root (for example
+`python`, `ts`, `rust`, `go` or `csharp`; for Rust, `sdk_package` is one crate identifier as written
+in `use` (for example `stripe`); for Go it is the import root (for example
 `github.com/stripe/stripe-go/v76`) and `package_name` optionally overrides the root import's package
-clause. The shared `operations`/`fields` tables map the spec to each language's chains.
+clause; for C# it is a dotted namespace root (for example `Stripe`). The shared `operations`/`fields`
+tables map the spec to each language's chains.
 
 `--source mcp` selects `load_mcp` / `diff_mcp` / `locate_mcp`; the Python high-level `call_tool`
-pattern is the only locator in this slice. `source=mcp` with `language=ts`, `language=rust` or
-`language=go` is a named error.
+pattern is the only locator in this slice. `source=mcp` with `language=ts`, `language=rust`,
+`language=go` or `language=csharp` is a named error.
 
 `--language rust` selects `RustLocateConfig` and `locate_rust`: tree-sitter over `.rs` files, `use`
 rooting and aliases, associated calls, struct-literal fields, and field access through a tracked
@@ -197,6 +201,17 @@ shipped proposer only edits when the located spelling equals the spec's old name
 reports `NO_EDITABLE_SITES`. No Go toolchain or proof preset ships; `--check "go test ./..."`
 is just a user command.
 
+`--language csharp` selects `CSharpLocateConfig` and `locate_csharp`: tree-sitter over `.cs` files,
+namespace usings and aliases, static and tracked-`new` instance calls, object-initializer properties
+and property access through a tracked binding. `sdk_package` is a dotted namespace root (for example
+`Stripe`); a blank, path or `::` root is a named `sdk_package` error. The canonical chain keeps only
+the simple type name (`Stripe.Services.ChargeService` -> `ChargeService`). The limits are fluent
+chains (`client.Charges.Create(...)`), `using static`, `dynamic`, reflection, multi-hop initializer
+flow and same-name local types; each yields no site rather than a guess. `source=mcp` remains
+Python-only. A mapping that changes the spelling locates the site, but the shipped proposer only
+edits when the located spelling equals the spec's old name; otherwise it reports `NO_EDITABLE_SITES`.
+No .NET toolchain or proof preset ships; `--check "dotnet test"` is just a user command.
+
 ## Open questions
 
 - T6 follow-ups: `tsconfig`/workspace path aliases, JSX attribute sites, and a T4 copy policy for
@@ -213,5 +228,6 @@ is just a user command.
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
 - Phase 3: T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider
-  fan-out), T10d (installed provider fan-out) and T11a (Rust locator) shipped; a hosted/webhook-driven
-  service and T11c (C#, method chains, macros, re-exports) are not started.
+  fan-out), T10d (installed provider fan-out), T11a (Rust locator), T11b (Go locator) and T11c
+  (C# locator) shipped; a hosted/webhook-driven service and C# fluent-chain receiver tracking are
+  not started.

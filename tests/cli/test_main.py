@@ -755,6 +755,104 @@ def test_fix_go_proposes_and_proves_the_rename(
     assert a_snapshot(a_go_repo.repo) == before
 
 
+# Spec AC1: the temp tenon.toml selects C#; the initializer property is reported.
+def test_check_csharp_reports_the_initializer_property(a_csharp_repo, capsys):
+    assert (
+        a_check(
+            a_csharp_repo.repo,
+            a_csharp_repo.specs,
+            "--language",
+            "csharp",
+            "--field",
+            "ChargeCreateOptions.AmountCents=AmountCents",
+        )
+        == 1
+    )
+
+    out = capsys.readouterr().out
+    assert "Program.cs:10:49" in out
+    assert "AmountCents" in out
+    assert "1 change, 1 certain site, 0 ambiguity groups" in out
+
+
+# Spec AC1: the C# check uses the shipped JSON envelope.
+def test_check_csharp_json_has_the_exact_envelope(a_csharp_repo, capsys):
+    assert (
+        a_check(
+            a_csharp_repo.repo,
+            a_csharp_repo.specs,
+            "--language",
+            "csharp",
+            "--field",
+            "ChargeCreateOptions.AmountCents=AmountCents",
+            "--json",
+        )
+        == 1
+    )
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert set(payload) == {"command", "results", "summary"}
+    assert payload["command"] == "check"
+    (result,) = payload["results"]
+    assert result["reason"] is None
+    assert {
+        (site["path"], site["line"], site["column"], site["symbol"])
+        for site in result["certain"]
+    } == {(*a_csharp_repo.site, "AmountCents")}
+    assert out.count("\n") == 1
+
+
+# Spec AC1: an endpoint removal reports the associated C# call site.
+def test_check_csharp_reports_the_removed_endpoint_call(a_csharp_repo, capsys):
+    assert (
+        a_check(
+            a_csharp_repo.repo,
+            a_csharp_repo.endpoint_specs,
+            "--language",
+            "csharp",
+            "--operation",
+            "POST /v1/charges=ChargeService.Create",
+        )
+        == 1
+    )
+
+    out = capsys.readouterr().out
+    assert "Program.cs:12:9" in out
+    assert "Create" in out
+
+
+# Spec AC2: fix proposes the rename, proves it and leaves the fixture alone.
+def test_fix_csharp_proposes_and_proves_the_rename(
+    a_csharp_repo, a_snapshot, capsys
+):
+    before = a_snapshot(a_csharp_repo.repo)
+
+    assert (
+        a_fix(
+            a_csharp_repo.repo,
+            a_csharp_repo.fix_specs,
+            "--language",
+            "csharp",
+            "--check",
+            shlex.join([sys.executable, "-c", "pass"]),
+        )
+        == 0
+    )
+
+    out = capsys.readouterr().out
+    assert (
+        '-        var options = new ChargeCreateOptions { AmountCents = 100, '
+        'Currency = "usd" };' in out
+    )
+    assert (
+        '+        var options = new ChargeCreateOptions { AmountTotal = 100, '
+        'Currency = "usd" };' in out
+    )
+    assert "Proof: TESTS_PASSED" in out
+    assert a_snapshot(a_csharp_repo.repo) == before
+
+
 # Spec AC3: check --source mcp runs the MCP diff and names the argument key.
 def test_check_mcp_source_names_the_argument_key(a_mcp_repo, a_mcp_specs, capsys):
     assert a_check(a_mcp_repo, a_mcp_specs, "--source", "mcp") == 1
@@ -2002,6 +2100,9 @@ def test_fix_build_only_json_is_byte_stable_across_hash_seeds(
 PROOF_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "proof-basic"
 RUST_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "rust-basic"
 GO_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "go-basic"
+CSHARP_BASIC = (
+    Path(__file__).parent.parent / "fixtures" / "repos" / "csharp-basic"
+)
 GO_ROOT = "github.com/stripe/stripe-go/v76"
 PROVIDER_CHECK = [sys.executable, "-c", "import acme.billing"]
 PROVIDER_OLD = """\
@@ -2040,6 +2141,19 @@ components:
           type: integer
 """
 GO_PROVIDER_NEW = GO_PROVIDER_OLD.replace("AmountCents:", "AmountTotal:")
+CSHARP_PROVIDER_OLD = """\
+openapi: 3.1.0
+components:
+  schemas:
+    ChargeCreateOptions:
+      type: object
+      properties:
+        AmountCents:
+          type: integer
+"""
+CSHARP_PROVIDER_NEW = CSHARP_PROVIDER_OLD.replace(
+    "AmountCents:", "AmountTotal:"
+)
 
 
 def a_bundle(
@@ -2109,6 +2223,28 @@ def a_go_bundle(tmp_path):
     return path
 
 
+def a_csharp_bundle(tmp_path):
+    """One temp C# provider bundle over the csharp-basic fixture."""
+    (tmp_path / "old.yaml").write_text(CSHARP_PROVIDER_OLD, encoding="utf-8")
+    (tmp_path / "new.yaml").write_text(CSHARP_PROVIDER_NEW, encoding="utf-8")
+    data = {
+        "provider": "stripe",
+        "migration": "amount-total",
+        "source": "openapi",
+        "language": "csharp",
+        "old": "old.yaml",
+        "new": "new.yaml",
+        "locate": {
+            "sdk_package": "Stripe",
+            "fields": {"ChargeCreateOptions.AmountCents": "AmountCents"},
+        },
+        "check": [sys.executable, "-c", "pass"],
+    }
+    path = tmp_path / "csharp-bundle.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
 def a_provider(bundle, *extra, repo=PROOF_BASIC, remote=None):
     return main(
         ["provider", "migrate", str(repo), "--bundle", str(bundle), *extra],
@@ -2168,6 +2304,28 @@ def test_provider_migrate_go_bundle_exits_zero(
     )
     assert "Proof: TESTS_PASSED" in out
     assert a_snapshot(GO_BASIC) == before
+
+
+# Spec AC4: a C# bundle runs through provider migrate and leaves the repo alone.
+def test_provider_migrate_csharp_bundle_exits_zero(
+    a_snapshot, tmp_path, capsys
+):
+    bundle = a_csharp_bundle(tmp_path)
+    before = a_snapshot(CSHARP_BASIC)
+
+    assert a_provider(bundle, repo=CSHARP_BASIC) == 0
+
+    out = capsys.readouterr().out
+    assert (
+        '-        var options = new ChargeCreateOptions { AmountCents = 100, '
+        'Currency = "usd" };' in out
+    )
+    assert (
+        '+        var options = new ChargeCreateOptions { AmountTotal = 100, '
+        'Currency = "usd" };' in out
+    )
+    assert "Proof: TESTS_PASSED" in out
+    assert a_snapshot(CSHARP_BASIC) == before
 
 
 # Spec AC1: a red check is exit 1 and the proof names the failure.
