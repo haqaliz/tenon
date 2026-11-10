@@ -192,7 +192,9 @@ package clause. Supported shapes are package-qualified calls, composite literals
 through a tracked binding and import aliases. The limits are method chains on a local value
 (`client.Charges.New(...)`), dot imports, reflection and multi-hop data flow; each yields no site
 rather than a guess. A bad import root or package name is a named `sdk_package`/`package_name` error,
-and `source=mcp` remains Python-only. No Go toolchain or proof preset ships; `--check "go test ./..."`
+and `source=mcp` remains Python-only. A mapping that changes the spelling locates the site, but the
+shipped proposer only edits when the located spelling equals the spec's old name; otherwise it
+reports `NO_EDITABLE_SITES`. No Go toolchain or proof preset ships; `--check "go test ./..."`
 is just a user command.
 
 ## Open questions
@@ -212,4 +214,4 @@ is just a user command.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
 - Phase 3: T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider
   fan-out), T10d (installed provider fan-out) and T11a (Rust locator) shipped; a hosted/webhook-driven
-  service and the rest of T11 (Go/C#, method chains, macros, re-exports) are not started.
+  service and T11c (C#, method chains, macros, re-exports) are not started.

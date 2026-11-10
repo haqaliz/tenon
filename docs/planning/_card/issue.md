@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T11 More languages** — second slice: **Go locator** (`docs/technical/CAPABILITY_ROADMAP.md:17`)
 - **Milestone:** Phase 3 (`docs/ROADMAP.md`), second T11 slice
+- **State:** shipped 2026-11-10 (`src/tenon/locate/go_*.py`, CLI; 2,013 tests)
 - **Branch:** `feat/locator-go/aliz`
 - **Worktree:** `.claude/worktrees/feat-locator-go`
 

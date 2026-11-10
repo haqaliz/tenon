@@ -16,7 +16,7 @@ usable by AI agents, by running an agent against it.
 The name: a *tenon* is the tongue cut on a timber to fit its mortise exactly. The joint holds
 only if the two sides still match. Tenon asks of an integration: *does your side still fit theirs?*
 
-Status: **T1, T2, T3, T4, T5, T6, T7, T8a, T8b, T8c, T9, T10a, T10b, T10c, T10d, T11a and M1.4 shipped.**
+Status: **T1, T2, T3, T4, T5, T6, T7, T8a, T8b, T8c, T9, T10a, T10b, T10c, T10d, T11a, T11b and M1.4 shipped.**
 `src/tenon/detect/` turns two OpenAPI 3.x documents — and, for T8a, two MCP `tools/list` documents —
 into typed `Change` records; `src/tenon/locate/` turns a record into call sites with file, line and
 column, keeping anything unprovable in named ambiguity groups — Python via `ast`,
@@ -43,9 +43,9 @@ no merge path. Tests live in `tests/`. The Phase 0 gate (M0.3) is met on two rea
 `TESTS_PASSED` on the focused checkout test) and `yezz123/stripe-template` @ `9d9178c` (a
 mock-assertion site, `TESTS_PASSED` on the offline subset; the case that forced T2's mock-assertion
 keyword attribution). Phase 2 is complete; Phase 3's T10a (GitHub App remote), T10b (provider
-migration bundle), T10c (local provider fan-out), T10d (installed provider fan-out) and T11a (Rust
-locator) shipped, while the hosted/webhook-driven service and T11b/T11c (Go/C#) are not started — do
-not describe capability that isn't there yet.
+migration bundle), T10c (local provider fan-out), T10d (installed provider fan-out), T11a (Rust
+locator) and T11b (Go locator) shipped, while the hosted/webhook-driven service and T11c (C#) are not
+started — do not describe capability that isn't there yet.
 
 Lineage: one of three siblings scaffolded together on 2026-10-22 (with Assay and Pry) from a
 market-demand pass (`~/dev/at/ideas/market-demand-2026-10.md`). It answers the YC Fall 2026

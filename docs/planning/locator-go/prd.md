@@ -3,7 +3,7 @@
 - **Slug:** `locator-go`
 - **Capability:** T11 in `docs/technical/CAPABILITY_ROADMAP.md` — **second slice, Go locator**
 - **Milestone:** Phase 3 in `docs/ROADMAP.md`, second T11 slice
-- **Status:** draft for review
+- **Status:** implemented 2026-11-10 (`src/tenon/locate/go_*.py`, CLI; 2,013 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement
