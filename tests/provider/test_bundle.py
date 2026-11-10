@@ -3,7 +3,12 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from tenon.locate import LocateConfig, McpLocateConfig, TsLocateConfig
+from tenon.locate import (
+    LocateConfig,
+    McpLocateConfig,
+    RustLocateConfig,
+    TsLocateConfig,
+)
 from tenon.prove import ProofLevel
 from tenon.provider.bundle import load_bundle
 
@@ -172,6 +177,7 @@ def test_missing_spec_is_a_named_error(tmp_path, key):
     [
         ("openapi", "python", "stripe", LocateConfig),
         ("openapi", "ts", "stripe", TsLocateConfig),
+        ("openapi", "rust", "stripe", RustLocateConfig),
         ("mcp", "python", "mcp", McpLocateConfig),
     ],
 )
@@ -203,6 +209,35 @@ def test_mcp_with_ts_is_an_error(tmp_path):
     assert "mcp" in str(error.value)
 
 
+# Spec AC3/AC4: mcp with Rust is the same named bundle error.
+def test_mcp_with_rust_is_an_error(tmp_path):
+    path = a_bundle(
+        tmp_path, source="mcp", language="rust", locate={"sdk_package": "mcp"}
+    )
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "mcp requires language python" in str(error.value)
+
+
+# Spec AC4: a Rust bundle validates the crate identifier by name.
+@pytest.mark.parametrize("crate", ["a::b", "a/b", ""])
+def test_rust_bundle_with_a_bad_crate_is_an_error(tmp_path, crate):
+    path = a_bundle(
+        tmp_path, language="rust", locate={"sdk_package": crate}
+    )
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "sdk_package" in str(error.value)
+    if crate:
+        assert "Rust crate" in str(error.value)
+
+
 # Spec AC3: only the two shipped sources are accepted.
 def test_unknown_source_is_an_error(tmp_path):
     path = a_bundle(tmp_path, source="graphql")
@@ -214,15 +249,15 @@ def test_unknown_source_is_an_error(tmp_path):
     assert "source" in str(error.value)
 
 
-# Spec AC3: only the two shipped languages are accepted.
+# Spec AC3: only the three shipped languages are accepted.
 def test_unknown_language_is_an_error(tmp_path):
-    path = a_bundle(tmp_path, language="rust")
+    path = a_bundle(tmp_path, language="go")
 
     with pytest.raises(ValueError) as error:
         load_bundle(path)
 
     assert str(path) in str(error.value)
-    assert "language" in str(error.value)
+    assert "python, ts or rust" in str(error.value)
 
 
 # Spec AC4: every required string key is present and non-blank.

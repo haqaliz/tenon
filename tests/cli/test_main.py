@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tenon.cli import main
+from tenon.cli import CliConfig, main
 from tenon.corpus import (
     CorpusRecord,
     Outcome,
@@ -21,7 +21,16 @@ from tenon.corpus import (
     load_corpus,
     record_id,
 )
-from tenon.detect import diff, diff_mcp, load, load_mcp
+from tenon.detect import (
+    Change,
+    ChangeKind,
+    Location,
+    diff,
+    diff_mcp,
+    load,
+    load_mcp,
+)
+from tenon.locate import LocateConfig, RustLocateConfig, TsLocateConfig
 from tenon.pr import (
     InstalledRepo,
     PrDraft,
@@ -325,6 +334,54 @@ def test_language_rust_with_source_mcp_is_named(a_mcp_repo, a_mcp_specs, capsys)
     err = capsys.readouterr().err
     assert "mcp requires language python" in err
     assert "Traceback" not in err
+
+
+LOCATE_CONFIGS = {
+    "python": LocateConfig,
+    "ts": TsLocateConfig,
+    "rust": RustLocateConfig,
+}
+
+
+def a_rust_change():
+    return Change(
+        kind=ChangeKind.RENAMED,
+        location=Location(pointer="#/components/schemas/Charge/properties"),
+        before="amount",
+        after="amount_total",
+        breaking=True,
+        confidence="inferred",
+    )
+
+
+# Spec AC5: the one table names each language's locator.
+def test_the_locator_table_names_each_locator():
+    assert cli_main.LOCATORS == {
+        "python": cli_main.locate,
+        "ts": cli_main.locate_ts,
+        "rust": cli_main.locate_rust,
+    }
+
+
+# Spec AC5: one table sends each language to its own locator.
+@pytest.mark.parametrize("language", ["python", "ts", "rust"])
+def test_locate_dispatches_each_language(language, monkeypatch, tmp_path):
+    seen = []
+    marker = object()
+
+    def spy(change, repo, config):
+        seen.append((change, repo, config))
+        return marker
+
+    monkeypatch.setitem(cli_main.LOCATORS, language, spy)
+    change = a_rust_change()
+    config = CliConfig(
+        locate=LOCATE_CONFIGS[language](sdk_package="stripe"),
+        language=language,
+    )
+
+    assert cli_main._locate(change, tmp_path, config) is marker
+    assert seen == [(change, tmp_path, config.locate)]
 
 
 # Spec AC3: check --source mcp runs the MCP diff and names the argument key.
@@ -1959,6 +2016,33 @@ def test_provider_missing_bundle_is_a_named_error(tmp_path, capsys):
 
     err = capsys.readouterr().err
     assert str(missing) in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a Rust bundle with MCP is a named bundle error.
+def test_provider_rust_bundle_with_mcp_is_a_named_error(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, source="mcp", language="rust")
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "mcp requires language python" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a Rust bundle with a bad crate is a named bundle error.
+@pytest.mark.parametrize("crate", ["a::b", "a/b", ""])
+def test_provider_rust_bundle_with_a_bad_crate_is_a_named_error(
+    crate, tmp_path, capsys
+):
+    bundle = a_bundle(tmp_path, language="rust", locate={"sdk_package": crate})
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    if crate:
+        assert "Rust crate" in err
     assert "Traceback" not in err
 
 

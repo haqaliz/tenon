@@ -5,11 +5,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from tenon.locate import LocateConfig, McpLocateConfig, TsLocateConfig
+from tenon.locate import (
+    LOCATE_TYPES,
+    LocateConfig,
+    McpLocateConfig,
+    RustLocateConfig,
+    TsLocateConfig,
+)
 from tenon.prove import ProofLevel
 
 SOURCES = ("openapi", "mcp")
-LANGUAGES = ("python", "ts")
+LANGUAGES = ("python", "ts", "rust")
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,10 +25,10 @@ class MigrationBundle:
     provider: str
     migration: str
     source: Literal["openapi", "mcp"]
-    language: Literal["python", "ts"]
+    language: Literal["python", "ts", "rust"]
     old: Path
     new: Path
-    locate: LocateConfig | TsLocateConfig | McpLocateConfig
+    locate: LocateConfig | TsLocateConfig | RustLocateConfig | McpLocateConfig
     command: tuple[str, ...] = ()
     build: tuple[str, ...] = ()
     characterize: tuple[str, ...] = ()
@@ -61,7 +67,7 @@ def a_mapping(locate: dict, key: str, path: Path) -> dict[str, str]:
 
 def a_locate(
     data: dict, source: str, language: str, path: Path
-) -> LocateConfig | TsLocateConfig | McpLocateConfig:
+) -> LocateConfig | TsLocateConfig | RustLocateConfig | McpLocateConfig:
     """The locate config type follows source and language."""
     locate = data.get("locate")
     if not isinstance(locate, dict):
@@ -72,8 +78,7 @@ def a_locate(
     try:
         if source == "mcp":
             return McpLocateConfig(client_package=sdk_package)
-        locate_type = TsLocateConfig if language == "ts" else LocateConfig
-        return locate_type(
+        return LOCATE_TYPES[language](
             sdk_package=sdk_package, operations=operations, fields=fields
         )
     except ValueError as error:
@@ -119,7 +124,9 @@ def load_bundle(path: str | Path) -> MigrationBundle:
         raise ValueError(f"{path}: source must be openapi or mcp: {source!r}")
     language = a_text(data, "language", path)
     if language not in LANGUAGES:
-        raise ValueError(f"{path}: language must be python or ts: {language!r}")
+        raise ValueError(
+            f"{path}: language must be python, ts or rust: {language!r}"
+        )
     if source == "mcp" and language != "python":
         raise ValueError(
             f"{path}: source mcp requires language python: {language!r}"
