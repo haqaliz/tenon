@@ -7,6 +7,7 @@ from typing import Literal
 
 from tenon.locate import (
     LOCATE_TYPES,
+    GoLocateConfig,
     LocateConfig,
     McpLocateConfig,
     RustLocateConfig,
@@ -15,7 +16,7 @@ from tenon.locate import (
 from tenon.prove import ProofLevel
 
 SOURCES = ("openapi", "mcp")
-LANGUAGES = ("python", "ts", "rust")
+LANGUAGES = ("python", "ts", "rust", "go")
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,10 +26,13 @@ class MigrationBundle:
     provider: str
     migration: str
     source: Literal["openapi", "mcp"]
-    language: Literal["python", "ts", "rust"]
+    language: Literal["python", "ts", "rust", "go"]
     old: Path
     new: Path
-    locate: LocateConfig | TsLocateConfig | RustLocateConfig | McpLocateConfig
+    locate: (
+        LocateConfig | TsLocateConfig | RustLocateConfig | GoLocateConfig
+        | McpLocateConfig
+    )
     command: tuple[str, ...] = ()
     build: tuple[str, ...] = ()
     characterize: tuple[str, ...] = ()
@@ -67,7 +71,10 @@ def a_mapping(locate: dict, key: str, path: Path) -> dict[str, str]:
 
 def a_locate(
     data: dict, source: str, language: str, path: Path
-) -> LocateConfig | TsLocateConfig | RustLocateConfig | McpLocateConfig:
+) -> (
+    LocateConfig | TsLocateConfig | RustLocateConfig | GoLocateConfig
+    | McpLocateConfig
+):
     """The locate config type follows source and language."""
     locate = data.get("locate")
     if not isinstance(locate, dict):
@@ -78,11 +85,17 @@ def a_locate(
     try:
         if source == "mcp":
             return McpLocateConfig(client_package=sdk_package)
-        return LOCATE_TYPES[language](
-            sdk_package=sdk_package, operations=operations, fields=fields
-        )
+        options = {
+            "sdk_package": sdk_package,
+            "operations": operations,
+            "fields": fields,
+        }
+        # Spec AC4: the Go root import's package clause is an optional override.
+        if language == "go":
+            options["package_name"] = locate.get("package_name")
+        return LOCATE_TYPES[language](**options)
     except ValueError as error:
-        raise ValueError(f"{path}: locate sdk_package: {error}") from None
+        raise ValueError(f"{path}: locate: {error}") from None
 
 
 def a_command(data: dict, key: str, path: Path) -> tuple[str, ...]:
@@ -125,7 +138,7 @@ def load_bundle(path: str | Path) -> MigrationBundle:
     language = a_text(data, "language", path)
     if language not in LANGUAGES:
         raise ValueError(
-            f"{path}: language must be python, ts or rust: {language!r}"
+            f"{path}: language must be python, ts, rust or go: {language!r}"
         )
     if source == "mcp" and language != "python":
         raise ValueError(

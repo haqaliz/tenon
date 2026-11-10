@@ -33,6 +33,7 @@ from tenon.locate import (
     LOCATE_TYPES,
     McpLocateConfig,
     locate,
+    locate_go,
     locate_mcp,
     locate_rust,
     locate_ts,
@@ -370,11 +371,12 @@ LOCATORS = {
     "python": locate,
     "ts": locate_ts,
     "rust": locate_rust,
+    "go": locate_go,
 }
 
 
 def _locate(change: Change, repo: Path, config: CliConfig):
-    """The one dispatch point between the MCP, Python, TypeScript and Rust locators."""
+    """The one dispatch point between the MCP and per-language locators."""
     if config.source == "mcp":
         return locate_mcp(change, repo, config.locate)
     return LOCATORS[config.language](change, repo, config.locate)

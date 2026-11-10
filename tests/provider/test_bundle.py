@@ -4,6 +4,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from tenon.locate import (
+    GoLocateConfig,
     LocateConfig,
     McpLocateConfig,
     RustLocateConfig,
@@ -178,6 +179,12 @@ def test_missing_spec_is_a_named_error(tmp_path, key):
         ("openapi", "python", "stripe", LocateConfig),
         ("openapi", "ts", "stripe", TsLocateConfig),
         ("openapi", "rust", "stripe", RustLocateConfig),
+        (
+            "openapi",
+            "go",
+            "github.com/stripe/stripe-go/v76",
+            GoLocateConfig,
+        ),
         ("mcp", "python", "mcp", McpLocateConfig),
     ],
 )
@@ -238,6 +245,72 @@ def test_rust_bundle_with_a_bad_crate_is_an_error(tmp_path, crate):
         assert "Rust crate" in str(error.value)
 
 
+# Spec AC4: a Go bundle reads locate.package_name into GoLocateConfig.
+def test_go_bundle_keeps_the_package_name(tmp_path):
+    path = a_bundle(
+        tmp_path,
+        language="go",
+        locate={
+            "sdk_package": "github.com/stripe/stripe-go/v76",
+            "package_name": "stripe",
+            "fields": {"ChargeParams.AmountCents": "AmountCents"},
+        },
+    )
+
+    bundle = load_bundle(path)
+
+    assert bundle.language == "go"
+    assert bundle.locate == GoLocateConfig(
+        sdk_package="github.com/stripe/stripe-go/v76",
+        package_name="stripe",
+        fields={"ChargeParams.AmountCents": "AmountCents"},
+    )
+
+
+# Spec AC4: mcp with Go is the same named bundle error.
+def test_mcp_with_go_is_an_error(tmp_path):
+    path = a_bundle(
+        tmp_path, source="mcp", language="go", locate={"sdk_package": "mcp"}
+    )
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "mcp requires language python" in str(error.value)
+
+
+# Spec AC4: a Go bundle validates the import root by name.
+@pytest.mark.parametrize("root", ["/stripe", "a b", "a::b"])
+def test_go_bundle_with_a_bad_root_is_an_error(tmp_path, root):
+    path = a_bundle(tmp_path, language="go", locate={"sdk_package": root})
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "sdk_package" in str(error.value)
+    assert "Go import root" in str(error.value)
+
+
+# Spec AC4: a Go bundle validates the package name by name.
+def test_go_bundle_with_a_bad_package_is_an_error(tmp_path):
+    path = a_bundle(
+        tmp_path,
+        language="go",
+        locate={
+            "sdk_package": "github.com/stripe/stripe-go/v76",
+            "package_name": "not-a-name",
+        },
+    )
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "package_name" in str(error.value)
+
+
 # Spec AC3: only the two shipped sources are accepted.
 def test_unknown_source_is_an_error(tmp_path):
     path = a_bundle(tmp_path, source="graphql")
@@ -249,15 +322,15 @@ def test_unknown_source_is_an_error(tmp_path):
     assert "source" in str(error.value)
 
 
-# Spec AC3: only the three shipped languages are accepted.
+# Spec AC3: only the four shipped languages are accepted.
 def test_unknown_language_is_an_error(tmp_path):
-    path = a_bundle(tmp_path, language="go")
+    path = a_bundle(tmp_path, language="ruby")
 
     with pytest.raises(ValueError) as error:
         load_bundle(path)
 
     assert str(path) in str(error.value)
-    assert "python, ts or rust" in str(error.value)
+    assert "python, ts, rust or go" in str(error.value)
 
 
 # Spec AC4: every required string key is present and non-blank.

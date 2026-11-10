@@ -30,7 +30,12 @@ from tenon.detect import (
     load,
     load_mcp,
 )
-from tenon.locate import LocateConfig, RustLocateConfig, TsLocateConfig
+from tenon.locate import (
+    GoLocateConfig,
+    LocateConfig,
+    RustLocateConfig,
+    TsLocateConfig,
+)
 from tenon.pr import (
     InstalledRepo,
     PrDraft,
@@ -406,6 +411,7 @@ LOCATE_CONFIGS = {
     "python": LocateConfig,
     "ts": TsLocateConfig,
     "rust": RustLocateConfig,
+    "go": GoLocateConfig,
 }
 
 
@@ -426,11 +432,12 @@ def test_the_locator_table_names_each_locator():
         "python": cli_main.locate,
         "ts": cli_main.locate_ts,
         "rust": cli_main.locate_rust,
+        "go": cli_main.locate_go,
     }
 
 
 # Spec AC5: one table sends each language to its own locator.
-@pytest.mark.parametrize("language", ["python", "ts", "rust"])
+@pytest.mark.parametrize("language", ["python", "ts", "rust", "go"])
 def test_locate_dispatches_each_language(language, monkeypatch, tmp_path):
     seen = []
     marker = object()
@@ -448,6 +455,43 @@ def test_locate_dispatches_each_language(language, monkeypatch, tmp_path):
 
     assert cli_main._locate(change, tmp_path, config) is marker
     assert seen == [(change, tmp_path, config.locate)]
+
+
+# Spec AC2: --package-name is a common check/fix flag.
+@pytest.mark.parametrize("command", ["check", "fix"])
+def test_package_name_is_a_common_flag(command):
+    args = cli_main._parser().parse_args(
+        [
+            command,
+            ".",
+            "--old",
+            "old.yaml",
+            "--new",
+            "new.yaml",
+            "--package-name",
+            "stripe",
+        ]
+    )
+
+    assert args.package_name == "stripe"
+
+
+# Spec AC1: --language go with no config dispatches the Go locator.
+def test_missing_config_with_language_go_locates(tmp_path, a_specs, capsys):
+    assert (
+        a_check(
+            tmp_path,
+            a_specs,
+            "--language",
+            "go",
+            "--sdk-package",
+            "github.com/stripe/stripe-go/v76",
+            "--package-name",
+            "stripe",
+        )
+        == 1
+    )
+    assert "NO_SDK_IMPORT" in capsys.readouterr().out
 
 
 # Spec AC1/AC3: the temp tenon.toml selects Rust; the struct field is reported.
@@ -2234,6 +2278,51 @@ def test_provider_rust_bundle_with_a_bad_crate_is_a_named_error(
     assert "sdk_package" in err
     if crate:
         assert "Rust crate" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a Go bundle with MCP is a named bundle error.
+def test_provider_go_bundle_with_mcp_is_a_named_error(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, source="mcp", language="go")
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "mcp requires language python" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a Go bundle with a bad import root is a named bundle error.
+@pytest.mark.parametrize("root", ["/stripe", "a b", "a::b"])
+def test_provider_go_bundle_with_a_bad_root_is_a_named_error(
+    root, tmp_path, capsys
+):
+    bundle = a_bundle(tmp_path, language="go", locate={"sdk_package": root})
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a Go bundle with a bad package name is a named bundle error.
+def test_provider_go_bundle_with_a_bad_package_is_a_named_error(
+    tmp_path, capsys
+):
+    bundle = a_bundle(
+        tmp_path,
+        language="go",
+        locate={
+            "sdk_package": "github.com/stripe/stripe-go/v76",
+            "package_name": "not-a-name",
+        },
+    )
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "package_name" in err
     assert "Traceback" not in err
 
 
