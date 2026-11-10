@@ -1,42 +1,49 @@
-# Card: feat/provider-installed
+# Card: feat/locator-rust
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T10 Provider layer and GitHub App (hosted)** — fourth slice: **installed repo
-  discovery and fan-out** (`docs/technical/CAPABILITY_ROADMAP.md:16`)
-- **Milestone:** Phase 3 (`docs/ROADMAP.md`), fourth slice
-- **State:** shipped 2026-11-10 (`src/tenon/pr/installed.py`, CLI; 1,843 tests)
-- **Branch:** `feat/provider-installed/aliz`
-- **Worktree:** `.claude/worktrees/feat-provider-installed`
+- **Capability:** **T11 More languages** — first slice: **Rust locator** (`docs/technical/CAPABILITY_ROADMAP.md:17`)
+- **Milestone:** Phase 3 (`docs/ROADMAP.md`), first T11 slice
+- **Branch:** `feat/locator-rust/aliz`
+- **Worktree:** `.claude/worktrees/feat-locator-rust`
 
 ## Brief
 
-T10c fans a bundle out over a local repos file. A provider using the GitHub App still has to clone
-every customer checkout by hand and keep the list current. The app already knows its installation's
-repositories.
+Tenon locates Python (stdlib `ast`) and TypeScript/JavaScript (tree-sitter) call sites. Rust SDKs are
+common for infrastructure and API clients, and a provider cannot migrate a Rust customer repo today.
 
-T10d adds **installed repo discovery and fan-out**:
-- a selector that lists the app installation's repositories through the GitHub API
-  (`GET /installation/repositories`, paginated) instead of a local repos file;
-- one temp clone per repo using the installation token through the existing credential-helper
-  mechanism (never in argv or a URL), then the shipped T10b/T10c pipeline and one PR per repo;
-- the same per-repo text/JSON fan-out report, per-repo failure isolation and exit codes as T10c;
-- no webhooks, database, deployment or hosted service in this slice.
+T11a adds **`--language rust`** with the same locate contract:
+- `RustLocateConfig` (a crate name, operations and fields mappings);
+- a read-only tree-sitter-rust scan that reports rooted hits and dynamics, reusing the shared
+  certainty policy (`derive`/`resolve`) and the shared `Site`/`LocateResult` types;
+- crate matching through `use` declarations (including `use stripe::{Charge, Customer};` and
+  `use stripe::Charge as StripeCharge;`) and associated-function calls (`Charge::create(...)`,
+  `StripeCharge::create(...)`);
+- struct-literal fields (`CreateCharge { amount: 100, ..Default::default() }`) and field access
+  (`params.amount`) where the shared policy can call them certain;
+- the CLI/config/bundle accept `rust`; OpenAPI only (MCP location stays Python);
+- fixture Rust repos and tests for certain sites, aliases, unrooted receivers, unmapped symbols and
+  operation/field mappings.
 
-The hard rules do not change: the app identity is the T10a one; T5/T10a guardrails apply per repo;
-no merge/default branch/force; the token never enters argv or the report; offline tests use the
-injectable API transport and local fixture remotes.
+The proof runner is unchanged: a Rust repo uses `--check "cargo test"` or `cargo check` like any
+other command. No Rust toolchain is required to locate.
+
+The hard rules do not change: locate reports evidence, the shared policy decides certainty, no
+guessing, honest reasons/ambiguity groups, no new proof levels, no network.
 
 ## Constraints carried in from the repo
 
-- T10a's `GitHubAppToken`, `GitHubApi` (injectable transport), `GitHubAppRemote` and its
-  `TENON_GITHUB_TOKEN` credential helper are the seams to reuse; no new auth scheme.
-- T10c's `ProviderRepoResult`, `render_fanout_*` and per-repo exit semantics are the report seam.
-- `CLAUDE.md` §1–5: execution decides, honest levels, no merge/default branch, no egress by default.
-- Offline tests: fake API transport, fixture repos, local git remotes; no network/live GitHub.
+- `src/tenon/locate/resolve.py` is the only certainty policy; the Rust path must not fork it.
+- `src/tenon/locate/result.py` is the shared contract (`Site`, `SiteShape`, `LocateReason`,
+  `AmbiguityReason`, `LocateResult`).
+- `src/tenon/locate/ts_scan.py` is the tree-sitter pattern; the Rust scanner reports `Hit`/`Dynamic`
+  evidence only.
+- `CliConfig`/`tenon.toml`/`MigrationBundle` validate `language`; extend them to `rust` with named
+  errors.
+- Offline tests: fixture Rust repos, no network, no Rust toolchain.
 
 ## Scope fence
 
-Not this card: webhooks, installation discovery events, a database, a hosted service, deployment,
-parallelism, rollback, provider branding, T11.
+Not this card: Go/C# locators, a Cargo proof preset, MCP Rust location, new ambiguity/proof
+vocabularies, a hosted service.
