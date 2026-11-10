@@ -1,0 +1,414 @@
+"""Read-only tree-sitter scan for Go names rooted in an SDK import root.
+
+The scan reports evidence only: every hit carries ``rooted``. Whether a hit is
+certain is decided elsewhere.
+"""
+
+import re
+from collections.abc import Iterator
+from dataclasses import dataclass
+from functools import cache
+from pathlib import Path
+
+import tree_sitter_go
+from tree_sitter import Language, Node, Parser, Tree
+
+from .result import SiteShape
+from .scan import Hit, ScanResult, _Source, _column
+
+_SKIP_DIRECTORIES = frozenset({"vendor", "testdata", ".git"})
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_VERSION = re.compile(r"v\d+")
+
+
+@dataclass(frozen=True, slots=True)
+class _Module:
+    rel: str
+    tree: Tree
+    source: _Source
+
+
+@cache
+def _parser() -> Parser:
+    return Parser(Language(tree_sitter_go.language()))
+
+
+def _files(root: Path) -> list[Path]:
+    found = []
+    for path in root.rglob("*.go"):
+        if not path.is_file():
+            continue
+        directories = path.relative_to(root).parts[:-1]
+        if any(
+            directory in _SKIP_DIRECTORIES or directory.startswith(".")
+            for directory in directories
+        ):
+            continue
+        found.append(path)
+    return sorted(found)
+
+
+def _read(root: Path) -> list[_Module]:
+    modules = []
+    for path in _files(root):
+        rel = path.relative_to(root).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8")
+            tree = _parser().parse(text.encode("utf-8"))
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        if tree.root_node.has_error:
+            continue
+        modules.append(_Module(rel, tree, _Source(rel, tuple(text.split("\n")))))
+    return modules
+
+
+def _walk(node: Node) -> Iterator[Node]:
+    yield node
+    for child in node.children:
+        yield from _walk(child)
+
+
+def _text(node: Node) -> str:
+    return node.text.decode("utf-8") if node.text is not None else ""
+
+
+def _import_path(spec: Node) -> str:
+    path = spec.child_by_field_name("path")
+    if path is None:
+        return ""
+    text = _text(path)
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "`"}:
+        return text[1:-1]
+    return ""
+
+
+def _canonical(path: str, sdk_package: str) -> tuple[str, ...] | None:
+    """The path after the import root, or ``None`` when outside it."""
+    if path == sdk_package:
+        return ()
+    prefix = f"{sdk_package}/"
+    if path.startswith(prefix):
+        return tuple(path[len(prefix) :].split("/"))
+    return None
+
+
+def _inferred_name(path: str) -> str | None:
+    """The package clause a Go import path usually implies."""
+    segments = [segment for segment in path.split("/") if segment]
+    if not segments:
+        return None
+    candidate = segments[-1]
+    if _VERSION.fullmatch(candidate) and len(segments) >= 2:
+        candidate = segments[-2]
+    if candidate.endswith("-go"):
+        candidate = candidate[:-3]
+    return candidate if _IDENTIFIER.fullmatch(candidate) else None
+
+
+def _imports(
+    tree: Tree, sdk_package: str, package_name: str | None
+) -> tuple[dict[str, tuple[str, ...]], bool]:
+    """Names rooted in the SDK, and whether any import roots the package."""
+    roots: dict[str, tuple[str, ...]] = {}
+    sdk_imported = False
+    for node in _walk(tree.root_node):
+        if node.type != "import_spec":
+            continue
+        path = _import_path(node)
+        canonical = _canonical(path, sdk_package)
+        if canonical is None:
+            continue
+        sdk_imported = True
+        name_node = node.child_by_field_name("name")
+        if name_node is not None:
+            if name_node.type != "package_identifier":
+                continue
+            name = _text(name_node)
+        elif not canonical and package_name is not None:
+            name = package_name
+        else:
+            name = _inferred_name(path)
+        if name is not None:
+            roots[name] = canonical
+    return roots, sdk_imported
+
+
+def _selector_segments(node: Node) -> tuple[str, tuple[str, ...]] | None:
+    """The base name and the flattened field tail of a selector."""
+    tail = []
+    while node.type == "selector_expression":
+        field = node.child_by_field_name("field")
+        if field is None:
+            return None
+        tail.append(_text(field))
+        operand = node.child_by_field_name("operand")
+        if operand is None:
+            return None
+        node = operand
+    if node.type != "identifier":
+        return None
+    tail.reverse()
+    return _text(node), tuple(tail)
+
+
+def _unwrap(node: Node | None) -> Node | None:
+    """Strip parentheses and address-of operators."""
+    while node is not None:
+        if node.type == "parenthesized_expression":
+            node = node.named_children[0] if node.named_children else None
+        elif node.type == "unary_expression":
+            operator = node.child_by_field_name("operator")
+            if operator is None or _text(operator) != "&":
+                return node
+            node = node.child_by_field_name("operand")
+        else:
+            return node
+    return None
+
+
+class _Visitor:
+    """Emit rooted calls, literal fields and field accesses."""
+
+    def __init__(
+        self,
+        source: _Source,
+        roots: dict[str, tuple[str, ...]],
+    ) -> None:
+        self._source = source
+        self._roots = roots
+        self._bindings: dict[str, tuple[tuple[str, ...], tuple[Node, ...]]] = {}
+        self.hits: list[Hit] = []
+
+    def _emit(
+        self,
+        node: Node,
+        shape: SiteShape,
+        symbol: str,
+        chain: tuple[str, ...],
+        rooted: bool,
+    ) -> None:
+        line = self._source.lines[node.start_point.row]
+        self.hits.append(
+            Hit(
+                self._source.path,
+                node.start_point.row + 1,
+                _column(line, node.start_point.column),
+                shape,
+                symbol,
+                chain,
+                rooted,
+                line,
+            )
+        )
+
+    def _visit_children(self, node: Node) -> None:
+        for child in node.children:
+            self.visit(child)
+
+    def _type_chain(self, type_node: Node | None) -> tuple[str, ...] | None:
+        """The canonical chain of a rooted qualified type, else ``None``."""
+        if type_node is None or type_node.type != "qualified_type":
+            return None
+        package = type_node.child_by_field_name("package")
+        name = type_node.child_by_field_name("name")
+        if package is None or name is None:
+            return None
+        prefix = self._roots.get(_text(package))
+        if prefix is None:
+            return None
+        return prefix + (_text(name),)
+
+    def _keys(self, literal: Node) -> tuple[Node, ...]:
+        """The keyed-element key identifiers of a composite literal."""
+        body = literal.child_by_field_name("body")
+        if body is None:
+            return ()
+        keys = []
+        for child in body.named_children:
+            if child.type != "keyed_element":
+                continue
+            key = child.child_by_field_name("key")
+            identifier = key.named_children[0] if key and key.named_children else None
+            if identifier is not None and identifier.type == "identifier":
+                keys.append(identifier)
+        return tuple(keys)
+
+    def _bind(self, name: str, value: Node | None) -> None:
+        literal = _unwrap(value)
+        if literal is None or literal.type != "composite_literal":
+            self._bindings.pop(name, None)
+            return
+        chain = self._type_chain(literal.child_by_field_name("type"))
+        if chain is None:
+            self._bindings.pop(name, None)
+            return
+        self._bindings[name] = (chain, self._keys(literal))
+
+    def _bind_type(self, name: str, type_node: Node | None) -> None:
+        chain = self._type_chain(type_node)
+        if chain is None:
+            self._bindings.pop(name, None)
+        else:
+            self._bindings[name] = (chain, ())
+
+    def _short_var(self, node: Node) -> None:
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+        targets = left.named_children if left is not None else ()
+        values = right.named_children if right is not None else ()
+        for index, target in enumerate(targets):
+            if target.type != "identifier" or _text(target) == "_":
+                continue
+            self._bind(_text(target), values[index] if index < len(values) else None)
+        self._visit_children(node)
+
+    def _var(self, node: Node) -> None:
+        for child in node.named_children:
+            specs = (
+                child.named_children
+                if child.type == "var_spec_list"
+                else (child,)
+            )
+            for spec in specs:
+                if spec.type == "var_spec":
+                    self._spec(spec)
+        self._visit_children(node)
+
+    def _spec(self, spec: Node) -> None:
+        name_node = spec.child_by_field_name("name")
+        if name_node is None or name_node.type != "identifier":
+            return
+        name = _text(name_node)
+        if name == "_":
+            return
+        value = spec.child_by_field_name("value")
+        if value is not None:
+            expressions = value.named_children
+            self._bind(name, expressions[0] if expressions else None)
+        else:
+            self._bind_type(name, spec.child_by_field_name("type"))
+
+    def _assign(self, node: Node) -> None:
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+        targets = left.named_children if left is not None else ()
+        values = right.named_children if right is not None else ()
+        for index, target in enumerate(targets):
+            if target.type != "identifier" or _text(target) == "_":
+                continue
+            self._bind(_text(target), values[index] if index < len(values) else None)
+        self._visit_children(node)
+
+    def _literal(self, node: Node) -> None:
+        chain = self._type_chain(node.child_by_field_name("type"))
+        if chain is not None:
+            for key in self._keys(node):
+                self._emit(key, SiteShape.KEYWORD, _text(key), chain, True)
+        self._visit_children(node)
+
+    def _selector(self, node: Node) -> None:
+        operand = node.child_by_field_name("operand")
+        field = node.child_by_field_name("field")
+        if (
+            operand is not None
+            and operand.type == "identifier"
+            and field is not None
+            and _text(operand) in self._bindings
+        ):
+            chain, _ = self._bindings[_text(operand)]
+            self._emit(field, SiteShape.ATTRIBUTE, _text(field), chain, True)
+        self._visit_children(node)
+
+    def _argument(self, argument: Node, call_chain: tuple[str, ...]) -> None:
+        node = _unwrap(argument)
+        if node is None:
+            return
+        if node.type == "composite_literal":
+            chain = self._type_chain(node.child_by_field_name("type"))
+            if chain is not None:
+                for key in self._keys(node):
+                    self._emit(key, SiteShape.KEYWORD, _text(key), call_chain, True)
+        elif node.type == "identifier":
+            binding = self._bindings.get(_text(node))
+            if binding is not None:
+                _, keys = binding
+                for key in keys:
+                    self._emit(key, SiteShape.KEYWORD, _text(key), call_chain, True)
+        elif node.type == "selector_expression":
+            operand = node.child_by_field_name("operand")
+            field = node.child_by_field_name("field")
+            if (
+                operand is not None
+                and operand.type == "identifier"
+                and field is not None
+                and _text(operand) in self._bindings
+            ):
+                self._emit(
+                    field, SiteShape.ATTRIBUTE, _text(field), call_chain, True
+                )
+
+    def _call(self, node: Node) -> None:
+        function = node.child_by_field_name("function")
+        call_chain: tuple[str, ...] | None = None
+        if function is not None and function.type == "selector_expression":
+            segments = _selector_segments(function)
+            if segments is not None:
+                base, tail = segments
+                prefix = self._roots.get(base)
+                rooted = prefix is not None
+                chain = prefix + tail if rooted else tail
+                if tail:
+                    self._emit(function, SiteShape.CALL, tail[-1], chain, rooted)
+                if rooted:
+                    call_chain = chain
+        arguments = node.child_by_field_name("arguments")
+        if arguments is not None:
+            if call_chain is not None:
+                for argument in arguments.named_children:
+                    self._argument(argument, call_chain)
+            self.visit(arguments)
+        if function is not None and function.type != "selector_expression":
+            self.visit(function)
+
+    def visit(self, node: Node) -> None:
+        if node.type in {
+            "function_declaration",
+            "method_declaration",
+            "func_literal",
+        }:
+            saved = self._bindings
+            self._bindings = {}
+            self._visit_children(node)
+            self._bindings = saved
+        elif node.type == "call_expression":
+            self._call(node)
+        elif node.type == "short_var_declaration":
+            self._short_var(node)
+        elif node.type == "var_declaration":
+            self._var(node)
+        elif node.type == "assignment_statement":
+            self._assign(node)
+        elif node.type == "composite_literal":
+            self._literal(node)
+        elif node.type == "selector_expression":
+            self._selector(node)
+        else:
+            self._visit_children(node)
+
+
+def scan_go(
+    root: str | Path, sdk_package: str, package_name: str | None = None
+) -> ScanResult:
+    """Parse ``root`` read-only and report SDK-rooted Go evidence."""
+    modules: list[str] = []
+    hits: list[Hit] = []
+    for module in _read(Path(root)):
+        roots, sdk_imported = _imports(module.tree, sdk_package, package_name)
+        if not sdk_imported:
+            continue
+        visitor = _Visitor(module.source, roots)
+        visitor.visit(module.tree.root_node)
+        modules.append(module.rel)
+        hits.extend(visitor.hits)
+    return ScanResult(modules=tuple(modules), hits=tuple(hits))

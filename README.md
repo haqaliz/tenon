@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20Rust%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20Rust%20%2B%20Go%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -16,14 +16,14 @@ affected calls, and proves the fix against your own checks before it opens a pul
 T5 (PR writer), T6 (TypeScript/JavaScript call-site location), T7 (proof ladder), T8 (MCP
 tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark corpus), T10a (GitHub
 App remote), T10b (provider migration bundle), T10c (local provider fan-out), T10d (installed
-provider fan-out), T11a (Rust call-site location) and the `tenon check` / `tenon fix` /
-`tenon provider migrate` / `tenon probe` / `tenon corpus` CLI are shipped.**
+provider fan-out), T11a (Rust call-site location), T11b (Go call-site location) and the `tenon
+check` / `tenon fix` / `tenon provider migrate` / `tenon probe` / `tenon corpus` CLI are shipped.**
 `src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed
 `Change` records; `src/tenon/locate/` turns one of those records into call sites with file, line and
 column, and keeps anything it cannot prove in a separate ambiguity list — Python via `ast`,
-TypeScript/JavaScript and Rust via tree-sitter, and MCP `call_tool` sites via `locate_mcp`; no Node
-or Rust analysis runtime; `src/tenon/propose/` turns the certain sites into a candidate diff and
-never applies it;
+TypeScript/JavaScript, Rust and Go via tree-sitter, and MCP `call_tool` sites via `locate_mcp`; no
+Node, Rust or Go analysis runtime; `src/tenon/propose/` turns the certain sites into a candidate
+diff and never applies it;
 `src/tenon/prove/` applies that diff to a copy and runs every configured proof stage before and
 after, recording the strongest level that actually passed (`TESTS_PASSED`, `CHARACTERIZED`,
 `REPLAYED`, `TYPES_BUILD_ONLY`) or `UNVERIFIED` with a reason; `src/tenon/pr/` renders a
@@ -42,6 +42,8 @@ any code here.
 uv run tenon check path/to/repo --old v1.yaml --new v2.yaml
 uv run tenon check path/to/ts-repo --old v1.yaml --new v2.yaml --language ts
 uv run tenon check path/to/rust-repo --old v1.yaml --new v2.yaml --language rust
+uv run tenon check path/to/go-repo --old v1.yaml --new v2.yaml --language go \
+    --sdk-package github.com/stripe/stripe-go/v76 --package-name stripe
 uv run tenon fix path/to/repo --old v1.yaml --new v2.yaml \
     --check "python -m pytest -q"
 uv run tenon fix path/to/no-test-repo --old v1.yaml --new v2.yaml \
@@ -69,8 +71,8 @@ server over stdio, runs the task file through your agent command and reports wha
 tasks, 1 a failed task, 2 usage/connection).
 `corpus` records a `fix --json` run, updates a human outcome and reports by level/outcome. `--json`
 is byte-stable. Repeated inputs can live in `tenon.toml` under `[locate]` (`source`, `language`,
-`sdk_package`, mappings) and `[tenon]`; probe/corpus use flags only. `language` is `python`, `ts` or
-`rust`; `source = "mcp"` remains Python-only.
+`sdk_package`, `package_name`, mappings) and `[tenon]`; probe/corpus use flags only. `language` is
+`python`, `ts`, `rust` or `go`; `source = "mcp"` remains Python-only.
 
 `--language rust` scans `.rs` files with tree-sitter and needs no Rust toolchain. In `tenon.toml`,
 `[locate] sdk_package` is the crate name as written in `use` (for example `stripe`), and the shared
@@ -83,6 +85,17 @@ re-exported crates, and multi-hop struct data flow are not followed; they report
 a guessed one. A `fields` mapping that changes the spelling locates the site, but `fix` proposes a
 rename only when the located spelling equals the spec's old name (the shipped proposer rule);
 otherwise it reports `NO_EDITABLE_SITES` and the customer renames manually.
+
+`--language go` scans `.go` files with tree-sitter and needs no Go toolchain. `sdk_package` is the
+Go **import root** (for example `github.com/stripe/stripe-go/v76`): the root import and every
+subpackage under it are rooted, and the chain keeps the relative subpackage (`.../v76/charge` ->
+`charge.New`). `--package-name` (or `[locate] package_name`) supplies or overrides the root import's
+package clause; subpackages infer their name, and an explicit import alias always wins. Supported
+shapes are package-qualified calls (`stripe.Charge.New(...)`, `charge.New(...)`), composite literals
+(`&stripe.ChargeParams{AmountCents: 100}`), field access through a tracked `var`/`:=` binding
+(`params.AmountCents`), and import aliases. Limits: method chains on a local value
+(`client.Charges.New(...)`), dot imports, reflection, and multi-hop data flow are not followed; they
+report no site rather than a guessed one. `fix` follows the same proposer rule as Rust.
 
 ```python
 from tenon.detect import diff, load
@@ -126,7 +139,7 @@ identity for discovery and cloning. `--api-url` also targets a self-hosted GitHu
 A provider can package one migration as a JSON bundle and run it against one local checkout, a list
 of checkouts or the app installation with
 `tenon provider migrate [<repo>|--repos FILE|--installed] --bundle PATH`. The bundle names the
-provider and migration, the source and language (`python`, `ts` or `rust`), the two spec files
+provider and migration, the source and language (`python`, `ts`, `rust` or `go`), the two spec files
 (resolved relative to the bundle), the locate config, the required proof level and the optional stage
 commands:
 
@@ -151,6 +164,9 @@ commands:
   "breaking_only": false
 }
 ```
+
+A Go bundle sets `"language": "go"` and adds `"package_name": "stripe"` inside `locate` next to the
+import-root `sdk_package`; other languages ignore `package_name`.
 
 `tenon provider migrate <repo> --bundle PATH [--open-pr] [--remote gh|app] [--app-id ID]
 [--app-installation-id ID] [--app-private-key PATH] [--api-url URL] [--check CMD]
@@ -260,7 +276,7 @@ label.
 
 ## Scope
 
-Languages: Python, TypeScript/JavaScript and Rust shipped; Go and C# follow. Change sources: OpenAPI
+Languages: Python, TypeScript/JavaScript, Rust and Go shipped; C# follows. Change sources: OpenAPI
 and MCP tools/list diffs, with the Python MCP tool-call locator; SDK metadata later. Consumer side
 first; the provider bundle (T10b) packages that run for one repo, local fan-out over a repos file
 (T10c) and installed fan-out through the app (T10d) run it across checkouts; a hosted/webhook-driven

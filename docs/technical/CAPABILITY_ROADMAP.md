@@ -14,7 +14,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Shipped 2026-11-07** |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Partial 2026-11-10** — GitHub App remote, provider bundle, local fan-out and installed fan-out shipped; hosted/webhook-driven service not started |
-| **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Partial 2026-11-10** — Rust locator shipped; Go and C# not started |
+| **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Partial 2026-11-10** — Rust and Go locators shipped; C# not started |
 
 ### T1 as shipped (2026-10-26)
 
@@ -270,6 +270,21 @@ manually. 1,925 tests, offline.
 Known limits: method chains, macros, re-exported crates and multi-hop struct data flow are not
 followed (no site, not a guess); a local module named like the crate is a documented false positive;
 Go and C# are T11b/T11c.
+
+### T11b as built (2026-11-10)
+
+`src/tenon/locate/go_{config,scan,locate}.py`: `GoLocateConfig` (an import root, an optional
+`package_name` and the shared `operations`/`fields` mappings), `scan_go` (tree-sitter-go over `.go`
+files; root/subpackage imports with aliases and package-name inference, package-qualified calls,
+composite-literal keys, per-function `var`/`:=` bindings and field access), and `locate_go` applying
+the shipped `derive`/`resolve` policy unchanged. `--language go`, `--package-name`,
+`tenon.toml`/bundle `locate.package_name` and provider bundles accept `go`; MCP stays Python-only;
+no Go toolchain or proof preset. 2,013 tests, offline.
+
+Known limits: method chains on a local value, dot imports, reflection, generics inference, `go.mod`
+parsing and multi-hop composite data flow are not followed (no site, not a guess); a local variable
+named like the package alias is a documented false positive; a mapped spelling locates but is not
+auto-edited unless it equals the spec's old name; C# is T11c.
 
 
 

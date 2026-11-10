@@ -14,6 +14,7 @@ MCP_SPECS = Path(__file__).parent.parent / "fixtures" / "mcp"
 PROOF_BASIC = FIXTURES / "proof-basic"
 TS_BASIC = FIXTURES / "ts-sdk-basic"
 RUST_BASIC = FIXTURES / "rust-basic"
+GO_BASIC = FIXTURES / "go-basic"
 MCP_CLI = FIXTURES / "mcp-cli"
 
 # The M0.3 rename; the fixture call is ``client.charges.create(amount=amount)``.
@@ -33,6 +34,20 @@ NEW_SPEC = OLD_SPEC.replace("amount:", "amount_cents:")
 # The Rust fixture's struct literal already spells the repo-side name.
 RUST_CENTS_SPEC = OLD_SPEC.replace("amount:", "amount_cents:")
 RUST_RENAMED_SPEC = OLD_SPEC.replace("amount:", "amount_total:")
+
+# The Go fixture's literal spells the old spec name; the new one renames it.
+GO_OLD_SPEC = """\
+openapi: 3.1.0
+components:
+  schemas:
+    ChargeParams:
+      type: object
+      properties:
+        AmountCents:
+          type: integer
+"""
+
+GO_RENAMED_SPEC = GO_OLD_SPEC.replace("AmountCents:", "AmountTotal:")
 
 # The rename is gone too: a property removal the rule cannot propose.
 REMOVED_SPEC = """\
@@ -130,6 +145,15 @@ class RustRepo:
     site: tuple[str, int, int]
 
 
+@dataclass(frozen=True)
+class GoRepo:
+    repo: Path
+    specs: tuple[Path, Path]
+    fix_specs: tuple[Path, Path]
+    endpoint_specs: tuple[Path, Path]
+    site: tuple[str, int, int]
+
+
 def a_write_specs(directory: Path, old: str, new: str) -> tuple[Path, Path]:
     directory.mkdir(parents=True, exist_ok=True)
     old_path = directory / "old.yaml"
@@ -182,6 +206,27 @@ def a_rust_repo(tmp_path):
             tmp_path / "endpoint", ENDPOINT_OLD, ENDPOINT_NEW
         ),
         site=("src/lib.rs", 5, 9),
+    )
+
+
+@pytest.fixture
+def a_go_repo(tmp_path):
+    repo = shutil.copytree(
+        GO_BASIC, tmp_path / "repo", ignore=shutil.ignore_patterns("__pycache__")
+    )
+    (repo / "tenon.toml").write_text(
+        '[locate]\nlanguage = "go"\n'
+        'sdk_package = "github.com/stripe/stripe-go/v76"\n'
+        'package_name = "stripe"\n'
+    )
+    return GoRepo(
+        repo=repo,
+        specs=a_write_specs(tmp_path / "rename", GO_OLD_SPEC, GO_RENAMED_SPEC),
+        fix_specs=a_write_specs(tmp_path / "fix", GO_OLD_SPEC, GO_RENAMED_SPEC),
+        endpoint_specs=a_write_specs(
+            tmp_path / "endpoint", ENDPOINT_OLD, ENDPOINT_NEW
+        ),
+        site=("main.go", 9, 36),
     )
 
 

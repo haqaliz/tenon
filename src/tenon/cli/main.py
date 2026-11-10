@@ -33,6 +33,7 @@ from tenon.locate import (
     LOCATE_TYPES,
     McpLocateConfig,
     locate,
+    locate_go,
     locate_mcp,
     locate_rust,
     locate_ts,
@@ -55,6 +56,7 @@ from tenon.prove import ProofPlan, proof_rank, prove_plan, tail
 from tenon.provider import MigrationBundle, load_bundle, load_repos
 
 from .config import (
+    LANGUAGES,
     CliConfig,
     a_level,
     load_cli_config,
@@ -107,7 +109,7 @@ def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", default=None, help="path to tenon.toml")
     parser.add_argument(
         "--language",
-        choices=("python", "ts", "rust"),
+        choices=LANGUAGES,
         default=None,
         help="repository language (default: from tenon.toml, else python)",
     )
@@ -118,6 +120,11 @@ def _common(parser: argparse.ArgumentParser) -> None:
         help="input documents (default: from tenon.toml, else openapi)",
     )
     parser.add_argument("--sdk-package", default=None, help="dotted SDK package")
+    parser.add_argument(
+        "--package-name",
+        default=None,
+        help="Go package name for the import root (Go only)",
+    )
     parser.add_argument(
         "--operation",
         action="append",
@@ -317,8 +324,11 @@ def _config(args: argparse.Namespace) -> CliConfig:
             config = CliConfig(locate=McpLocateConfig(), source="mcp")
         else:
             language = args.language or "python"
+            options = {"sdk_package": args.sdk_package}
+            if language == "go":
+                options["package_name"] = args.package_name
             config = CliConfig(
-                locate=LOCATE_TYPES[language](sdk_package=args.sdk_package),
+                locate=LOCATE_TYPES[language](**options),
                 language=language,
             )
     else:
@@ -328,6 +338,7 @@ def _config(args: argparse.Namespace) -> CliConfig:
     return overrides(
         config,
         sdk_package=args.sdk_package,
+        package_name=args.package_name,
         operations=args.operation,
         fields=args.field,
         command=getattr(args, "check", None),
@@ -360,11 +371,12 @@ LOCATORS = {
     "python": locate,
     "ts": locate_ts,
     "rust": locate_rust,
+    "go": locate_go,
 }
 
 
 def _locate(change: Change, repo: Path, config: CliConfig):
-    """The one dispatch point between the MCP, Python, TypeScript and Rust locators."""
+    """The one dispatch point between the MCP and per-language locators."""
     if config.source == "mcp":
         return locate_mcp(change, repo, config.locate)
     return LOCATORS[config.language](change, repo, config.locate)

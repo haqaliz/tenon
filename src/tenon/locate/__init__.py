@@ -1,4 +1,6 @@
 from .config import load_config
+from .go_config import GoLocateConfig
+from .go_locate import locate_go
 from .mcp_config import McpLocateConfig
 from .mcp_locate import locate_mcp
 from .query import Query, derive
@@ -23,6 +25,7 @@ LOCATE_TYPES = {
     "python": LocateConfig,
     "ts": TsLocateConfig,
     "rust": RustLocateConfig,
+    "go": GoLocateConfig,
 }
 
 __all__ = [
@@ -30,6 +33,7 @@ __all__ = [
     "AmbiguityReason",
     "AmbiguousGroup",
     "Dynamic",
+    "GoLocateConfig",
     "Hit",
     "LocateConfig",
     "LocateReason",
@@ -44,6 +48,7 @@ __all__ = [
     "derive",
     "load_config",
     "locate",
+    "locate_go",
     "locate_mcp",
     "locate_rust",
     "locate_ts",

@@ -30,7 +30,12 @@ from tenon.detect import (
     load,
     load_mcp,
 )
-from tenon.locate import LocateConfig, RustLocateConfig, TsLocateConfig
+from tenon.locate import (
+    GoLocateConfig,
+    LocateConfig,
+    RustLocateConfig,
+    TsLocateConfig,
+)
 from tenon.pr import (
     InstalledRepo,
     PrDraft,
@@ -336,10 +341,77 @@ def test_language_rust_with_source_mcp_is_named(a_mcp_repo, a_mcp_specs, capsys)
     assert "Traceback" not in err
 
 
+# Spec AC1: --language go with no config builds GoLocateConfig from the flags.
+def test_missing_config_with_language_go_uses_sdk_package(
+    tmp_path, a_same_specs
+):
+    assert (
+        a_check(
+            tmp_path,
+            a_same_specs,
+            "--language",
+            "go",
+            "--sdk-package",
+            "github.com/stripe/stripe-go/v76",
+            "--package-name",
+            "stripe",
+        )
+        == 0
+    )
+
+
+# Spec AC3: a bad Go import root from the flag is one named config error.
+def test_language_go_rejects_a_bad_root(tmp_path, a_specs, capsys):
+    assert (
+        a_check(tmp_path, a_specs, "--language", "go", "--sdk-package", "/stripe")
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    assert "Go import root" in err
+    assert "Traceback" not in err
+
+
+# Spec AC3: a bad Go package name from the flag is one named config error.
+def test_language_go_rejects_a_bad_package_name(tmp_path, a_specs, capsys):
+    assert (
+        a_check(
+            tmp_path,
+            a_specs,
+            "--language",
+            "go",
+            "--sdk-package",
+            "github.com/stripe/stripe-go/v76",
+            "--package-name",
+            "not-a-name",
+        )
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "package_name" in err
+    assert "Go identifier" in err
+    assert "Traceback" not in err
+
+
+# Spec AC3: MCP with Go is one named error.
+def test_language_go_with_source_mcp_is_named(a_mcp_repo, a_mcp_specs, capsys):
+    assert (
+        a_check(a_mcp_repo, a_mcp_specs, "--source", "mcp", "--language", "go")
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "mcp requires language python" in err
+    assert "Traceback" not in err
+
+
 LOCATE_CONFIGS = {
     "python": LocateConfig,
     "ts": TsLocateConfig,
     "rust": RustLocateConfig,
+    "go": GoLocateConfig,
 }
 
 
@@ -360,11 +432,12 @@ def test_the_locator_table_names_each_locator():
         "python": cli_main.locate,
         "ts": cli_main.locate_ts,
         "rust": cli_main.locate_rust,
+        "go": cli_main.locate_go,
     }
 
 
 # Spec AC5: one table sends each language to its own locator.
-@pytest.mark.parametrize("language", ["python", "ts", "rust"])
+@pytest.mark.parametrize("language", ["python", "ts", "rust", "go"])
 def test_locate_dispatches_each_language(language, monkeypatch, tmp_path):
     seen = []
     marker = object()
@@ -382,6 +455,43 @@ def test_locate_dispatches_each_language(language, monkeypatch, tmp_path):
 
     assert cli_main._locate(change, tmp_path, config) is marker
     assert seen == [(change, tmp_path, config.locate)]
+
+
+# Spec AC2: --package-name is a common check/fix flag.
+@pytest.mark.parametrize("command", ["check", "fix"])
+def test_package_name_is_a_common_flag(command):
+    args = cli_main._parser().parse_args(
+        [
+            command,
+            ".",
+            "--old",
+            "old.yaml",
+            "--new",
+            "new.yaml",
+            "--package-name",
+            "stripe",
+        ]
+    )
+
+    assert args.package_name == "stripe"
+
+
+# Spec AC1: --language go with no config dispatches the Go locator.
+def test_missing_config_with_language_go_locates(tmp_path, a_specs, capsys):
+    assert (
+        a_check(
+            tmp_path,
+            a_specs,
+            "--language",
+            "go",
+            "--sdk-package",
+            "github.com/stripe/stripe-go/v76",
+            "--package-name",
+            "stripe",
+        )
+        == 1
+    )
+    assert "NO_SDK_IMPORT" in capsys.readouterr().out
 
 
 # Spec AC1/AC3: the temp tenon.toml selects Rust; the struct field is reported.
@@ -466,6 +576,96 @@ def test_fix_rust_proposes_and_proves_the_rename(
     assert "+        amount_total: amount," in out
     assert "Proof: TESTS_PASSED" in out
     assert a_snapshot(a_rust_repo.repo) == before
+
+
+# Spec AC1: the temp tenon.toml selects Go; the literal key is reported.
+def test_check_go_reports_the_literal_field(a_go_repo, capsys):
+    assert (
+        a_check(
+            a_go_repo.repo,
+            a_go_repo.specs,
+            "--field",
+            "ChargeParams.AmountCents=AmountCents",
+        )
+        == 1
+    )
+
+    out = capsys.readouterr().out
+    assert "main.go:9:36" in out
+    assert "AmountCents" in out
+    assert "1 change, 1 certain site, 0 ambiguity groups" in out
+
+
+# Spec AC1: the Go check uses the shipped JSON envelope.
+def test_check_go_json_has_the_exact_envelope(a_go_repo, capsys):
+    assert (
+        a_check(
+            a_go_repo.repo,
+            a_go_repo.specs,
+            "--field",
+            "ChargeParams.AmountCents=AmountCents",
+            "--json",
+        )
+        == 1
+    )
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert set(payload) == {"command", "results", "summary"}
+    assert payload["command"] == "check"
+    (result,) = payload["results"]
+    assert result["reason"] is None
+    assert {
+        (site["path"], site["line"], site["column"], site["symbol"])
+        for site in result["certain"]
+    } == {(*a_go_repo.site, "AmountCents")}
+    assert out.count("\n") == 1
+
+
+# Spec AC1: an endpoint removal reports the associated Go call site.
+def test_check_go_reports_the_removed_endpoint_call(a_go_repo, capsys):
+    assert (
+        a_check(
+            a_go_repo.repo,
+            a_go_repo.endpoint_specs,
+            "--operation",
+            "POST /v1/charges=charge.New",
+        )
+        == 1
+    )
+
+    out = capsys.readouterr().out
+    assert "main.go:10:5" in out
+    assert "New" in out
+
+
+# Spec AC2: fix proposes the rename, proves it and leaves the fixture alone.
+def test_fix_go_proposes_and_proves_the_rename(
+    a_go_repo, a_snapshot, capsys
+):
+    before = a_snapshot(a_go_repo.repo)
+
+    assert (
+        a_fix(
+            a_go_repo.repo,
+            a_go_repo.fix_specs,
+            "--check",
+            shlex.join([sys.executable, "-c", "pass"]),
+        )
+        == 0
+    )
+
+    out = capsys.readouterr().out
+    assert (
+        '-    params := &stripe.ChargeParams{AmountCents: 100, Currency: "usd"}'
+        in out
+    )
+    assert (
+        '+    params := &stripe.ChargeParams{AmountTotal: 100, Currency: "usd"}'
+        in out
+    )
+    assert "Proof: TESTS_PASSED" in out
+    assert a_snapshot(a_go_repo.repo) == before
 
 
 # Spec AC3: check --source mcp runs the MCP diff and names the argument key.
@@ -1714,6 +1914,8 @@ def test_fix_build_only_json_is_byte_stable_across_hash_seeds(
 
 PROOF_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "proof-basic"
 RUST_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "rust-basic"
+GO_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "go-basic"
+GO_ROOT = "github.com/stripe/stripe-go/v76"
 PROVIDER_CHECK = [sys.executable, "-c", "import acme.billing"]
 PROVIDER_OLD = """\
 openapi: 3.1.0
@@ -1740,6 +1942,17 @@ components:
 """
 RUST_PROVIDER_OLD = PROVIDER_OLD.replace("amount:", "amount_cents:")
 RUST_PROVIDER_NEW = PROVIDER_OLD.replace("amount:", "amount_total:")
+GO_PROVIDER_OLD = """\
+openapi: 3.1.0
+components:
+  schemas:
+    ChargeParams:
+      type: object
+      properties:
+        AmountCents:
+          type: integer
+"""
+GO_PROVIDER_NEW = GO_PROVIDER_OLD.replace("AmountCents:", "AmountTotal:")
 
 
 def a_bundle(
@@ -1786,6 +1999,29 @@ def a_rust_bundle(tmp_path):
     return path
 
 
+def a_go_bundle(tmp_path):
+    """One temp Go provider bundle over the go-basic fixture."""
+    (tmp_path / "old.yaml").write_text(GO_PROVIDER_OLD, encoding="utf-8")
+    (tmp_path / "new.yaml").write_text(GO_PROVIDER_NEW, encoding="utf-8")
+    data = {
+        "provider": "stripe",
+        "migration": "amount-total",
+        "source": "openapi",
+        "language": "go",
+        "old": "old.yaml",
+        "new": "new.yaml",
+        "locate": {
+            "sdk_package": GO_ROOT,
+            "package_name": "stripe",
+            "fields": {"ChargeParams.AmountCents": "AmountCents"},
+        },
+        "check": [sys.executable, "-c", "pass"],
+    }
+    path = tmp_path / "go-bundle.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
 def a_provider(bundle, *extra, repo=PROOF_BASIC, remote=None):
     return main(
         ["provider", "migrate", str(repo), "--bundle", str(bundle), *extra],
@@ -1823,6 +2059,28 @@ def test_provider_migrate_rust_bundle_exits_zero(
     assert "+        amount_total: amount," in out
     assert "Proof: TESTS_PASSED" in out
     assert a_snapshot(RUST_BASIC) == before
+
+
+# Spec AC4: a Go bundle runs through provider migrate and leaves the repo alone.
+def test_provider_migrate_go_bundle_exits_zero(
+    a_snapshot, tmp_path, capsys
+):
+    bundle = a_go_bundle(tmp_path)
+    before = a_snapshot(GO_BASIC)
+
+    assert a_provider(bundle, repo=GO_BASIC) == 0
+
+    out = capsys.readouterr().out
+    assert (
+        '-    params := &stripe.ChargeParams{AmountCents: 100, Currency: "usd"}'
+        in out
+    )
+    assert (
+        '+    params := &stripe.ChargeParams{AmountTotal: 100, Currency: "usd"}'
+        in out
+    )
+    assert "Proof: TESTS_PASSED" in out
+    assert a_snapshot(GO_BASIC) == before
 
 
 # Spec AC1: a red check is exit 1 and the proof names the failure.
@@ -2168,6 +2426,51 @@ def test_provider_rust_bundle_with_a_bad_crate_is_a_named_error(
     assert "sdk_package" in err
     if crate:
         assert "Rust crate" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a Go bundle with MCP is a named bundle error.
+def test_provider_go_bundle_with_mcp_is_a_named_error(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, source="mcp", language="go")
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "mcp requires language python" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a Go bundle with a bad import root is a named bundle error.
+@pytest.mark.parametrize("root", ["/stripe", "a b", "a::b"])
+def test_provider_go_bundle_with_a_bad_root_is_a_named_error(
+    root, tmp_path, capsys
+):
+    bundle = a_bundle(tmp_path, language="go", locate={"sdk_package": root})
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a Go bundle with a bad package name is a named bundle error.
+def test_provider_go_bundle_with_a_bad_package_is_a_named_error(
+    tmp_path, capsys
+):
+    bundle = a_bundle(
+        tmp_path,
+        language="go",
+        locate={
+            "sdk_package": "github.com/stripe/stripe-go/v76",
+            "package_name": "not-a-name",
+        },
+    )
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "package_name" in err
     assert "Traceback" not in err
 
 
