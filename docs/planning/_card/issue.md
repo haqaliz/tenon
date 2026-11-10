@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T11 More languages** — third slice: **C# locator** (`docs/technical/CAPABILITY_ROADMAP.md:17`)
 - **Milestone:** Phase 3 (`docs/ROADMAP.md`), third T11 slice
+- **State:** shipped 2026-11-11 (`src/tenon/locate/csharp_*.py`, CLI; 2,099 tests)
 - **Branch:** `feat/locator-csharp/aliz`
 - **Worktree:** `.claude/worktrees/feat-locator-csharp`
 

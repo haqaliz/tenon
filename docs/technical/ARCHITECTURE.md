@@ -229,5 +229,5 @@ No .NET toolchain or proof preset ships; `--check "dotnet test"` is just a user 
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
 - Phase 3: T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider
   fan-out), T10d (installed provider fan-out), T11a (Rust locator), T11b (Go locator) and T11c
-  (C# locator) shipped; a hosted/webhook-driven service and C# fluent-chain receiver tracking are
-  not started.
+  (C# locator) shipped; a hosted/webhook-driven service and fluent-chain receiver tracking are not
+  started.

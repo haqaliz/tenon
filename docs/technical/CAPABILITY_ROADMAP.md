@@ -14,7 +14,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Shipped 2026-11-07** |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Partial 2026-11-10** — GitHub App remote, provider bundle, local fan-out and installed fan-out shipped; hosted/webhook-driven service not started |
-| **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Partial 2026-11-10** — Rust and Go locators shipped; C# not started |
+| **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Shipped 2026-11-11** — Rust, Go and C# locators |
 
 ### T1 as shipped (2026-10-26)
 
@@ -285,6 +285,21 @@ Known limits: method chains on a local value, dot imports, reflection, generics 
 parsing and multi-hop composite data flow are not followed (no site, not a guess); a local variable
 named like the package alias is a documented false positive; a mapped spelling locates but is not
 auto-edited unless it equals the spec's old name; C# is T11c.
+
+### T11c as built (2026-11-11)
+
+`src/tenon/locate/csharp_{config,scan,locate}.py`: `CSharpLocateConfig` (a dotted namespace root
+plus the shared `operations`/`fields` mappings), `scan_csharp` (tree-sitter-c-sharp over `.cs` files;
+`using`/`global using`/alias roots, simple and qualified type names, static and tracked-`new`
+instance calls, object-initializer properties, per-member property access), and `locate_csharp`
+applying the shipped `derive`/`resolve` policy unchanged. `--language csharp`, `tenon.toml` and
+provider bundles accept `csharp`; MCP stays Python-only; no .NET toolchain or proof preset. 2,099
+tests, offline. T11 is complete.
+
+Known limits: fluent/property chains on untracked values, `using static`, `dynamic`, reflection,
+generics inference, `csproj` parsing and multi-hop initializer flow are not followed (no site, not a
+guess); a local type sharing an SDK simple name is a documented false positive; a mapped spelling
+locates but is not auto-edited unless it equals the spec's old name.
 
 
 

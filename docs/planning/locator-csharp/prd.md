@@ -3,7 +3,7 @@
 - **Slug:** `locator-csharp`
 - **Capability:** T11 in `docs/technical/CAPABILITY_ROADMAP.md` — **third slice, C# locator**
 - **Milestone:** Phase 3 in `docs/ROADMAP.md`, third T11 slice
-- **Status:** draft for review
+- **Status:** implemented 2026-11-11 (`src/tenon/locate/csharp_*.py`, CLI; 2,099 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement
