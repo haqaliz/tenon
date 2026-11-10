@@ -1,0 +1,386 @@
+"""The tree-sitter Go scanner over temp ``.go`` files."""
+
+from tenon.locate import SiteShape
+from tenon.locate.go_scan import scan_go
+from tenon.locate.scan import Hit
+
+STRIPE = "github.com/stripe/stripe-go/v76"
+
+
+def a_repo(tmp_path, files):
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+def a_hit(repo, path, line, column, shape, symbol, chain=(), rooted=False):
+    line_text = (repo / path).read_text(encoding="utf-8").split("\n")[line - 1]
+    return Hit(path, line, column, shape, symbol, chain, rooted, line_text)
+
+
+# Spec AC2: the root import's inferred package name roots its calls.
+def test_a_root_import_roots_the_call(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    stripe.Charge.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.modules == ("main.go",)
+    assert result.hits == (
+        a_hit(repo, "main.go", 6, 5, SiteShape.CALL, "New", ("Charge", "New"), True),
+    )
+    assert result.dynamics == ()
+
+
+# Spec AC2: a subpackage import keeps the canonical prefix in the chain.
+def test_a_subpackage_import_roots_the_call(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}/charge"\n'
+            "\n"
+            "func main() {\n"
+            "    charge.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.modules == ("main.go",)
+    assert result.hits == (
+        a_hit(repo, "main.go", 6, 5, SiteShape.CALL, "New", ("charge", "New"), True),
+    )
+
+
+# Spec AC2: an explicit alias wins over inference.
+def test_an_alias_resolves_the_canonical_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import s "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    s.Charge.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 6, 5, SiteShape.CALL, "New", ("Charge", "New"), True),
+    )
+
+
+# Spec AC2: grouped imports, raw strings and aliases all resolve.
+def test_a_grouped_import_resolves_each_name(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            "import (\n"
+            '    "fmt"\n'
+            f'    s "{STRIPE}"\n'
+            f"    `{STRIPE}/charge`\n"
+            ")\n"
+            "\n"
+            "func main() {\n"
+            "    s.Charge.New(params)\n"
+            "    charge.New(params)\n"
+            '    fmt.Println("x")\n'
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 10, 5, SiteShape.CALL, "New", ("Charge", "New"), True),
+        a_hit(repo, "main.go", 11, 5, SiteShape.CALL, "New", ("charge", "New"), True),
+        a_hit(repo, "main.go", 12, 5, SiteShape.CALL, "Println", ("Println",), False),
+    )
+
+
+# Spec AC2: `_` and `.` imports root no names but still make the file a module.
+def test_blank_and_dot_imports_root_no_names(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "blank.go": "package main\n"
+            "\n"
+            f'import _ "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    charge.New(params)\n"
+            "}\n",
+            "dot.go": "package main\n"
+            "\n"
+            f'import . "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    Charge.New(params)\n"
+            "}\n",
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.modules == ("blank.go", "dot.go")
+    assert result.hits == (
+        a_hit(repo, "blank.go", 6, 5, SiteShape.CALL, "New", ("New",), False),
+        a_hit(repo, "dot.go", 6, 5, SiteShape.CALL, "New", ("New",), False),
+    )
+
+
+# Spec AC2: a trailing `vN` yields the segment before it as the package name.
+def test_inference_uses_the_segment_before_a_version(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            'import "example.com/sdk/v2"\n'
+            "\n"
+            "func main() {\n"
+            "    sdk.Charge.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, "example.com/sdk/v2")
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 6, 5, SiteShape.CALL, "New", ("Charge", "New"), True),
+    )
+
+
+# Spec AC2: a trailing `-go` is stripped to infer the package name.
+def test_inference_strips_a_trailing_go_suffix(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            'import "example.com/acme/stripe-go"\n'
+            "\n"
+            "func main() {\n"
+            "    stripe.Charge.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, "example.com/acme/stripe-go")
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 6, 5, SiteShape.CALL, "New", ("Charge", "New"), True),
+    )
+
+
+# Spec AC2: `package_name` overrides the root import's inference.
+def test_package_name_overrides_the_root_inference(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    acme.Charge.New(params)\n"
+            "    stripe.Charge.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE, package_name="acme")
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 6, 5, SiteShape.CALL, "New", ("Charge", "New"), True),
+        a_hit(repo, "main.go", 7, 5, SiteShape.CALL, "New", ("Charge", "New"), False),
+    )
+
+
+# Spec AC2: a file that never imports the root is not a module.
+def test_a_file_without_the_root_is_not_a_module(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            'import "fmt"\n'
+            "\n"
+            "func main() {\n"
+            '    fmt.Println("x")\n'
+            "}\n",
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.modules == ()
+    assert result.hits == ()
+
+
+# Spec AC2: a file that only imports the root is still a module.
+def test_a_file_that_only_imports_the_root_is_a_module(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "a.go": f'package main\n\nimport "{STRIPE}"\n',
+            "b.go": 'package main\n\nimport "fmt"\n',
+        },
+    )
+
+    assert scan_go(repo, STRIPE).modules == ("a.go",)
+
+
+# Spec AC3: a method chain on a local value is an unrooted call.
+def test_a_method_chain_is_an_unrooted_call(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.go",
+            6,
+            5,
+            SiteShape.CALL,
+            "New",
+            ("Charges", "New"),
+            False,
+        ),
+    )
+
+
+# Spec AC3: a non-SDK package selector is unrooted evidence.
+def test_a_non_sdk_selector_is_an_unrooted_call(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            'import "fmt"\n'
+            "\n"
+            "func main() {\n"
+            '    fmt.Println("x")\n'
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 7, 5, SiteShape.CALL, "Println", ("Println",), False),
+    )
+
+
+# Spec AC7: vendor, testdata, .git and hidden directories are skipped.
+def test_skips_vendor_testdata_and_hidden_directories(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "vendor/bad.go": f'package main\n\nimport "{STRIPE}"\n',
+            "testdata/bad.go": f'package main\n\nimport "{STRIPE}"\n',
+            ".git/bad.go": f'package main\n\nimport "{STRIPE}"\n',
+            ".hidden/bad.go": f'package main\n\nimport "{STRIPE}"\n',
+            "pkg/good.go": f'package main\n\nimport "{STRIPE}"\n',
+        },
+    )
+
+    assert scan_go(repo, STRIPE).modules == ("pkg/good.go",)
+
+
+# Spec AC7: the file order is deterministic.
+def test_files_are_sorted(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "b.go": f'package main\n\nimport "{STRIPE}"\n',
+            "a.go": f'package main\n\nimport "{STRIPE}"\n',
+            "nested/c.go": f'package main\n\nimport "{STRIPE}"\n',
+        },
+    )
+
+    assert scan_go(repo, STRIPE).modules == ("a.go", "b.go", "nested/c.go")
+
+
+def test_a_parse_error_file_is_skipped(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "bad.go": f'package main\n\nimport "{STRIPE}"\n\nfunc main( {{\n',
+            "good.go": f'package main\n\nimport "{STRIPE}"\n',
+        },
+    )
+
+    assert scan_go(repo, STRIPE).modules == ("good.go",)
+
+
+# Spec AC3: the hit carries the exact 1-based location and line text.
+def test_a_call_hit_carries_the_exact_location_and_line_text(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    stripe.Charge.New(params)\n"
+            "}\n"
+        },
+    )
+
+    [hit] = scan_go(repo, STRIPE).hits
+
+    assert (hit.path, hit.line, hit.column) == ("main.go", 6, 5)
+    assert hit.line_text == "    stripe.Charge.New(params)"
+
+
+def test_scan_go_is_deterministic(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    stripe.Charge.New(params)\n"
+            "}\n"
+        },
+    )
+
+    assert scan_go(repo, STRIPE) == scan_go(repo, STRIPE)
