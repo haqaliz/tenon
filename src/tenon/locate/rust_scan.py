@@ -1,8 +1,7 @@
 """Read-only tree-sitter scan for Rust names rooted in an SDK crate.
 
-The scan reports evidence only: every hit carries ``rooted`` and every construct
-it cannot see through becomes a ``Dynamic``. Whether a hit is certain is decided
-elsewhere.
+The scan reports evidence only: every hit carries ``rooted``. Whether a hit is
+certain is decided elsewhere.
 """
 
 from collections.abc import Iterator

@@ -12,6 +12,8 @@ from .result import (
     SiteShape,
 )
 from .resolve import locate
+from .rust_config import RustLocateConfig
+from .rust_locate import locate_rust
 from .scan import Dynamic, Hit, ScanResult, scan
 from .ts_config import TsLocateConfig
 from .ts_locate import locate_ts
@@ -26,6 +28,7 @@ __all__ = [
     "LocateResult",
     "McpLocateConfig",
     "Query",
+    "RustLocateConfig",
     "ScanResult",
     "Site",
     "SiteShape",
@@ -34,6 +37,7 @@ __all__ = [
     "load_config",
     "locate",
     "locate_mcp",
+    "locate_rust",
     "locate_ts",
     "scan",
 ]
