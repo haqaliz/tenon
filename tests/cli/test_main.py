@@ -336,6 +336,72 @@ def test_language_rust_with_source_mcp_is_named(a_mcp_repo, a_mcp_specs, capsys)
     assert "Traceback" not in err
 
 
+# Spec AC1: --language go with no config builds GoLocateConfig from the flags.
+def test_missing_config_with_language_go_uses_sdk_package(
+    tmp_path, a_same_specs
+):
+    assert (
+        a_check(
+            tmp_path,
+            a_same_specs,
+            "--language",
+            "go",
+            "--sdk-package",
+            "github.com/stripe/stripe-go/v76",
+            "--package-name",
+            "stripe",
+        )
+        == 0
+    )
+
+
+# Spec AC3: a bad Go import root from the flag is one named config error.
+def test_language_go_rejects_a_bad_root(tmp_path, a_specs, capsys):
+    assert (
+        a_check(tmp_path, a_specs, "--language", "go", "--sdk-package", "/stripe")
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    assert "Go import root" in err
+    assert "Traceback" not in err
+
+
+# Spec AC3: a bad Go package name from the flag is one named config error.
+def test_language_go_rejects_a_bad_package_name(tmp_path, a_specs, capsys):
+    assert (
+        a_check(
+            tmp_path,
+            a_specs,
+            "--language",
+            "go",
+            "--sdk-package",
+            "github.com/stripe/stripe-go/v76",
+            "--package-name",
+            "not-a-name",
+        )
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "package_name" in err
+    assert "Go identifier" in err
+    assert "Traceback" not in err
+
+
+# Spec AC3: MCP with Go is one named error.
+def test_language_go_with_source_mcp_is_named(a_mcp_repo, a_mcp_specs, capsys):
+    assert (
+        a_check(a_mcp_repo, a_mcp_specs, "--source", "mcp", "--language", "go")
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "mcp requires language python" in err
+    assert "Traceback" not in err
+
+
 LOCATE_CONFIGS = {
     "python": LocateConfig,
     "ts": TsLocateConfig,

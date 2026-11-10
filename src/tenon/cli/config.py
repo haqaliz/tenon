@@ -8,6 +8,7 @@ from typing import Literal, Sequence
 
 from tenon.locate import (
     LOCATE_TYPES,
+    GoLocateConfig,
     LocateConfig,
     McpLocateConfig,
     RustLocateConfig,
@@ -15,7 +16,7 @@ from tenon.locate import (
 )
 from tenon.prove import ProofLevel
 
-LANGUAGES = ("python", "ts", "rust")
+LANGUAGES = ("python", "ts", "rust", "go")
 SOURCES = ("openapi", "mcp")
 
 
@@ -23,20 +24,23 @@ SOURCES = ("openapi", "mcp")
 class CliConfig:
     """Everything one CLI run needs before it starts."""
 
-    locate: LocateConfig | TsLocateConfig | RustLocateConfig | McpLocateConfig
+    locate: (
+        LocateConfig | TsLocateConfig | RustLocateConfig | GoLocateConfig
+        | McpLocateConfig
+    )
     command: tuple[str, ...] = ()
     build: tuple[str, ...] = ()
     characterize: tuple[str, ...] = ()
     replay: tuple[str, ...] = ()
     require: ProofLevel = ProofLevel.TESTS_PASSED
     breaking_only: bool = False
-    language: Literal["python", "ts", "rust"] = "python"
+    language: Literal["python", "ts", "rust", "go"] = "python"
     source: Literal["openapi", "mcp"] = "openapi"
 
     def __post_init__(self) -> None:
         if self.language not in LANGUAGES:
             raise ValueError(
-                f"language must be python, ts or rust: {self.language!r}"
+                f"language must be python, ts, rust or go: {self.language!r}"
             )
         if self.source not in SOURCES:
             raise ValueError(
@@ -109,7 +113,7 @@ def load_cli_config(
     chosen = section.get("language", "python") if language is None else language
     if not isinstance(chosen, str) or chosen not in LANGUAGES:
         raise ValueError(
-            f"{path}: [locate] language must be python, ts or rust: {chosen!r}"
+            f"{path}: [locate] language must be python, ts, rust or go: {chosen!r}"
         )
     if chosen_source == "mcp" and chosen != "python":
         raise ValueError(
@@ -133,18 +137,25 @@ def load_cli_config(
     if not isinstance(breaking_only, bool):
         raise ValueError(f"{path}: [tenon] breaking_only must be a bool")
 
-    locate: LocateConfig | TsLocateConfig | RustLocateConfig | McpLocateConfig
+    locate: (
+        LocateConfig | TsLocateConfig | RustLocateConfig | GoLocateConfig
+        | McpLocateConfig
+    )
     if chosen_source == "mcp":
         # Spec AC2: the MCP client package is optional and defaults to mcp.
         locate = McpLocateConfig(client_package=section.get("sdk_package", "mcp"))
     else:
         if "sdk_package" not in section:
             raise ValueError(f"{path}: [locate] is missing sdk_package")
-        locate = LOCATE_TYPES[chosen](
-            sdk_package=section["sdk_package"],
-            operations=operations,
-            fields=fields,
-        )
+        options = {
+            "sdk_package": section["sdk_package"],
+            "operations": operations,
+            "fields": fields,
+        }
+        # Spec AC3: the root import's package clause is a Go-only override.
+        if chosen == "go":
+            options["package_name"] = section.get("package_name")
+        locate = LOCATE_TYPES[chosen](**options)
 
     return CliConfig(
         locate=locate,
@@ -169,7 +180,10 @@ def _split(value: str, flag: str) -> tuple[str, ...]:
 
 
 def _package(
-    locate: LocateConfig | TsLocateConfig | RustLocateConfig | McpLocateConfig,
+    locate: (
+        LocateConfig | TsLocateConfig | RustLocateConfig | GoLocateConfig
+        | McpLocateConfig
+    ),
 ) -> str:
     """The package a locate config scans, under either source."""
     return (
@@ -183,6 +197,7 @@ def overrides(
     config: CliConfig,
     *,
     sdk_package: str | None = None,
+    package_name: str | None = None,
     operations: Sequence[str] = (),
     fields: Sequence[str] = (),
     command: str | None = None,
@@ -197,7 +212,9 @@ def overrides(
     """Apply flags over the config; only supplied flags change anything."""
     chosen = config.language if language is None else language
     if chosen not in LANGUAGES:
-        raise ValueError(f"--language must be python, ts or rust: {language!r}")
+        raise ValueError(
+            f"--language must be python, ts, rust or go: {language!r}"
+        )
     chosen_source = config.source if source is None else source
     if chosen_source not in SOURCES:
         raise ValueError(f"--source must be openapi or mcp: {source!r}")
@@ -222,23 +239,39 @@ def overrides(
         if (
             source_changed
             or sdk_package is not None
+            or (chosen == "go" and package_name is not None)
             or operations_over
             or fields_over
             or chosen != config.language
         ):
             openapi = not isinstance(config.locate, McpLocateConfig)
-            locate = LOCATE_TYPES[chosen](
-                sdk_package=(
+            options = {
+                "sdk_package": (
                     _package(config.locate)
                     if sdk_package is None
                     else sdk_package
                 ),
-                operations={
+                "operations": {
                     **(config.locate.operations if openapi else {}),
                     **operations_over,
                 },
-                fields={**(config.locate.fields if openapi else {}), **fields_over},
-            )
+                "fields": {
+                    **(config.locate.fields if openapi else {}),
+                    **fields_over,
+                },
+            }
+            # Spec AC3: --package-name is the Go root import's package clause.
+            if chosen == "go":
+                options["package_name"] = (
+                    package_name
+                    if package_name is not None
+                    else (
+                        config.locate.package_name
+                        if isinstance(config.locate, GoLocateConfig)
+                        else None
+                    )
+                )
+            locate = LOCATE_TYPES[chosen](**options)
 
     if command is not None:
         command_parts = _split(command, "--check")

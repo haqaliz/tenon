@@ -4,6 +4,7 @@ import pytest
 
 from tenon.cli import CliConfig, load_cli_config, overrides, resolve_config_path
 from tenon.locate import (
+    GoLocateConfig,
     LocateConfig,
     McpLocateConfig,
     RustLocateConfig,
@@ -15,6 +16,7 @@ LOCATE_TYPES = {
     "python": LocateConfig,
     "ts": TsLocateConfig,
     "rust": RustLocateConfig,
+    "go": GoLocateConfig,
 }
 
 
@@ -31,9 +33,17 @@ def a_config(
     breaking_only=False,
     language="python",
     source="openapi",
+    package_name=None,
 ):
     if source == "mcp":
         locate = McpLocateConfig(client_package=sdk_package)
+    elif language == "go":
+        locate = GoLocateConfig(
+            sdk_package=sdk_package,
+            package_name=package_name,
+            operations=operations or {},
+            fields=fields or {},
+        )
     else:
         locate = LOCATE_TYPES[language](
             sdk_package=sdk_package,
@@ -143,6 +153,50 @@ def test_mcp_source_rejects_rust_in_the_file(tmp_path):
         load_cli_config(path)
 
 
+# Spec AC3: the file selects Go and reads the optional package name.
+def test_file_selects_go_and_keeps_the_package_name(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nlanguage = "go"\n'
+        'sdk_package = "github.com/stripe/stripe-go/v76"\n'
+        'package_name = "stripe"\n'
+        '\n[locate.fields]\n"ChargeParams.AmountCents" = "AmountCents"\n',
+    )
+
+    config = load_cli_config(path)
+
+    assert config.language == "go"
+    assert config.locate == GoLocateConfig(
+        sdk_package="github.com/stripe/stripe-go/v76",
+        package_name="stripe",
+        fields={"ChargeParams.AmountCents": "AmountCents"},
+    )
+
+
+# Spec AC3: a bad Go package name from the file is a named error.
+def test_load_cli_config_rejects_a_bad_go_package_name(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nlanguage = "go"\n'
+        'sdk_package = "github.com/stripe/stripe-go/v76"\n'
+        'package_name = "not-a-name"\n',
+    )
+
+    with pytest.raises(ValueError, match="package_name"):
+        load_cli_config(path)
+
+
+# Spec AC3: MCP stays Python-only for the file's Go language.
+def test_mcp_source_rejects_go_in_the_file(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nsource = "mcp"\nlanguage = "go"\nsdk_package = "stripe"\n',
+    )
+
+    with pytest.raises(ValueError, match="mcp.*python"):
+        load_cli_config(path)
+
+
 # Spec AC2: the language argument overrides the file in both directions.
 @pytest.mark.parametrize(
     ("file_language", "argument", "expected_type"),
@@ -151,6 +205,8 @@ def test_mcp_source_rejects_rust_in_the_file(tmp_path):
         ("ts", "python", LocateConfig),
         (None, "rust", RustLocateConfig),
         ("rust", "python", LocateConfig),
+        (None, "go", GoLocateConfig),
+        ("go", "python", LocateConfig),
     ],
 )
 def test_language_argument_overrides_the_file(
@@ -395,7 +451,7 @@ def test_load_cli_config_validates_a_malformed_key(tmp_path, text, key):
         load_cli_config(path)
 
 
-# Spec AC5: the language must be python, ts or rust, named with its key.
+# Spec AC5: the language must be python, ts, rust or go, named with its key.
 @pytest.mark.parametrize("language", ["ruby", "TypeScript", ""])
 def test_load_cli_config_rejects_an_unknown_file_language(tmp_path, language):
     path = a_file(
@@ -405,7 +461,7 @@ def test_load_cli_config_rejects_an_unknown_file_language(tmp_path, language):
     with pytest.raises(ValueError, match=re.escape("[locate] language")) as raised:
         load_cli_config(path)
 
-    assert "python, ts or rust" in str(raised.value)
+    assert "python, ts, rust or go" in str(raised.value)
 
 
 def test_load_cli_config_rejects_an_unknown_language_argument(tmp_path):
@@ -493,6 +549,39 @@ def test_overrides_keeps_rust_when_merging_operations():
     assert dict(result.locate.operations) == {"a": "b"}
 
 
+# Spec AC1/AC2: --language go builds the Go config and keeps --package-name.
+def test_overrides_changes_the_language_to_go():
+    result = overrides(
+        a_config(sdk_package="stripe"), language="go", package_name="stripe"
+    )
+
+    assert result.language == "go"
+    assert isinstance(result.locate, GoLocateConfig)
+    assert result.locate.sdk_package == "stripe"
+    assert result.locate.package_name == "stripe"
+
+
+# Spec AC2: merging operations keeps a Go config and its package name.
+def test_overrides_keeps_go_when_merging_operations():
+    config = a_config(
+        language="go",
+        sdk_package="github.com/stripe/stripe-go/v76",
+        package_name="stripe",
+    )
+
+    result = overrides(config, operations=["a=b"])
+
+    assert isinstance(result.locate, GoLocateConfig)
+    assert result.locate.package_name == "stripe"
+    assert dict(result.locate.operations) == {"a": "b"}
+
+
+# Spec AC3: a bad --package-name is one named error.
+def test_overrides_rejects_a_bad_package_name():
+    with pytest.raises(ValueError, match="package_name"):
+        overrides(a_config(language="go"), package_name="not-a-name")
+
+
 # Spec AC2: merging operations keeps a TS config TS.
 def test_overrides_keeps_ts_when_merging_operations():
     result = overrides(a_config(language="ts"), operations=["a=b"])
@@ -514,7 +603,7 @@ def test_overrides_rejects_an_unknown_language():
     with pytest.raises(ValueError, match=re.escape("--language")) as raised:
         overrides(a_config(), language="ruby")
 
-    assert "python, ts or rust" in str(raised.value)
+    assert "python, ts, rust or go" in str(raised.value)
 
 
 # Spec AC2: a source change rebuilds the locate config and keeps the package.
@@ -553,6 +642,12 @@ def test_overrides_rejects_mcp_with_rust():
         overrides(a_config(), source="mcp", language="rust")
 
 
+# Spec AC3: MCP with Go is the same named error.
+def test_overrides_rejects_mcp_with_go():
+    with pytest.raises(ValueError, match="mcp.*python"):
+        overrides(a_config(), source="mcp", language="go")
+
+
 # Spec AC2: an unknown --source names the flag.
 def test_overrides_rejects_an_unknown_source():
     with pytest.raises(ValueError, match=re.escape("--source")):
@@ -569,12 +664,23 @@ def test_cli_config_accepts_rust():
     assert isinstance(config.locate, RustLocateConfig)
 
 
-# Spec AC5: CliConfig itself refuses an unknown language, naming all three.
+# Spec AC1: CliConfig accepts go and its config type.
+def test_cli_config_accepts_go():
+    config = CliConfig(
+        locate=GoLocateConfig(sdk_package="github.com/stripe/stripe-go/v76"),
+        language="go",
+    )
+
+    assert config.language == "go"
+    assert isinstance(config.locate, GoLocateConfig)
+
+
+# Spec AC5: CliConfig itself refuses an unknown language, naming all four.
 def test_cli_config_rejects_an_unknown_language():
     with pytest.raises(ValueError, match="language") as raised:
         CliConfig(locate=LocateConfig(sdk_package="stripe"), language="ruby")
 
-    assert "python, ts or rust" in str(raised.value)
+    assert "python, ts, rust or go" in str(raised.value)
 
 
 # Spec AC4: --operation and --field merge over the table, with flags winning.
