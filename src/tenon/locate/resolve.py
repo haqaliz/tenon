@@ -294,7 +294,7 @@ def _build(
     reason: LocateReason | None = None,
 ) -> LocateResult:
     """Construct a result, refusing to call the same site certain and doubtful."""
-    certain = tuple(certain)
+    certain = _unique(certain)
     groups = tuple(groups)
     certain_keys = {_site_key(site) for site in certain}
     for group in groups:

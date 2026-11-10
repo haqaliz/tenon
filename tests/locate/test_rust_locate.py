@@ -137,6 +137,28 @@ def test_a_component_field_rename_is_certain_on_the_type_chain(tmp_path):
     assert result.reason is None
 
 
+# Spec AC6: one source location is listed once even when it is evidence on two chains.
+def test_a_component_field_passed_to_a_call_is_one_site(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::{Charge, Params};\n"
+            "\n"
+            "fn main() {\n"
+            "    let params = Params { amount: 100 };\n"
+            "    Charge::create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = locate_rust(a_component_rename(), repo, STRIPE)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.rs", 4, 27, SiteShape.KEYWORD, "amount")]
+
+
 # Spec AC6: an unrooted non-SDK call is an UNROOTED_RECEIVER candidate.
 def test_an_unrooted_call_is_the_unrooted_receiver(tmp_path):
     repo = a_repo(
