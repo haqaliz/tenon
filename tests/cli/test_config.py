@@ -4,6 +4,7 @@ import pytest
 
 from tenon.cli import CliConfig, load_cli_config, overrides, resolve_config_path
 from tenon.locate import (
+    CSharpLocateConfig,
     GoLocateConfig,
     LocateConfig,
     McpLocateConfig,
@@ -17,6 +18,7 @@ LOCATE_TYPES = {
     "ts": TsLocateConfig,
     "rust": RustLocateConfig,
     "go": GoLocateConfig,
+    "csharp": CSharpLocateConfig,
 }
 
 
@@ -186,6 +188,50 @@ def test_load_cli_config_rejects_a_bad_go_package_name(tmp_path):
         load_cli_config(path)
 
 
+# Spec AC3: the file selects C# and keeps the shared operation/field tables.
+def test_file_selects_csharp_and_keeps_the_mappings(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nlanguage = "csharp"\nsdk_package = "Stripe"\n'
+        '\n[locate.operations]\n"POST /v1/charges" = "ChargeService.Create"\n'
+        '\n[locate.fields]\n'
+        '"ChargeCreateOptions.AmountCents" = "AmountCents"\n',
+    )
+
+    config = load_cli_config(path)
+
+    assert config.language == "csharp"
+    assert config.locate == CSharpLocateConfig(
+        sdk_package="Stripe",
+        operations={"POST /v1/charges": "ChargeService.Create"},
+        fields={"ChargeCreateOptions.AmountCents": "AmountCents"},
+    )
+
+
+# Spec AC3: a C# namespace root is dotted names; a blank, path or `::` is named.
+@pytest.mark.parametrize("root", ["", "a/b", "a::b"])
+def test_load_cli_config_rejects_a_bad_csharp_namespace(tmp_path, root):
+    path = a_file(
+        tmp_path, f'[locate]\nlanguage = "csharp"\nsdk_package = "{root}"\n'
+    )
+
+    with pytest.raises(ValueError, match="sdk_package") as raised:
+        load_cli_config(path)
+
+    assert "C# namespace" in str(raised.value)
+
+
+# Spec AC3: MCP stays Python-only for the file's C# language.
+def test_mcp_source_rejects_csharp_in_the_file(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nsource = "mcp"\nlanguage = "csharp"\nsdk_package = "Stripe"\n',
+    )
+
+    with pytest.raises(ValueError, match="mcp.*python"):
+        load_cli_config(path)
+
+
 # Spec AC3: MCP stays Python-only for the file's Go language.
 def test_mcp_source_rejects_go_in_the_file(tmp_path):
     path = a_file(
@@ -207,6 +253,8 @@ def test_mcp_source_rejects_go_in_the_file(tmp_path):
         ("rust", "python", LocateConfig),
         (None, "go", GoLocateConfig),
         ("go", "python", LocateConfig),
+        (None, "csharp", CSharpLocateConfig),
+        ("csharp", "python", LocateConfig),
     ],
 )
 def test_language_argument_overrides_the_file(
@@ -451,7 +499,7 @@ def test_load_cli_config_validates_a_malformed_key(tmp_path, text, key):
         load_cli_config(path)
 
 
-# Spec AC5: the language must be python, ts, rust or go, named with its key.
+# Spec AC5: the language must be python, ts, rust, go or csharp, named with its key.
 @pytest.mark.parametrize("language", ["ruby", "TypeScript", ""])
 def test_load_cli_config_rejects_an_unknown_file_language(tmp_path, language):
     path = a_file(
@@ -461,7 +509,7 @@ def test_load_cli_config_rejects_an_unknown_file_language(tmp_path, language):
     with pytest.raises(ValueError, match=re.escape("[locate] language")) as raised:
         load_cli_config(path)
 
-    assert "python, ts, rust or go" in str(raised.value)
+    assert "python, ts, rust, go or csharp" in str(raised.value)
 
 
 def test_load_cli_config_rejects_an_unknown_language_argument(tmp_path):
@@ -561,6 +609,25 @@ def test_overrides_changes_the_language_to_go():
     assert result.locate.package_name == "stripe"
 
 
+# Spec AC2/AC3: --language csharp builds the C# config from the same package.
+def test_overrides_changes_the_language_to_csharp():
+    result = overrides(a_config(sdk_package="Stripe"), language="csharp")
+
+    assert result.language == "csharp"
+    assert isinstance(result.locate, CSharpLocateConfig)
+    assert result.locate.sdk_package == "Stripe"
+
+
+# Spec AC2: merging operations keeps a C# config C#.
+def test_overrides_keeps_csharp_when_merging_operations():
+    config = a_config(language="csharp", sdk_package="Stripe")
+
+    result = overrides(config, operations=["a=b"])
+
+    assert isinstance(result.locate, CSharpLocateConfig)
+    assert dict(result.locate.operations) == {"a": "b"}
+
+
 # Spec AC2: merging operations keeps a Go config and its package name.
 def test_overrides_keeps_go_when_merging_operations():
     config = a_config(
@@ -603,7 +670,7 @@ def test_overrides_rejects_an_unknown_language():
     with pytest.raises(ValueError, match=re.escape("--language")) as raised:
         overrides(a_config(), language="ruby")
 
-    assert "python, ts, rust or go" in str(raised.value)
+    assert "python, ts, rust, go or csharp" in str(raised.value)
 
 
 # Spec AC2: a source change rebuilds the locate config and keeps the package.
@@ -648,6 +715,12 @@ def test_overrides_rejects_mcp_with_go():
         overrides(a_config(), source="mcp", language="go")
 
 
+# Spec AC3: MCP with C# is the same named error.
+def test_overrides_rejects_mcp_with_csharp():
+    with pytest.raises(ValueError, match="mcp.*python"):
+        overrides(a_config(), source="mcp", language="csharp")
+
+
 # Spec AC2: an unknown --source names the flag.
 def test_overrides_rejects_an_unknown_source():
     with pytest.raises(ValueError, match=re.escape("--source")):
@@ -675,12 +748,22 @@ def test_cli_config_accepts_go():
     assert isinstance(config.locate, GoLocateConfig)
 
 
-# Spec AC5: CliConfig itself refuses an unknown language, naming all four.
+# Spec AC1: CliConfig accepts csharp and its config type.
+def test_cli_config_accepts_csharp():
+    config = CliConfig(
+        locate=CSharpLocateConfig(sdk_package="Stripe"), language="csharp"
+    )
+
+    assert config.language == "csharp"
+    assert isinstance(config.locate, CSharpLocateConfig)
+
+
+# Spec AC5: CliConfig itself refuses an unknown language, naming all five.
 def test_cli_config_rejects_an_unknown_language():
     with pytest.raises(ValueError, match="language") as raised:
         CliConfig(locate=LocateConfig(sdk_package="stripe"), language="ruby")
 
-    assert "python, ts, rust or go" in str(raised.value)
+    assert "python, ts, rust, go or csharp" in str(raised.value)
 
 
 # Spec AC4: --operation and --field merge over the table, with flags winning.

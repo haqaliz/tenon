@@ -31,6 +31,7 @@ from tenon.detect import (
     load_mcp,
 )
 from tenon.locate import (
+    CSharpLocateConfig,
     GoLocateConfig,
     LocateConfig,
     RustLocateConfig,
@@ -399,6 +400,72 @@ def test_language_go_rejects_a_bad_package_name(tmp_path, a_specs, capsys):
 def test_language_go_with_source_mcp_is_named(a_mcp_repo, a_mcp_specs, capsys):
     assert (
         a_check(a_mcp_repo, a_mcp_specs, "--source", "mcp", "--language", "go")
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "mcp requires language python" in err
+    assert "Traceback" not in err
+
+
+# Spec AC1: --language csharp is a parser choice.
+def test_csharp_language_is_a_parser_choice():
+    args = cli_main._parser().parse_args(
+        [
+            "check",
+            ".",
+            "--old",
+            "old.yaml",
+            "--new",
+            "new.yaml",
+            "--language",
+            "csharp",
+        ]
+    )
+
+    assert args.language == "csharp"
+
+
+# Spec AC1: --language csharp with no config builds the C# config from the flags.
+def test_missing_config_with_language_csharp_uses_sdk_package(
+    tmp_path, a_same_specs
+):
+    assert (
+        a_check(
+            tmp_path,
+            a_same_specs,
+            "--language",
+            "csharp",
+            "--sdk-package",
+            "Stripe",
+        )
+        == 0
+    )
+
+
+# Spec AC3: a bad C# namespace from the flag is one named config error.
+def test_language_csharp_rejects_a_bad_namespace(tmp_path, a_specs, capsys):
+    assert (
+        a_check(
+            tmp_path, a_specs, "--language", "csharp", "--sdk-package", "a/b"
+        )
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    assert "C# namespace" in err
+    assert "Traceback" not in err
+
+
+# Spec AC3: MCP with C# is one named error.
+def test_language_csharp_with_source_mcp_is_named(
+    a_mcp_repo, a_mcp_specs, capsys
+):
+    assert (
+        a_check(
+            a_mcp_repo, a_mcp_specs, "--source", "mcp", "--language", "csharp"
+        )
         == 2
     )
 
