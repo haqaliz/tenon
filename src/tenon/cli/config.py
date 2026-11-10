@@ -6,10 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Sequence
 
-from tenon.locate import LocateConfig, McpLocateConfig, TsLocateConfig
+from tenon.locate import (
+    LOCATE_TYPES,
+    LocateConfig,
+    McpLocateConfig,
+    RustLocateConfig,
+    TsLocateConfig,
+)
 from tenon.prove import ProofLevel
 
-LANGUAGES = ("python", "ts")
+LANGUAGES = ("python", "ts", "rust")
 SOURCES = ("openapi", "mcp")
 
 
@@ -17,20 +23,20 @@ SOURCES = ("openapi", "mcp")
 class CliConfig:
     """Everything one CLI run needs before it starts."""
 
-    locate: LocateConfig | TsLocateConfig | McpLocateConfig
+    locate: LocateConfig | TsLocateConfig | RustLocateConfig | McpLocateConfig
     command: tuple[str, ...] = ()
     build: tuple[str, ...] = ()
     characterize: tuple[str, ...] = ()
     replay: tuple[str, ...] = ()
     require: ProofLevel = ProofLevel.TESTS_PASSED
     breaking_only: bool = False
-    language: Literal["python", "ts"] = "python"
+    language: Literal["python", "ts", "rust"] = "python"
     source: Literal["openapi", "mcp"] = "openapi"
 
     def __post_init__(self) -> None:
         if self.language not in LANGUAGES:
             raise ValueError(
-                f"language must be python or ts: {self.language!r}"
+                f"language must be python, ts or rust: {self.language!r}"
             )
         if self.source not in SOURCES:
             raise ValueError(
@@ -103,7 +109,7 @@ def load_cli_config(
     chosen = section.get("language", "python") if language is None else language
     if not isinstance(chosen, str) or chosen not in LANGUAGES:
         raise ValueError(
-            f"{path}: [locate] language must be python or ts: {chosen!r}"
+            f"{path}: [locate] language must be python, ts or rust: {chosen!r}"
         )
     if chosen_source == "mcp" and chosen != "python":
         raise ValueError(
@@ -127,16 +133,14 @@ def load_cli_config(
     if not isinstance(breaking_only, bool):
         raise ValueError(f"{path}: [tenon] breaking_only must be a bool")
 
+    locate: LocateConfig | TsLocateConfig | RustLocateConfig | McpLocateConfig
     if chosen_source == "mcp":
         # Spec AC2: the MCP client package is optional and defaults to mcp.
-        locate: LocateConfig | TsLocateConfig | McpLocateConfig = McpLocateConfig(
-            client_package=section.get("sdk_package", "mcp")
-        )
+        locate = McpLocateConfig(client_package=section.get("sdk_package", "mcp"))
     else:
         if "sdk_package" not in section:
             raise ValueError(f"{path}: [locate] is missing sdk_package")
-        locate_type = TsLocateConfig if chosen == "ts" else LocateConfig
-        locate = locate_type(
+        locate = LOCATE_TYPES[chosen](
             sdk_package=section["sdk_package"],
             operations=operations,
             fields=fields,
@@ -164,7 +168,9 @@ def _split(value: str, flag: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
-def _package(locate: LocateConfig | TsLocateConfig | McpLocateConfig) -> str:
+def _package(
+    locate: LocateConfig | TsLocateConfig | RustLocateConfig | McpLocateConfig,
+) -> str:
     """The package a locate config scans, under either source."""
     return (
         locate.client_package
@@ -191,7 +197,7 @@ def overrides(
     """Apply flags over the config; only supplied flags change anything."""
     chosen = config.language if language is None else language
     if chosen not in LANGUAGES:
-        raise ValueError(f"--language must be python or ts: {language!r}")
+        raise ValueError(f"--language must be python, ts or rust: {language!r}")
     chosen_source = config.source if source is None else source
     if chosen_source not in SOURCES:
         raise ValueError(f"--source must be openapi or mcp: {source!r}")
@@ -220,9 +226,8 @@ def overrides(
             or fields_over
             or chosen != config.language
         ):
-            locate_type = TsLocateConfig if chosen == "ts" else LocateConfig
             openapi = not isinstance(config.locate, McpLocateConfig)
-            locate = locate_type(
+            locate = LOCATE_TYPES[chosen](
                 sdk_package=(
                     _package(config.locate)
                     if sdk_package is None

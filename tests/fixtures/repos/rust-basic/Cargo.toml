@@ -1,0 +1,8 @@
+[package]
+name = "billing"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stripe = "0.25"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

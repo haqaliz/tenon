@@ -14,7 +14,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Shipped 2026-11-07** |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Partial 2026-11-10** — GitHub App remote, provider bundle, local fan-out and installed fan-out shipped; hosted/webhook-driven service not started |
-| **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | Not started |
+| **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Partial 2026-11-10** — Rust locator shipped; Go and C# not started |
 
 ### T1 as shipped (2026-10-26)
 
@@ -254,6 +254,22 @@ failure is per-repo (exit 1); a token/list failure or a shared bad spec exits 2.
 Known limits: sequential clones with no retries/rate-limit handling and no rollback; one token per
 run; a malicious git hook can read the token from the child env; archived repos are not counted; the
 hosted/webhook-driven service is not built.
+
+### T11a as built (2026-11-10)
+
+`src/tenon/locate/rust_{config,scan,locate}.py`: `RustLocateConfig` (one crate identifier plus the
+shared `operations`/`fields` mappings), `scan_rust` (tree-sitter-rust over `.rs` files; `use` rooting
+with grouped/nested imports and `as` aliases, bare crate paths, associated calls, struct-literal
+fields, per-function `let` bindings and field access), and `locate_rust` applying the shipped
+`derive`/`resolve` policy unchanged. `--language rust`, `tenon.toml` and provider bundles accept
+`rust`; MCP stays Python-only; no Cargo/rustc subprocess or proof preset. A mapping locates the
+repo's spelling, but `fix` proposes a rename only when that spelling equals the spec's old name
+(the shipped proposer rule); otherwise it reports `NO_EDITABLE_SITES` and the customer renames
+manually. 1,925 tests, offline.
+
+Known limits: method chains, macros, re-exported crates and multi-hop struct data flow are not
+followed (no site, not a guess); a local module named like the crate is a documented false positive;
+Go and C# are T11b/T11c.
 
 
 

@@ -30,11 +30,11 @@ from tenon.detect import (
     load_mcp,
 )
 from tenon.locate import (
-    LocateConfig,
+    LOCATE_TYPES,
     McpLocateConfig,
-    TsLocateConfig,
     locate,
     locate_mcp,
+    locate_rust,
     locate_ts,
 )
 from tenon.pr import (
@@ -107,7 +107,7 @@ def _common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--config", default=None, help="path to tenon.toml")
     parser.add_argument(
         "--language",
-        choices=("python", "ts"),
+        choices=("python", "ts", "rust"),
         default=None,
         help="repository language (default: from tenon.toml, else python)",
     )
@@ -317,9 +317,8 @@ def _config(args: argparse.Namespace) -> CliConfig:
             config = CliConfig(locate=McpLocateConfig(), source="mcp")
         else:
             language = args.language or "python"
-            locate_type = TsLocateConfig if language == "ts" else LocateConfig
             config = CliConfig(
-                locate=locate_type(sdk_package=args.sdk_package),
+                locate=LOCATE_TYPES[language](sdk_package=args.sdk_package),
                 language=language,
             )
     else:
@@ -356,12 +355,19 @@ def _diff_and_filter(
     return result, tuple(result.changes)
 
 
+# Spec AC5: the one language -> locator table.
+LOCATORS = {
+    "python": locate,
+    "ts": locate_ts,
+    "rust": locate_rust,
+}
+
+
 def _locate(change: Change, repo: Path, config: CliConfig):
-    """The one dispatch point between the MCP, Python and TypeScript locators."""
+    """The one dispatch point between the MCP, Python, TypeScript and Rust locators."""
     if config.source == "mcp":
         return locate_mcp(change, repo, config.locate)
-    locate_change = locate_ts if config.language == "ts" else locate
-    return locate_change(change, repo, config.locate)
+    return LOCATORS[config.language](change, repo, config.locate)
 
 
 def _check(args: argparse.Namespace, config: CliConfig) -> int:

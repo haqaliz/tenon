@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from tenon.cli import main
+from tenon.cli import CliConfig, main
 from tenon.corpus import (
     CorpusRecord,
     Outcome,
@@ -21,7 +21,16 @@ from tenon.corpus import (
     load_corpus,
     record_id,
 )
-from tenon.detect import diff, diff_mcp, load, load_mcp
+from tenon.detect import (
+    Change,
+    ChangeKind,
+    Location,
+    diff,
+    diff_mcp,
+    load,
+    load_mcp,
+)
+from tenon.locate import LocateConfig, RustLocateConfig, TsLocateConfig
 from tenon.pr import (
     InstalledRepo,
     PrDraft,
@@ -279,6 +288,184 @@ def test_missing_config_with_language_ts_without_package_is_usage(a_ts_repo, cap
 
     assert a_check(a_ts_repo.repo, a_ts_repo.specs, "--language", "ts") == 2
     assert "sdk-package" in capsys.readouterr().err
+
+
+# Spec AC1/AC3: [locate] language = "rust" is enough; no flag is needed.
+def test_check_rust_language_from_the_config(tmp_path, a_specs, capsys):
+    (tmp_path / "tenon.toml").write_text(
+        '[locate]\nlanguage = "rust"\nsdk_package = "stripe"\n'
+    )
+
+    assert a_check(tmp_path, a_specs) == 1
+    assert "NO_SDK_IMPORT" in capsys.readouterr().out
+
+
+# Spec AC1: --language rust is a parser choice; no config builds the Rust config.
+def test_missing_config_with_language_rust_uses_sdk_package(
+    tmp_path, a_specs, capsys
+):
+    assert (
+        a_check(tmp_path, a_specs, "--language", "rust", "--sdk-package", "stripe")
+        == 1
+    )
+    assert "NO_SDK_IMPORT" in capsys.readouterr().out
+
+
+# Spec AC3: a bad Rust crate from the flag is one named config error.
+def test_language_rust_rejects_a_bad_crate(tmp_path, a_specs, capsys):
+    assert (
+        a_check(tmp_path, a_specs, "--language", "rust", "--sdk-package", "a::b")
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    assert "Rust crate" in err
+    assert "Traceback" not in err
+
+
+# Spec AC3: MCP with Rust is one named error.
+def test_language_rust_with_source_mcp_is_named(a_mcp_repo, a_mcp_specs, capsys):
+    assert (
+        a_check(a_mcp_repo, a_mcp_specs, "--source", "mcp", "--language", "rust")
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "mcp requires language python" in err
+    assert "Traceback" not in err
+
+
+LOCATE_CONFIGS = {
+    "python": LocateConfig,
+    "ts": TsLocateConfig,
+    "rust": RustLocateConfig,
+}
+
+
+def a_rust_change():
+    return Change(
+        kind=ChangeKind.RENAMED,
+        location=Location(pointer="#/components/schemas/Charge/properties"),
+        before="amount",
+        after="amount_total",
+        breaking=True,
+        confidence="inferred",
+    )
+
+
+# Spec AC5: the one table names each language's locator.
+def test_the_locator_table_names_each_locator():
+    assert cli_main.LOCATORS == {
+        "python": cli_main.locate,
+        "ts": cli_main.locate_ts,
+        "rust": cli_main.locate_rust,
+    }
+
+
+# Spec AC5: one table sends each language to its own locator.
+@pytest.mark.parametrize("language", ["python", "ts", "rust"])
+def test_locate_dispatches_each_language(language, monkeypatch, tmp_path):
+    seen = []
+    marker = object()
+
+    def spy(change, repo, config):
+        seen.append((change, repo, config))
+        return marker
+
+    monkeypatch.setitem(cli_main.LOCATORS, language, spy)
+    change = a_rust_change()
+    config = CliConfig(
+        locate=LOCATE_CONFIGS[language](sdk_package="stripe"),
+        language=language,
+    )
+
+    assert cli_main._locate(change, tmp_path, config) is marker
+    assert seen == [(change, tmp_path, config.locate)]
+
+
+# Spec AC1/AC3: the temp tenon.toml selects Rust; the struct field is reported.
+def test_check_rust_reports_the_struct_field(a_rust_repo, capsys):
+    assert (
+        a_check(
+            a_rust_repo.repo,
+            a_rust_repo.specs,
+            "--field",
+            "Charge.amount=amount_cents",
+        )
+        == 1
+    )
+
+    out = capsys.readouterr().out
+    assert "src/lib.rs:5:9" in out
+    assert "amount_cents" in out
+    assert "1 change" in out
+
+
+# Spec AC1: the Rust check uses the shipped JSON envelope.
+def test_check_rust_json_has_the_exact_envelope(a_rust_repo, capsys):
+    assert (
+        a_check(
+            a_rust_repo.repo,
+            a_rust_repo.specs,
+            "--field",
+            "Charge.amount=amount_cents",
+            "--json",
+        )
+        == 1
+    )
+
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert set(payload) == {"command", "results", "summary"}
+    assert payload["command"] == "check"
+    (result,) = payload["results"]
+    assert result["reason"] is None
+    assert {
+        (site["path"], site["line"], site["column"], site["symbol"])
+        for site in result["certain"]
+    } == {(*a_rust_repo.site, "amount_cents")}
+    assert out.count("\n") == 1
+
+
+# Spec AC1: an endpoint removal reports the associated call site.
+def test_check_rust_reports_the_removed_endpoint_call(a_rust_repo, capsys):
+    assert (
+        a_check(
+            a_rust_repo.repo,
+            a_rust_repo.endpoint_specs,
+            "--operation",
+            "POST /v1/charges=Charge.create",
+        )
+        == 1
+    )
+
+    out = capsys.readouterr().out
+    assert "src/lib.rs:9:5" in out
+    assert "create" in out
+
+
+# Spec AC2: fix proposes the rename, proves it and leaves the fixture alone.
+def test_fix_rust_proposes_and_proves_the_rename(
+    a_rust_repo, a_snapshot, capsys
+):
+    before = a_snapshot(a_rust_repo.repo)
+
+    assert (
+        a_fix(
+            a_rust_repo.repo,
+            a_rust_repo.fix_specs,
+            "--check",
+            shlex.join([sys.executable, "-c", "pass"]),
+        )
+        == 0
+    )
+
+    out = capsys.readouterr().out
+    assert "-        amount_cents: amount," in out
+    assert "+        amount_total: amount," in out
+    assert "Proof: TESTS_PASSED" in out
+    assert a_snapshot(a_rust_repo.repo) == before
 
 
 # Spec AC3: check --source mcp runs the MCP diff and names the argument key.
@@ -1526,6 +1713,7 @@ def test_fix_build_only_json_is_byte_stable_across_hash_seeds(
 
 
 PROOF_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "proof-basic"
+RUST_BASIC = Path(__file__).parent.parent / "fixtures" / "repos" / "rust-basic"
 PROVIDER_CHECK = [sys.executable, "-c", "import acme.billing"]
 PROVIDER_OLD = """\
 openapi: 3.1.0
@@ -1550,6 +1738,8 @@ components:
         currency:
           type: string
 """
+RUST_PROVIDER_OLD = PROVIDER_OLD.replace("amount:", "amount_cents:")
+RUST_PROVIDER_NEW = PROVIDER_OLD.replace("amount:", "amount_total:")
 
 
 def a_bundle(
@@ -1570,6 +1760,28 @@ def a_bundle(
     }
     data.update(overrides)
     path = tmp_path / "bundle.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def a_rust_bundle(tmp_path):
+    """One temp Rust provider bundle over the rust-basic fixture."""
+    (tmp_path / "old.yaml").write_text(RUST_PROVIDER_OLD, encoding="utf-8")
+    (tmp_path / "new.yaml").write_text(RUST_PROVIDER_NEW, encoding="utf-8")
+    data = {
+        "provider": "stripe",
+        "migration": "amount-total",
+        "source": "openapi",
+        "language": "rust",
+        "old": "old.yaml",
+        "new": "new.yaml",
+        "locate": {
+            "sdk_package": "stripe",
+            "fields": {"Charge.amount": "amount_cents"},
+        },
+        "check": [sys.executable, "-c", "pass"],
+    }
+    path = tmp_path / "rust-bundle.json"
     path.write_text(json.dumps(data), encoding="utf-8")
     return path
 
@@ -1595,6 +1807,22 @@ def test_provider_migrate_passing_bundle_exits_zero(a_snapshot, tmp_path, capsys
     )
     assert "Proof: TESTS_PASSED" in out
     assert a_snapshot(PROOF_BASIC) == before
+
+
+# Spec AC4: a Rust bundle runs through provider migrate and leaves the repo alone.
+def test_provider_migrate_rust_bundle_exits_zero(
+    a_snapshot, tmp_path, capsys
+):
+    bundle = a_rust_bundle(tmp_path)
+    before = a_snapshot(RUST_BASIC)
+
+    assert a_provider(bundle, repo=RUST_BASIC) == 0
+
+    out = capsys.readouterr().out
+    assert "-        amount_cents: amount," in out
+    assert "+        amount_total: amount," in out
+    assert "Proof: TESTS_PASSED" in out
+    assert a_snapshot(RUST_BASIC) == before
 
 
 # Spec AC1: a red check is exit 1 and the proof names the failure.
@@ -1913,6 +2141,33 @@ def test_provider_missing_bundle_is_a_named_error(tmp_path, capsys):
 
     err = capsys.readouterr().err
     assert str(missing) in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a Rust bundle with MCP is a named bundle error.
+def test_provider_rust_bundle_with_mcp_is_a_named_error(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, source="mcp", language="rust")
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "mcp requires language python" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a Rust bundle with a bad crate is a named bundle error.
+@pytest.mark.parametrize("crate", ["a::b", "a/b", ""])
+def test_provider_rust_bundle_with_a_bad_crate_is_a_named_error(
+    crate, tmp_path, capsys
+):
+    bundle = a_bundle(tmp_path, language="rust", locate={"sdk_package": crate})
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    if crate:
+        assert "Rust crate" in err
     assert "Traceback" not in err
 
 
