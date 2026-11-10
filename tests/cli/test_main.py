@@ -281,6 +281,52 @@ def test_missing_config_with_language_ts_without_package_is_usage(a_ts_repo, cap
     assert "sdk-package" in capsys.readouterr().err
 
 
+# Spec AC1/AC3: [locate] language = "rust" is enough; no flag is needed.
+def test_check_rust_language_from_the_config(tmp_path, a_specs, capsys):
+    (tmp_path / "tenon.toml").write_text(
+        '[locate]\nlanguage = "rust"\nsdk_package = "stripe"\n'
+    )
+
+    assert a_check(tmp_path, a_specs) == 1
+    assert "NO_SDK_IMPORT" in capsys.readouterr().out
+
+
+# Spec AC1: --language rust is a parser choice; no config builds the Rust config.
+def test_missing_config_with_language_rust_uses_sdk_package(
+    tmp_path, a_specs, capsys
+):
+    assert (
+        a_check(tmp_path, a_specs, "--language", "rust", "--sdk-package", "stripe")
+        == 1
+    )
+    assert "NO_SDK_IMPORT" in capsys.readouterr().out
+
+
+# Spec AC3: a bad Rust crate from the flag is one named config error.
+def test_language_rust_rejects_a_bad_crate(tmp_path, a_specs, capsys):
+    assert (
+        a_check(tmp_path, a_specs, "--language", "rust", "--sdk-package", "a::b")
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
+    assert "Rust crate" in err
+    assert "Traceback" not in err
+
+
+# Spec AC3: MCP with Rust is one named error.
+def test_language_rust_with_source_mcp_is_named(a_mcp_repo, a_mcp_specs, capsys):
+    assert (
+        a_check(a_mcp_repo, a_mcp_specs, "--source", "mcp", "--language", "rust")
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "mcp requires language python" in err
+    assert "Traceback" not in err
+
+
 # Spec AC3: check --source mcp runs the MCP diff and names the argument key.
 def test_check_mcp_source_names_the_argument_key(a_mcp_repo, a_mcp_specs, capsys):
     assert a_check(a_mcp_repo, a_mcp_specs, "--source", "mcp") == 1

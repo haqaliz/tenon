@@ -18,7 +18,15 @@ from .scan import Dynamic, Hit, ScanResult, scan
 from .ts_config import TsLocateConfig
 from .ts_locate import locate_ts
 
+# Spec AC5: the one language -> locate config type table.
+LOCATE_TYPES = {
+    "python": LocateConfig,
+    "ts": TsLocateConfig,
+    "rust": RustLocateConfig,
+}
+
 __all__ = [
+    "LOCATE_TYPES",
     "AmbiguityReason",
     "AmbiguousGroup",
     "Dynamic",

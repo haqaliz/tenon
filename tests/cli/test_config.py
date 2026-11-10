@@ -3,8 +3,19 @@ import re
 import pytest
 
 from tenon.cli import CliConfig, load_cli_config, overrides, resolve_config_path
-from tenon.locate import LocateConfig, McpLocateConfig, TsLocateConfig
+from tenon.locate import (
+    LocateConfig,
+    McpLocateConfig,
+    RustLocateConfig,
+    TsLocateConfig,
+)
 from tenon.prove import ProofLevel
+
+LOCATE_TYPES = {
+    "python": LocateConfig,
+    "ts": TsLocateConfig,
+    "rust": RustLocateConfig,
+}
 
 
 def a_config(
@@ -24,8 +35,7 @@ def a_config(
     if source == "mcp":
         locate = McpLocateConfig(client_package=sdk_package)
     else:
-        locate_type = TsLocateConfig if language == "ts" else LocateConfig
-        locate = locate_type(
+        locate = LOCATE_TYPES[language](
             sdk_package=sdk_package,
             operations=operations or {},
             fields=fields or {},
@@ -89,12 +99,58 @@ def test_file_selects_ts_and_keeps_the_tenon_keys(tmp_path):
     assert config.breaking_only is True
 
 
+# Spec AC1/AC3: the file selects Rust and keeps the shared mappings.
+def test_file_selects_rust_and_keeps_the_operation_tables(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nlanguage = "rust"\nsdk_package = "stripe"\n'
+        '\n[locate.operations]\n"POST /v1/charges" = "Charge.create"\n'
+        '\n[locate.fields]\n"Charge.amount" = "amount_cents"\n',
+    )
+
+    config = load_cli_config(path)
+
+    assert config.language == "rust"
+    assert config.locate == RustLocateConfig(
+        sdk_package="stripe",
+        operations={"POST /v1/charges": "Charge.create"},
+        fields={"Charge.amount": "amount_cents"},
+    )
+
+
+# Spec AC3: a Rust crate is one identifier; a path or a blank is named.
+@pytest.mark.parametrize("crate", ["a::b", "a/b", ""])
+def test_load_cli_config_rejects_a_bad_rust_crate(tmp_path, crate):
+    path = a_file(
+        tmp_path, f'[locate]\nlanguage = "rust"\nsdk_package = "{crate}"\n'
+    )
+
+    with pytest.raises(ValueError) as raised:
+        load_cli_config(path)
+
+    assert "sdk_package" in str(raised.value)
+    assert "Rust crate" in str(raised.value)
+
+
+# Spec AC3: MCP stays Python-only for the file's Rust language.
+def test_mcp_source_rejects_rust_in_the_file(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nsource = "mcp"\nlanguage = "rust"\nsdk_package = "stripe"\n',
+    )
+
+    with pytest.raises(ValueError, match="mcp.*python"):
+        load_cli_config(path)
+
+
 # Spec AC2: the language argument overrides the file in both directions.
 @pytest.mark.parametrize(
     ("file_language", "argument", "expected_type"),
     [
         (None, "ts", TsLocateConfig),
         ("ts", "python", LocateConfig),
+        (None, "rust", RustLocateConfig),
+        ("rust", "python", LocateConfig),
     ],
 )
 def test_language_argument_overrides_the_file(
@@ -346,8 +402,10 @@ def test_load_cli_config_rejects_an_unknown_file_language(tmp_path, language):
         tmp_path, f'[locate]\nlanguage = "{language}"\nsdk_package = "stripe"\n'
     )
 
-    with pytest.raises(ValueError, match=re.escape("[locate] language")):
+    with pytest.raises(ValueError, match=re.escape("[locate] language")) as raised:
         load_cli_config(path)
+
+    assert "python, ts or rust" in str(raised.value)
 
 
 def test_load_cli_config_rejects_an_unknown_language_argument(tmp_path):
@@ -418,6 +476,23 @@ def test_overrides_changes_the_language_from_the_existing_package():
     assert result.locate.sdk_package == "stripe"
 
 
+# Spec AC2/AC3: the language flag builds the Rust config from the same package.
+def test_overrides_changes_the_language_to_rust():
+    result = overrides(a_config(sdk_package="stripe"), language="rust")
+
+    assert result.language == "rust"
+    assert isinstance(result.locate, RustLocateConfig)
+    assert result.locate.sdk_package == "stripe"
+
+
+# Spec AC2: merging operations keeps a Rust config Rust.
+def test_overrides_keeps_rust_when_merging_operations():
+    result = overrides(a_config(language="rust"), operations=["a=b"])
+
+    assert isinstance(result.locate, RustLocateConfig)
+    assert dict(result.locate.operations) == {"a": "b"}
+
+
 # Spec AC2: merging operations keeps a TS config TS.
 def test_overrides_keeps_ts_when_merging_operations():
     result = overrides(a_config(language="ts"), operations=["a=b"])
@@ -436,8 +511,10 @@ def test_overrides_rejects_a_package_the_new_language_cannot_use():
 
 
 def test_overrides_rejects_an_unknown_language():
-    with pytest.raises(ValueError, match=re.escape("--language")):
+    with pytest.raises(ValueError, match=re.escape("--language")) as raised:
         overrides(a_config(), language="ruby")
+
+    assert "python, ts or rust" in str(raised.value)
 
 
 # Spec AC2: a source change rebuilds the locate config and keeps the package.
@@ -470,16 +547,34 @@ def test_overrides_rejects_mcp_with_ts():
         overrides(a_config(), source="mcp", language="ts")
 
 
+# Spec AC3: MCP with Rust is the same named error.
+def test_overrides_rejects_mcp_with_rust():
+    with pytest.raises(ValueError, match="mcp.*python"):
+        overrides(a_config(), source="mcp", language="rust")
+
+
 # Spec AC2: an unknown --source names the flag.
 def test_overrides_rejects_an_unknown_source():
     with pytest.raises(ValueError, match=re.escape("--source")):
         overrides(a_config(), source="graphql")
 
 
-# Spec AC5: CliConfig itself refuses an unknown language.
+# Spec AC1: CliConfig accepts rust and its config type.
+def test_cli_config_accepts_rust():
+    config = CliConfig(
+        locate=RustLocateConfig(sdk_package="stripe"), language="rust"
+    )
+
+    assert config.language == "rust"
+    assert isinstance(config.locate, RustLocateConfig)
+
+
+# Spec AC5: CliConfig itself refuses an unknown language, naming all three.
 def test_cli_config_rejects_an_unknown_language():
-    with pytest.raises(ValueError, match="language"):
+    with pytest.raises(ValueError, match="language") as raised:
         CliConfig(locate=LocateConfig(sdk_package="stripe"), language="ruby")
+
+    assert "python, ts or rust" in str(raised.value)
 
 
 # Spec AC4: --operation and --field merge over the table, with flags winning.
