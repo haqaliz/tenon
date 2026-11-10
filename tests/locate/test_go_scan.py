@@ -384,3 +384,283 @@ def test_scan_go_is_deterministic(tmp_path):
     )
 
     assert scan_go(repo, STRIPE) == scan_go(repo, STRIPE)
+
+
+# Spec AC4: a standalone rooted literal emits its keys on the type chain.
+def test_a_standalone_literal_emits_its_keys(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            "import (\n"
+            f'    "{STRIPE}"\n'
+            f'    "{STRIPE}/charge"\n'
+            ")\n"
+            "\n"
+            "func main() {\n"
+            '    params := &stripe.ChargeParams{Amount: stripe.Int64(100), Currency: "usd"}\n'
+            "    other := charge.Params{Amount: 5}\n"
+            "    _, _ = params, other\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 9, 36, SiteShape.KEYWORD, "Amount", ("ChargeParams",), True),
+        a_hit(repo, "main.go", 9, 44, SiteShape.CALL, "Int64", ("Int64",), True),
+        a_hit(repo, "main.go", 9, 63, SiteShape.KEYWORD, "Currency", ("ChargeParams",), True),
+        a_hit(repo, "main.go", 10, 28, SiteShape.KEYWORD, "Amount", ("charge", "Params"), True),
+    )
+
+
+# Spec AC4: an inline literal in a rooted call carries the call chain too.
+def test_an_inline_literal_carries_the_call_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            "import (\n"
+            f'    "{STRIPE}"\n'
+            f'    "{STRIPE}/charge"\n'
+            ")\n"
+            "\n"
+            "func main() {\n"
+            "    charge.New(stripe.ChargeParams{Amount: 100})\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 9, 5, SiteShape.CALL, "New", ("charge", "New"), True),
+        a_hit(repo, "main.go", 9, 36, SiteShape.KEYWORD, "Amount", ("ChargeParams",), True),
+        a_hit(repo, "main.go", 9, 36, SiteShape.KEYWORD, "Amount", ("charge", "New"), True),
+    )
+
+
+# Spec AC4: a bound literal passed to a rooted call carries the call chain.
+def test_a_bound_literal_carries_the_call_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            "import (\n"
+            f'    "{STRIPE}"\n'
+            f'    "{STRIPE}/charge"\n'
+            ")\n"
+            "\n"
+            "func main() {\n"
+            "    params := &stripe.ChargeParams{Amount: 100}\n"
+            "    charge.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 9, 36, SiteShape.KEYWORD, "Amount", ("ChargeParams",), True),
+        a_hit(repo, "main.go", 9, 36, SiteShape.KEYWORD, "Amount", ("charge", "New"), True),
+        a_hit(repo, "main.go", 10, 5, SiteShape.CALL, "New", ("charge", "New"), True),
+    )
+
+
+# Spec AC4: a `var` with only a rooted type binds the name for field access.
+def test_a_type_only_var_binds_for_field_access(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    var params stripe.ChargeParams\n"
+            "    amount := params.Amount\n"
+            "    _ = amount\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.go",
+            7,
+            22,
+            SiteShape.ATTRIBUTE,
+            "Amount",
+            ("ChargeParams",),
+            True,
+        ),
+    )
+
+
+# Spec AC4: a rebinding replaces the name and does not inherit the old type.
+def test_a_rebinding_does_not_inherit_the_old_type(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            "import (\n"
+            f'    "{STRIPE}"\n'
+            f'    "{STRIPE}/charge"\n'
+            ")\n"
+            "\n"
+            "func main() {\n"
+            "    params := &stripe.ChargeParams{Amount: 100}\n"
+            "    params = other.Thing{Amount: 5}\n"
+            "    charge.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 9, 36, SiteShape.KEYWORD, "Amount", ("ChargeParams",), True),
+        a_hit(repo, "main.go", 11, 5, SiteShape.CALL, "New", ("charge", "New"), True),
+    )
+
+
+# Spec AC5: a field access argument carries the type chain and the call chain.
+def test_a_field_access_argument_carries_the_call_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            "import (\n"
+            f'    "{STRIPE}"\n'
+            f'    "{STRIPE}/charge"\n'
+            ")\n"
+            "\n"
+            "func main() {\n"
+            "    params := &stripe.ChargeParams{Amount: 100}\n"
+            "    charge.New(params.Amount)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 9, 36, SiteShape.KEYWORD, "Amount", ("ChargeParams",), True),
+        a_hit(repo, "main.go", 10, 5, SiteShape.CALL, "New", ("charge", "New"), True),
+        a_hit(
+            repo,
+            "main.go",
+            10,
+            23,
+            SiteShape.ATTRIBUTE,
+            "Amount",
+            ("ChargeParams",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.go",
+            10,
+            23,
+            SiteShape.ATTRIBUTE,
+            "Amount",
+            ("charge", "New"),
+            True,
+        ),
+    )
+
+
+# Spec AC4: bindings are per enclosing function.
+def test_bindings_are_not_shared_between_functions(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            "import (\n"
+            f'    "{STRIPE}"\n'
+            f'    "{STRIPE}/charge"\n'
+            ")\n"
+            "\n"
+            "func first() {\n"
+            "    params := &stripe.ChargeParams{Amount: 100}\n"
+            "    _ = params\n"
+            "}\n"
+            "\n"
+            "func second() {\n"
+            "    amount := params.Amount\n"
+            "    _ = amount\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 9, 36, SiteShape.KEYWORD, "Amount", ("ChargeParams",), True),
+    )
+
+
+# Spec AC4: `&` and parentheses are unwrapped for a binding and an argument.
+def test_parentheses_and_address_of_are_unwrapped(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            "import (\n"
+            f'    "{STRIPE}"\n'
+            f'    "{STRIPE}/charge"\n'
+            ")\n"
+            "\n"
+            "func main() {\n"
+            "    params := (&stripe.ChargeParams{Amount: 100})\n"
+            "    charge.New((&params))\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 9, 37, SiteShape.KEYWORD, "Amount", ("ChargeParams",), True),
+        a_hit(repo, "main.go", 9, 37, SiteShape.KEYWORD, "Amount", ("charge", "New"), True),
+        a_hit(repo, "main.go", 10, 5, SiteShape.CALL, "New", ("charge", "New"), True),
+    )
+
+
+# Spec AC4: a `var` with a rooted literal binds the name.
+def test_a_var_with_a_rooted_literal_binds_the_name(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            "import (\n"
+            f'    "{STRIPE}"\n'
+            f'    "{STRIPE}/charge"\n'
+            ")\n"
+            "\n"
+            "func main() {\n"
+            "    var params = stripe.ChargeParams{Amount: 100}\n"
+            "    charge.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(repo, "main.go", 9, 38, SiteShape.KEYWORD, "Amount", ("ChargeParams",), True),
+        a_hit(repo, "main.go", 9, 38, SiteShape.KEYWORD, "Amount", ("charge", "New"), True),
+        a_hit(repo, "main.go", 10, 5, SiteShape.CALL, "New", ("charge", "New"), True),
+    )

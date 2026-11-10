@@ -152,8 +152,23 @@ def _selector_segments(node: Node) -> tuple[str, tuple[str, ...]] | None:
     return _text(node), tuple(tail)
 
 
+def _unwrap(node: Node | None) -> Node | None:
+    """Strip parentheses and address-of operators."""
+    while node is not None:
+        if node.type == "parenthesized_expression":
+            node = node.named_children[0] if node.named_children else None
+        elif node.type == "unary_expression":
+            operator = node.child_by_field_name("operator")
+            if operator is None or _text(operator) != "&":
+                return node
+            node = node.child_by_field_name("operand")
+        else:
+            return node
+    return None
+
+
 class _Visitor:
-    """Emit rooted calls and unrooted selector calls."""
+    """Emit rooted calls, literal fields and field accesses."""
 
     def __init__(
         self,
@@ -162,6 +177,7 @@ class _Visitor:
     ) -> None:
         self._source = source
         self._roots = roots
+        self._bindings: dict[str, tuple[tuple[str, ...], tuple[Node, ...]]] = {}
         self.hits: list[Hit] = []
 
     def _emit(
@@ -190,8 +206,151 @@ class _Visitor:
         for child in node.children:
             self.visit(child)
 
+    def _type_chain(self, type_node: Node | None) -> tuple[str, ...] | None:
+        """The canonical chain of a rooted qualified type, else ``None``."""
+        if type_node is None or type_node.type != "qualified_type":
+            return None
+        package = type_node.child_by_field_name("package")
+        name = type_node.child_by_field_name("name")
+        if package is None or name is None:
+            return None
+        prefix = self._roots.get(_text(package))
+        if prefix is None:
+            return None
+        return prefix + (_text(name),)
+
+    def _keys(self, literal: Node) -> tuple[Node, ...]:
+        """The keyed-element key identifiers of a composite literal."""
+        body = literal.child_by_field_name("body")
+        if body is None:
+            return ()
+        keys = []
+        for child in body.named_children:
+            if child.type != "keyed_element":
+                continue
+            key = child.child_by_field_name("key")
+            identifier = key.named_children[0] if key and key.named_children else None
+            if identifier is not None and identifier.type == "identifier":
+                keys.append(identifier)
+        return tuple(keys)
+
+    def _bind(self, name: str, value: Node | None) -> None:
+        literal = _unwrap(value)
+        if literal is None or literal.type != "composite_literal":
+            self._bindings.pop(name, None)
+            return
+        chain = self._type_chain(literal.child_by_field_name("type"))
+        if chain is None:
+            self._bindings.pop(name, None)
+            return
+        self._bindings[name] = (chain, self._keys(literal))
+
+    def _bind_type(self, name: str, type_node: Node | None) -> None:
+        chain = self._type_chain(type_node)
+        if chain is None:
+            self._bindings.pop(name, None)
+        else:
+            self._bindings[name] = (chain, ())
+
+    def _short_var(self, node: Node) -> None:
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+        targets = left.named_children if left is not None else ()
+        values = right.named_children if right is not None else ()
+        for index, target in enumerate(targets):
+            if target.type != "identifier" or _text(target) == "_":
+                continue
+            self._bind(_text(target), values[index] if index < len(values) else None)
+        self._visit_children(node)
+
+    def _var(self, node: Node) -> None:
+        for child in node.named_children:
+            specs = (
+                child.named_children
+                if child.type == "var_spec_list"
+                else (child,)
+            )
+            for spec in specs:
+                if spec.type == "var_spec":
+                    self._spec(spec)
+        self._visit_children(node)
+
+    def _spec(self, spec: Node) -> None:
+        name_node = spec.child_by_field_name("name")
+        if name_node is None or name_node.type != "identifier":
+            return
+        name = _text(name_node)
+        if name == "_":
+            return
+        value = spec.child_by_field_name("value")
+        if value is not None:
+            expressions = value.named_children
+            self._bind(name, expressions[0] if expressions else None)
+        else:
+            self._bind_type(name, spec.child_by_field_name("type"))
+
+    def _assign(self, node: Node) -> None:
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+        targets = left.named_children if left is not None else ()
+        values = right.named_children if right is not None else ()
+        for index, target in enumerate(targets):
+            if target.type != "identifier" or _text(target) == "_":
+                continue
+            self._bind(_text(target), values[index] if index < len(values) else None)
+        self._visit_children(node)
+
+    def _literal(self, node: Node) -> None:
+        chain = self._type_chain(node.child_by_field_name("type"))
+        if chain is not None:
+            for key in self._keys(node):
+                self._emit(key, SiteShape.KEYWORD, _text(key), chain, True)
+        self._visit_children(node)
+
+    def _selector(self, node: Node) -> None:
+        operand = node.child_by_field_name("operand")
+        field = node.child_by_field_name("field")
+        if (
+            operand is not None
+            and operand.type == "identifier"
+            and field is not None
+            and _text(operand) in self._bindings
+        ):
+            chain, _ = self._bindings[_text(operand)]
+            self._emit(field, SiteShape.ATTRIBUTE, _text(field), chain, True)
+        self._visit_children(node)
+
+    def _argument(self, argument: Node, call_chain: tuple[str, ...]) -> None:
+        node = _unwrap(argument)
+        if node is None:
+            return
+        if node.type == "composite_literal":
+            chain = self._type_chain(node.child_by_field_name("type"))
+            if chain is not None:
+                for key in self._keys(node):
+                    self._emit(key, SiteShape.KEYWORD, _text(key), call_chain, True)
+        elif node.type == "identifier":
+            binding = self._bindings.get(_text(node))
+            if binding is not None:
+                _, keys = binding
+                for key in keys:
+                    self._emit(key, SiteShape.KEYWORD, _text(key), call_chain, True)
+        elif node.type == "selector_expression":
+            operand = node.child_by_field_name("operand")
+            field = node.child_by_field_name("field")
+            if (
+                operand is not None
+                and operand.type == "identifier"
+                and field is not None
+                and _text(operand) in self._bindings
+            ):
+                self._emit(
+                    field, SiteShape.ATTRIBUTE, _text(field), call_chain, True
+                )
+
     def _call(self, node: Node) -> None:
         function = node.child_by_field_name("function")
+        call_chain: tuple[str, ...] | None = None
         if function is not None and function.type == "selector_expression":
             segments = _selector_segments(function)
             if segments is not None:
@@ -201,15 +360,39 @@ class _Visitor:
                 chain = prefix + tail if rooted else tail
                 if tail:
                     self._emit(function, SiteShape.CALL, tail[-1], chain, rooted)
+                if rooted:
+                    call_chain = chain
         arguments = node.child_by_field_name("arguments")
         if arguments is not None:
+            if call_chain is not None:
+                for argument in arguments.named_children:
+                    self._argument(argument, call_chain)
             self.visit(arguments)
         if function is not None and function.type != "selector_expression":
             self.visit(function)
 
     def visit(self, node: Node) -> None:
-        if node.type == "call_expression":
+        if node.type in {
+            "function_declaration",
+            "method_declaration",
+            "func_literal",
+        }:
+            saved = self._bindings
+            self._bindings = {}
+            self._visit_children(node)
+            self._bindings = saved
+        elif node.type == "call_expression":
             self._call(node)
+        elif node.type == "short_var_declaration":
+            self._short_var(node)
+        elif node.type == "var_declaration":
+            self._var(node)
+        elif node.type == "assignment_statement":
+            self._assign(node)
+        elif node.type == "composite_literal":
+            self._literal(node)
+        elif node.type == "selector_expression":
+            self._selector(node)
         else:
             self._visit_children(node)
 
