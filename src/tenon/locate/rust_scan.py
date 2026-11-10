@@ -184,8 +184,59 @@ def _callee_ref(
     return None
 
 
+def _unwrap(node: Node | None) -> Node | None:
+    while node is not None and node.type in {
+        "reference_expression",
+        "parenthesized_expression",
+    }:
+        node = node.named_children[0] if node.named_children else None
+    return node
+
+
+def _type_ref(
+    node: Node | None, roots: dict[str, tuple[str, ...]], crate: str
+) -> tuple[tuple[str, ...], bool] | None:
+    """The canonical chain and rootedness of a struct literal's type."""
+    if node is None:
+        return None
+    if node.type in {"type_identifier", "identifier"}:
+        name = _text(node)
+        if name in roots:
+            return roots[name], True
+        if name == crate:
+            return (), True
+        return None
+    if node.type in {"scoped_type_identifier", "scoped_identifier"}:
+        path = _path_segments(node)
+        if not path:
+            return None
+        if path[0] == crate:
+            return path[1:], True
+        if path[0] in roots:
+            return roots[path[0]] + path[1:], True
+        return None
+    if node.type in {"generic_type", "generic_type_with_turbofish"}:
+        return _type_ref(node.child_by_field_name("type"), roots, crate)
+    return None
+
+
+def _fields(struct_expression: Node) -> tuple[Node, ...]:
+    body = struct_expression.child_by_field_name("body")
+    if body is None:
+        return ()
+    found = []
+    for child in body.named_children:
+        if child.type == "field_initializer":
+            field = child.child_by_field_name("field")
+            if field is not None:
+                found.append(field)
+        elif child.type == "shorthand_field_initializer" and child.named_children:
+            found.append(child.named_children[0])
+    return tuple(found)
+
+
 class _Visitor:
-    """Emit rooted calls and unrooted non-method path calls."""
+    """Emit rooted calls, struct fields and field accesses."""
 
     def __init__(
         self,
@@ -196,6 +247,7 @@ class _Visitor:
         self._source = source
         self._crate = crate
         self._roots = roots
+        self._bindings: dict[str, tuple[tuple[str, ...], tuple[Node, ...]]] = {}
         self.rooted = False
         self.hits: list[Hit] = []
 
@@ -221,30 +273,120 @@ class _Visitor:
             )
         )
 
-    def _call(self, node: Node) -> None:
-        function = node.child_by_field_name("function")
-        ref = _callee_ref(function, self._roots, self._crate)
+    def _visit_children(self, node: Node) -> None:
+        for child in node.children:
+            self.visit(child)
+
+    def _bind(self, name: str, value: Node | None) -> None:
+        literal = _unwrap(value)
+        if literal is None or literal.type != "struct_expression":
+            self._bindings.pop(name, None)
+            return
+        ref = _type_ref(literal.child_by_field_name("name"), self._roots, self._crate)
+        if ref is None or not ref[1]:
+            self._bindings.pop(name, None)
+            return
+        self._bindings[name] = (ref[0], _fields(literal))
+
+    def _let(self, node: Node) -> None:
+        pattern = node.child_by_field_name("pattern")
+        if pattern is not None and pattern.type == "identifier":
+            self._bind(_text(pattern), node.child_by_field_name("value"))
+        self._visit_children(node)
+
+    def _assign(self, node: Node) -> None:
+        left = node.child_by_field_name("left")
+        if left is not None and left.type == "identifier":
+            self._bind(_text(left), node.child_by_field_name("right"))
+        self._visit_children(node)
+
+    def _struct(self, node: Node) -> None:
+        ref = _type_ref(node.child_by_field_name("name"), self._roots, self._crate)
         if ref is not None:
             chain, rooted = ref
             if rooted:
                 self.rooted = True
+                for field in _fields(node):
+                    self._emit(field, SiteShape.KEYWORD, _text(field), chain, True)
+        self._visit_children(node)
+
+    def _field(self, node: Node) -> None:
+        value = _unwrap(node.child_by_field_name("value"))
+        field = node.child_by_field_name("field")
+        if value is not None and value.type == "identifier" and field is not None:
+            binding = self._bindings.get(_text(value))
+            if binding is not None:
+                chain, _ = binding
+                self._emit(field, SiteShape.ATTRIBUTE, _text(field), chain, True)
+        self._visit_children(node)
+
+    def _argument(self, argument: Node, call_chain: tuple[str, ...]) -> None:
+        node = _unwrap(argument)
+        if node is None:
+            return
+        if node.type == "struct_expression":
+            ref = _type_ref(node.child_by_field_name("name"), self._roots, self._crate)
+            if ref is not None and ref[1]:
+                for field in _fields(node):
+                    self._emit(field, SiteShape.KEYWORD, _text(field), call_chain, True)
+        elif node.type == "identifier":
+            binding = self._bindings.get(_text(node))
+            if binding is not None:
+                _, fields = binding
+                for field in fields:
+                    self._emit(field, SiteShape.KEYWORD, _text(field), call_chain, True)
+        elif node.type == "field_expression":
+            value = _unwrap(node.child_by_field_name("value"))
+            field = node.child_by_field_name("field")
+            if (
+                value is not None
+                and value.type == "identifier"
+                and field is not None
+                and _text(value) in self._bindings
+            ):
+                self._emit(field, SiteShape.ATTRIBUTE, _text(field), call_chain, True)
+
+    def _call(self, node: Node) -> None:
+        function = node.child_by_field_name("function")
+        ref = _callee_ref(function, self._roots, self._crate)
+        call_chain: tuple[str, ...] | None = None
+        if ref is not None:
+            chain, rooted = ref
+            if rooted:
+                self.rooted = True
+                call_chain = chain
                 if chain:
                     self._emit(function, SiteShape.CALL, chain[-1], chain, True)
             elif function is not None and function.type == "scoped_identifier":
                 self._emit(function, SiteShape.CALL, chain[-1], chain, False)
-        if function is not None and function.type != "field_expression":
-            self.visit(function)
         arguments = node.child_by_field_name("arguments")
         if arguments is not None:
+            if call_chain is not None:
+                for argument in arguments.named_children:
+                    self._argument(argument, call_chain)
             for argument in arguments.named_children:
                 self.visit(argument)
+        if function is not None and function.type != "field_expression":
+            self.visit(function)
 
     def visit(self, node: Node) -> None:
-        if node.type == "call_expression":
+        if node.type == "function_item":
+            saved = self._bindings
+            self._bindings = {}
+            self._visit_children(node)
+            self._bindings = saved
+        elif node.type == "call_expression":
             self._call(node)
+        elif node.type == "let_declaration":
+            self._let(node)
+        elif node.type == "assignment_expression":
+            self._assign(node)
+        elif node.type == "struct_expression":
+            self._struct(node)
+        elif node.type == "field_expression":
+            self._field(node)
         else:
-            for child in node.children:
-                self.visit(child)
+            self._visit_children(node)
 
 
 def scan_rust(root: str | Path, sdk_package: str) -> ScanResult:

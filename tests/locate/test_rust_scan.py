@@ -425,3 +425,249 @@ def test_scan_rust_is_deterministic(tmp_path):
     )
 
     assert scan_rust(repo, "stripe") == scan_rust(repo, "stripe")
+
+
+# Spec AC4: a standalone rooted literal keeps the type chain.
+def test_a_standalone_struct_literal_emits_its_fields(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Params;\n"
+            "\n"
+            "fn main() {\n"
+            '    let params = Params { amount: 100, currency: "usd" };\n'
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 27, SiteShape.KEYWORD, "amount", ("Params",), True),
+        a_hit(repo, "main.rs", 4, 40, SiteShape.KEYWORD, "currency", ("Params",), True),
+    )
+
+
+# Spec AC4: an inline literal in a rooted call also carries the call chain.
+def test_an_inline_struct_literal_carries_the_call_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::{Charge, Params};\n"
+            "\n"
+            "fn main() {\n"
+            "    Charge::create(Params { amount: 100 });\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 5, SiteShape.CALL, "create", ("Charge", "create"), True),
+        a_hit(
+            repo,
+            "main.rs",
+            4,
+            29,
+            SiteShape.KEYWORD,
+            "amount",
+            ("Charge", "create"),
+            True,
+        ),
+        a_hit(repo, "main.rs", 4, 29, SiteShape.KEYWORD, "amount", ("Params",), True),
+    )
+
+
+# Spec AC4: a let-bound literal passed to a rooted call carries the call chain.
+def test_a_bound_struct_literal_carries_the_call_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::{Charge, Params};\n"
+            "\n"
+            "fn main() {\n"
+            "    let params = Params { amount: 100 };\n"
+            "    Charge::create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.rs",
+            4,
+            27,
+            SiteShape.KEYWORD,
+            "amount",
+            ("Charge", "create"),
+            True,
+        ),
+        a_hit(repo, "main.rs", 4, 27, SiteShape.KEYWORD, "amount", ("Params",), True),
+        a_hit(repo, "main.rs", 5, 5, SiteShape.CALL, "create", ("Charge", "create"), True),
+    )
+
+
+# Spec AC4: a rebinding replaces the name and does not inherit the old struct.
+def test_a_rebinding_does_not_inherit_the_old_struct(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::{Charge, Params};\n"
+            "\n"
+            "fn main() {\n"
+            "    let params = Params { amount: 100 };\n"
+            "    let params = Other { amount: 5 };\n"
+            "    Charge::create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 27, SiteShape.KEYWORD, "amount", ("Params",), True),
+        a_hit(repo, "main.rs", 6, 5, SiteShape.CALL, "create", ("Charge", "create"), True),
+    )
+
+
+# Spec AC5: a field access through a binding is an attribute on the type chain.
+def test_a_field_access_through_a_binding_is_an_attribute(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Params;\n"
+            "\n"
+            "fn main() {\n"
+            "    let params = Params { amount: 100 };\n"
+            "    let amount = params.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 27, SiteShape.KEYWORD, "amount", ("Params",), True),
+        a_hit(repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Params",), True),
+    )
+
+
+# Spec AC5: a field access passed to a rooted call also carries the call chain.
+def test_a_field_access_argument_carries_the_call_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::{Charge, Params};\n"
+            "\n"
+            "fn main() {\n"
+            "    let params = Params { amount: 100 };\n"
+            "    Charge::create(&params.amount);\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 27, SiteShape.KEYWORD, "amount", ("Params",), True),
+        a_hit(repo, "main.rs", 5, 5, SiteShape.CALL, "create", ("Charge", "create"), True),
+        a_hit(
+            repo,
+            "main.rs",
+            5,
+            28,
+            SiteShape.ATTRIBUTE,
+            "amount",
+            ("Charge", "create"),
+            True,
+        ),
+        a_hit(repo, "main.rs", 5, 28, SiteShape.ATTRIBUTE, "amount", ("Params",), True),
+    )
+
+
+# Spec AC4: bindings are per enclosing function.
+def test_bindings_are_not_shared_between_functions(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::{Charge, Params};\n"
+            "\n"
+            "fn first() {\n"
+            "    let params = Params { amount: 100 };\n"
+            "}\n"
+            "\n"
+            "fn second() {\n"
+            "    Charge::create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 27, SiteShape.KEYWORD, "amount", ("Params",), True),
+        a_hit(repo, "main.rs", 8, 5, SiteShape.CALL, "create", ("Charge", "create"), True),
+    )
+
+
+# Spec AC4: a scoped rooted type keeps the whole path.
+def test_a_scoped_struct_literal_keeps_the_type_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::resources::Charge;\n"
+            "\n"
+            "fn main() {\n"
+            "    let charge = Charge { amount: 1 };\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.rs",
+            4,
+            27,
+            SiteShape.KEYWORD,
+            "amount",
+            ("resources", "Charge"),
+            True,
+        ),
+    )
+
+
+# Spec AC4: `..Default::default()` is not a field, but its call is evidence.
+def test_a_base_field_initializer_is_not_a_field(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Params;\n"
+            "\n"
+            "fn main() {\n"
+            "    let params = Params { amount: 100, ..Default::default() };\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 27, SiteShape.KEYWORD, "amount", ("Params",), True),
+        a_hit(
+            repo,
+            "main.rs",
+            4,
+            42,
+            SiteShape.CALL,
+            "default",
+            ("Default", "default"),
+            False,
+        ),
+    )
