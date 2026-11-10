@@ -497,3 +497,512 @@ def test_scan_csharp_is_deterministic(tmp_path):
     )
 
     assert scan_csharp(repo, ROOT) == scan_csharp(repo, ROOT)
+
+
+# Spec AC4: a standalone rooted initializer emits its properties on the type chain.
+def test_a_standalone_initializer_emits_its_properties(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            '        var options = new ChargeCreateOptions { AmountCents = 100, Currency = "usd" };\n'
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            49,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            68,
+            SiteShape.KEYWORD,
+            "Currency",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+    )
+
+
+# Spec AC4: an inline initializer in a rooted call carries the type and call chains.
+def test_an_inline_initializer_carries_the_call_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        ChargeService.Create(new ChargeCreateOptions { AmountCents = 100 });\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeService", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            56,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            56,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeService", "Create"),
+            True,
+        ),
+    )
+
+
+# Spec AC4: a bound initializer passed to a rooted call carries the call chain.
+def test_a_bound_initializer_carries_the_call_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var options = new ChargeCreateOptions { AmountCents = 100 };\n"
+            "        var service = new ChargeService();\n"
+            "        service.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            49,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            49,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeService", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeService", "Create"),
+            True,
+        ),
+    )
+
+
+# Spec AC4: a rebinding replaces the name and does not inherit the old type.
+def test_a_rebinding_does_not_inherit_the_old_type(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var options = new ChargeCreateOptions { AmountCents = 100 };\n"
+            "        options = new Acme.OtherThing { AmountCents = 5 };\n"
+            "        var service = new ChargeService();\n"
+            "        service.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            49,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            10,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeService", "Create"),
+            True,
+        ),
+    )
+
+
+# Spec AC4: a rebound rooted initializer carries its new properties.
+def test_a_rebinding_to_a_rooted_initializer_replaces_the_properties(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var options = new ChargeCreateOptions { AmountCents = 100 };\n"
+            '        options = new ChargeCreateOptions { Currency = "usd" };\n'
+            "        var service = new ChargeService();\n"
+            "        service.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            49,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            45,
+            SiteShape.KEYWORD,
+            "Currency",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            45,
+            SiteShape.KEYWORD,
+            "Currency",
+            ("ChargeService", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            10,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeService", "Create"),
+            True,
+        ),
+    )
+
+
+# Spec AC5: a tracked binding's property access is an ATTRIBUTE hit on the type chain.
+def test_a_property_access_is_an_attribute_on_the_type_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var options = new ChargeCreateOptions();\n"
+            "        var amount = options.AmountCents;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            30,
+            SiteShape.ATTRIBUTE,
+            "AmountCents",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+    )
+
+
+# Spec AC5: a property access argument carries the type chain and the call chain.
+def test_a_property_access_argument_carries_the_call_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var options = new ChargeCreateOptions();\n"
+            "        var service = new ChargeService();\n"
+            "        service.Create(options.AmountCents);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeService", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            32,
+            SiteShape.ATTRIBUTE,
+            "AmountCents",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            32,
+            SiteShape.ATTRIBUTE,
+            "AmountCents",
+            ("ChargeService", "Create"),
+            True,
+        ),
+    )
+
+
+# Spec AC4: bindings are per member scope.
+def test_bindings_are_not_shared_between_methods(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void First()\n"
+            "    {\n"
+            "        var options = new ChargeCreateOptions { AmountCents = 100 };\n"
+            "    }\n"
+            "\n"
+            "    void Second()\n"
+            "    {\n"
+            "        ChargeService.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            49,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            12,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeService", "Create"),
+            True,
+        ),
+    )
+
+
+# Spec AC4: parentheses around an argument and an initializer are unwrapped.
+def test_parentheses_are_unwrapped(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var options = new ChargeCreateOptions { AmountCents = 100 };\n"
+            "        var service = new ChargeService();\n"
+            "        service.Create((options));\n"
+            '        ChargeService.Create((new ChargeCreateOptions { Currency = "usd" }));\n'
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            49,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            49,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeService", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeService", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            10,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeService", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            10,
+            57,
+            SiteShape.KEYWORD,
+            "Currency",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            10,
+            57,
+            SiteShape.KEYWORD,
+            "Currency",
+            ("ChargeService", "Create"),
+            True,
+        ),
+    )
+
+
+# Spec AC4: an initializer on a type outside the root emits nothing.
+def test_an_initializer_on_a_non_rooted_type_emits_nothing(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var other = new Acme.OtherThing { AmountCents = 5 };\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.modules == ("main.cs",)
+    assert result.hits == ()

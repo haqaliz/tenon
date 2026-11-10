@@ -221,12 +221,36 @@ class _Visitor:
             return self._roots.type_path(tuple(_text(type_node).split(".")))
         return None
 
+    def _keys(self, initializer: Node | None) -> tuple[Node, ...]:
+        """The property identifiers of an object initializer."""
+        if initializer is None or initializer.type != "initializer_expression":
+            return ()
+        keys = []
+        for child in initializer.named_children:
+            if child.type != "assignment_expression":
+                continue
+            left = child.child_by_field_name("left")
+            if left is not None and left.type == "identifier":
+                keys.append(left)
+        return tuple(keys)
+
     def _bind(self, name: str, value: Node | None) -> None:
         node = _unwrap(value)
         chain = None
+        keys: tuple[Node, ...] = ()
         if node is not None and node.type == "object_creation_expression":
             chain = self._type_chain(node.child_by_field_name("type"))
-        self._bindings[name] = (chain, ())
+            keys = self._keys(node.child_by_field_name("initializer"))
+        self._bindings[name] = (chain, keys)
+
+    def _assignment(self, node: Node) -> None:
+        if node.parent is not None and node.parent.type == "initializer_expression":
+            self._visit_children(node)
+            return
+        left = node.child_by_field_name("left")
+        if left is not None and left.type == "identifier":
+            self._bind(_text(left), node.child_by_field_name("right"))
+        self._visit_children(node)
 
     def _declaration(self, node: Node) -> None:
         type_node = node.child_by_field_name("type")
@@ -259,16 +283,65 @@ class _Visitor:
             return (*chain, tail[-1]), True
         return tail, False
 
+    def _creation(self, node: Node) -> None:
+        chain = self._type_chain(node.child_by_field_name("type"))
+        if chain is not None:
+            for key in self._keys(node.child_by_field_name("initializer")):
+                self._emit(key, SiteShape.KEYWORD, _text(key), chain, True)
+        self._visit_children(node)
+
+    def _member(self, node: Node) -> None:
+        expression = node.child_by_field_name("expression")
+        name = node.child_by_field_name("name")
+        if expression is not None and expression.type == "identifier" and name is not None:
+            binding = self._bindings.get(_text(expression))
+            if binding is not None and binding[0] is not None:
+                self._emit(
+                    name, SiteShape.ATTRIBUTE, _text(name), binding[0], True
+                )
+        self._visit_children(node)
+
+    def _argument(self, argument: Node, call_chain: tuple[str, ...]) -> None:
+        node = _unwrap(argument)
+        if node is None:
+            return
+        if node.type == "object_creation_expression":
+            chain = self._type_chain(node.child_by_field_name("type"))
+            if chain is not None:
+                for key in self._keys(node.child_by_field_name("initializer")):
+                    self._emit(key, SiteShape.KEYWORD, _text(key), call_chain, True)
+        elif node.type == "identifier":
+            binding = self._bindings.get(_text(node))
+            if binding is not None and binding[0] is not None:
+                for key in binding[1]:
+                    self._emit(key, SiteShape.KEYWORD, _text(key), call_chain, True)
+        elif node.type == "member_access_expression":
+            expression = node.child_by_field_name("expression")
+            field = node.child_by_field_name("name")
+            if (
+                expression is not None
+                and expression.type == "identifier"
+                and field is not None
+                and _text(expression) in self._bindings
+            ):
+                self._emit(field, SiteShape.ATTRIBUTE, _text(field), call_chain, True)
+
     def _call(self, node: Node) -> None:
         function = node.child_by_field_name("function")
+        call_chain: tuple[str, ...] | None = None
         if function is not None and function.type == "member_access_expression":
             segments = _segments(function)
             if segments is not None and len(segments) > 1:
                 tail = segments[1:]
                 chain, rooted = self._call_chain(segments[0], tail)
                 self._emit(function, SiteShape.CALL, tail[-1], chain, rooted)
+                if rooted:
+                    call_chain = chain
         arguments = node.child_by_field_name("arguments")
         if arguments is not None:
+            if call_chain is not None:
+                for argument in arguments.named_children:
+                    self._argument(argument, call_chain)
             self.visit(arguments)
         if function is not None and function.type != "member_access_expression":
             self.visit(function)
@@ -281,8 +354,14 @@ class _Visitor:
             self._bindings = saved
         elif node.type == "variable_declaration":
             self._declaration(node)
+        elif node.type == "assignment_expression":
+            self._assignment(node)
         elif node.type == "invocation_expression":
             self._call(node)
+        elif node.type == "object_creation_expression":
+            self._creation(node)
+        elif node.type == "member_access_expression":
+            self._member(node)
         else:
             self._visit_children(node)
 
