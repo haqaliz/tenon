@@ -33,6 +33,7 @@ from tenon.locate import (
     LOCATE_TYPES,
     McpLocateConfig,
     locate,
+    locate_csharp,
     locate_go,
     locate_mcp,
     locate_rust,
@@ -372,6 +373,7 @@ LOCATORS = {
     "ts": locate_ts,
     "rust": locate_rust,
     "go": locate_go,
+    "csharp": locate_csharp,
 }
 
 

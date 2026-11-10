@@ -443,6 +443,24 @@ def test_missing_config_with_language_csharp_uses_sdk_package(
     )
 
 
+# Spec AC1: --language csharp with a changed spec dispatches the C# locator.
+def test_missing_config_with_language_csharp_dispatches(
+    tmp_path, a_specs, capsys
+):
+    assert (
+        a_check(
+            tmp_path,
+            a_specs,
+            "--language",
+            "csharp",
+            "--sdk-package",
+            "Stripe",
+        )
+        == 1
+    )
+    assert "NO_SDK_IMPORT" in capsys.readouterr().out
+
+
 # Spec AC3: a bad C# namespace from the flag is one named config error.
 def test_language_csharp_rejects_a_bad_namespace(tmp_path, a_specs, capsys):
     assert (
@@ -479,6 +497,7 @@ LOCATE_CONFIGS = {
     "ts": TsLocateConfig,
     "rust": RustLocateConfig,
     "go": GoLocateConfig,
+    "csharp": CSharpLocateConfig,
 }
 
 
@@ -500,11 +519,12 @@ def test_the_locator_table_names_each_locator():
         "ts": cli_main.locate_ts,
         "rust": cli_main.locate_rust,
         "go": cli_main.locate_go,
+        "csharp": cli_main.locate_csharp,
     }
 
 
 # Spec AC5: one table sends each language to its own locator.
-@pytest.mark.parametrize("language", ["python", "ts", "rust", "go"])
+@pytest.mark.parametrize("language", ["python", "ts", "rust", "go", "csharp"])
 def test_locate_dispatches_each_language(language, monkeypatch, tmp_path):
     seen = []
     marker = object()
@@ -2538,6 +2558,31 @@ def test_provider_go_bundle_with_a_bad_package_is_a_named_error(
 
     err = capsys.readouterr().err
     assert "package_name" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a C# bundle with MCP is a named bundle error.
+def test_provider_csharp_bundle_with_mcp_is_a_named_error(tmp_path, capsys):
+    bundle = a_bundle(tmp_path, source="mcp", language="csharp")
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "mcp requires language python" in err
+    assert "Traceback" not in err
+
+
+# Spec AC4: a C# bundle with a bad namespace is a named bundle error.
+@pytest.mark.parametrize("root", ["", "a/b", "a::b"])
+def test_provider_csharp_bundle_with_a_bad_namespace_is_a_named_error(
+    root, tmp_path, capsys
+):
+    bundle = a_bundle(tmp_path, language="csharp", locate={"sdk_package": root})
+
+    assert a_provider(bundle) == 2
+
+    err = capsys.readouterr().err
+    assert "sdk_package" in err
     assert "Traceback" not in err
 
 

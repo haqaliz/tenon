@@ -4,6 +4,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from tenon.locate import (
+    CSharpLocateConfig,
     GoLocateConfig,
     LocateConfig,
     McpLocateConfig,
@@ -185,6 +186,7 @@ def test_missing_spec_is_a_named_error(tmp_path, key):
             "github.com/stripe/stripe-go/v76",
             GoLocateConfig,
         ),
+        ("openapi", "csharp", "Stripe", CSharpLocateConfig),
         ("mcp", "python", "mcp", McpLocateConfig),
     ],
 )
@@ -311,6 +313,55 @@ def test_go_bundle_with_a_bad_package_is_an_error(tmp_path):
     assert "package_name" in str(error.value)
 
 
+# Spec AC4: a C# bundle loads CSharpLocateConfig and keeps the shared mappings.
+def test_csharp_bundle_keeps_the_mappings(tmp_path):
+    path = a_bundle(
+        tmp_path,
+        language="csharp",
+        locate={
+            "sdk_package": "Stripe",
+            "operations": {"POST /v1/charges": "ChargeService.Create"},
+            "fields": {"ChargeCreateOptions.AmountCents": "AmountCents"},
+        },
+    )
+
+    bundle = load_bundle(path)
+
+    assert bundle.language == "csharp"
+    assert bundle.locate == CSharpLocateConfig(
+        sdk_package="Stripe",
+        operations={"POST /v1/charges": "ChargeService.Create"},
+        fields={"ChargeCreateOptions.AmountCents": "AmountCents"},
+    )
+
+
+# Spec AC4: mcp with C# is the same named bundle error.
+def test_mcp_with_csharp_is_an_error(tmp_path):
+    path = a_bundle(
+        tmp_path, source="mcp", language="csharp", locate={"sdk_package": "mcp"}
+    )
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "mcp requires language python" in str(error.value)
+
+
+# Spec AC4: a C# bundle validates the namespace root by name.
+@pytest.mark.parametrize("root", ["", "a/b", "a::b"])
+def test_csharp_bundle_with_a_bad_namespace_is_an_error(tmp_path, root):
+    path = a_bundle(tmp_path, language="csharp", locate={"sdk_package": root})
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "sdk_package" in str(error.value)
+    if root:
+        assert "C# namespace" in str(error.value)
+
+
 # Spec AC3: only the two shipped sources are accepted.
 def test_unknown_source_is_an_error(tmp_path):
     path = a_bundle(tmp_path, source="graphql")
@@ -322,7 +373,7 @@ def test_unknown_source_is_an_error(tmp_path):
     assert "source" in str(error.value)
 
 
-# Spec AC3: only the four shipped languages are accepted.
+# Spec AC3: only the five shipped languages are accepted.
 def test_unknown_language_is_an_error(tmp_path):
     path = a_bundle(tmp_path, language="ruby")
 
@@ -330,7 +381,7 @@ def test_unknown_language_is_an_error(tmp_path):
         load_bundle(path)
 
     assert str(path) in str(error.value)
-    assert "python, ts, rust or go" in str(error.value)
+    assert "python, ts, rust, go or csharp" in str(error.value)
 
 
 # Spec AC4: every required string key is present and non-blank.

@@ -7,6 +7,7 @@ from typing import Literal
 
 from tenon.locate import (
     LOCATE_TYPES,
+    CSharpLocateConfig,
     GoLocateConfig,
     LocateConfig,
     McpLocateConfig,
@@ -16,7 +17,7 @@ from tenon.locate import (
 from tenon.prove import ProofLevel
 
 SOURCES = ("openapi", "mcp")
-LANGUAGES = ("python", "ts", "rust", "go")
+LANGUAGES = ("python", "ts", "rust", "go", "csharp")
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,12 +27,12 @@ class MigrationBundle:
     provider: str
     migration: str
     source: Literal["openapi", "mcp"]
-    language: Literal["python", "ts", "rust", "go"]
+    language: Literal["python", "ts", "rust", "go", "csharp"]
     old: Path
     new: Path
     locate: (
         LocateConfig | TsLocateConfig | RustLocateConfig | GoLocateConfig
-        | McpLocateConfig
+        | CSharpLocateConfig | McpLocateConfig
     )
     command: tuple[str, ...] = ()
     build: tuple[str, ...] = ()
@@ -73,7 +74,7 @@ def a_locate(
     data: dict, source: str, language: str, path: Path
 ) -> (
     LocateConfig | TsLocateConfig | RustLocateConfig | GoLocateConfig
-    | McpLocateConfig
+    | CSharpLocateConfig | McpLocateConfig
 ):
     """The locate config type follows source and language."""
     locate = data.get("locate")
@@ -138,7 +139,8 @@ def load_bundle(path: str | Path) -> MigrationBundle:
     language = a_text(data, "language", path)
     if language not in LANGUAGES:
         raise ValueError(
-            f"{path}: language must be python, ts, rust or go: {language!r}"
+            f"{path}: language must be python, ts, rust, go or csharp: "
+            f"{language!r}"
         )
     if source == "mcp" and language != "python":
         raise ValueError(
