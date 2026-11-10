@@ -1,4 +1,6 @@
 from .config import load_config
+from .csharp_config import CSharpLocateConfig
+from .csharp_locate import locate_csharp
 from .go_config import GoLocateConfig
 from .go_locate import locate_go
 from .mcp_config import McpLocateConfig
@@ -26,12 +28,14 @@ LOCATE_TYPES = {
     "ts": TsLocateConfig,
     "rust": RustLocateConfig,
     "go": GoLocateConfig,
+    "csharp": CSharpLocateConfig,
 }
 
 __all__ = [
     "LOCATE_TYPES",
     "AmbiguityReason",
     "AmbiguousGroup",
+    "CSharpLocateConfig",
     "Dynamic",
     "GoLocateConfig",
     "Hit",
@@ -48,6 +52,7 @@ __all__ = [
     "derive",
     "load_config",
     "locate",
+    "locate_csharp",
     "locate_go",
     "locate_mcp",
     "locate_rust",
