@@ -395,7 +395,7 @@ def test_load_cli_config_validates_a_malformed_key(tmp_path, text, key):
         load_cli_config(path)
 
 
-# Spec AC5: the language must be python or ts, named with its key.
+# Spec AC5: the language must be python, ts or rust, named with its key.
 @pytest.mark.parametrize("language", ["ruby", "TypeScript", ""])
 def test_load_cli_config_rejects_an_unknown_file_language(tmp_path, language):
     path = a_file(

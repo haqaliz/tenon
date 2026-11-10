@@ -13,6 +13,7 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
 MCP_SPECS = Path(__file__).parent.parent / "fixtures" / "mcp"
 PROOF_BASIC = FIXTURES / "proof-basic"
 TS_BASIC = FIXTURES / "ts-sdk-basic"
+RUST_BASIC = FIXTURES / "rust-basic"
 MCP_CLI = FIXTURES / "mcp-cli"
 
 # The M0.3 rename; the fixture call is ``client.charges.create(amount=amount)``.
@@ -28,6 +29,10 @@ components:
 """
 
 NEW_SPEC = OLD_SPEC.replace("amount:", "amount_cents:")
+
+# The Rust fixture's struct literal already spells the repo-side name.
+RUST_CENTS_SPEC = OLD_SPEC.replace("amount:", "amount_cents:")
+RUST_RENAMED_SPEC = OLD_SPEC.replace("amount:", "amount_total:")
 
 # The rename is gone too: a property removal the rule cannot propose.
 REMOVED_SPEC = """\
@@ -116,7 +121,17 @@ class TsRepo:
     site: tuple[str, int, int]
 
 
+@dataclass(frozen=True)
+class RustRepo:
+    repo: Path
+    specs: tuple[Path, Path]
+    fix_specs: tuple[Path, Path]
+    endpoint_specs: tuple[Path, Path]
+    site: tuple[str, int, int]
+
+
 def a_write_specs(directory: Path, old: str, new: str) -> tuple[Path, Path]:
+    directory.mkdir(parents=True, exist_ok=True)
     old_path = directory / "old.yaml"
     new_path = directory / "new.yaml"
     old_path.write_text(old)
@@ -146,6 +161,27 @@ def a_ts_repo(tmp_path):
         repo=repo,
         specs=a_write_specs(tmp_path, OLD_SPEC, NEW_SPEC),
         site=("src/billing.ts", 5, 25),
+    )
+
+
+@pytest.fixture
+def a_rust_repo(tmp_path):
+    repo = shutil.copytree(
+        RUST_BASIC, tmp_path / "repo", ignore=shutil.ignore_patterns("__pycache__")
+    )
+    (repo / "tenon.toml").write_text(
+        '[locate]\nlanguage = "rust"\nsdk_package = "stripe"\n'
+    )
+    return RustRepo(
+        repo=repo,
+        specs=a_write_specs(tmp_path / "rename", OLD_SPEC, RUST_RENAMED_SPEC),
+        fix_specs=a_write_specs(
+            tmp_path / "fix", RUST_CENTS_SPEC, RUST_RENAMED_SPEC
+        ),
+        endpoint_specs=a_write_specs(
+            tmp_path / "endpoint", ENDPOINT_OLD, ENDPOINT_NEW
+        ),
+        site=("src/lib.rs", 5, 9),
     )
 
 

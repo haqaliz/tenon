@@ -16,13 +16,14 @@ affected calls, and proves the fix against your own checks before it opens a pul
 T5 (PR writer), T6 (TypeScript/JavaScript call-site location), T7 (proof ladder), T8 (MCP
 tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark corpus), T10a (GitHub
 App remote), T10b (provider migration bundle), T10c (local provider fan-out), T10d (installed
-provider fan-out) and the `tenon check` / `tenon fix` / `tenon provider migrate` / `tenon probe` /
-`tenon corpus` CLI are shipped.**
+provider fan-out), T11a (Rust call-site location) and the `tenon check` / `tenon fix` /
+`tenon provider migrate` / `tenon probe` / `tenon corpus` CLI are shipped.**
 `src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed
 `Change` records; `src/tenon/locate/` turns one of those records into call sites with file, line and
 column, and keeps anything it cannot prove in a separate ambiguity list — Python via `ast`,
-TypeScript/JavaScript via tree-sitter, and MCP `call_tool` sites via `locate_mcp`; no Node analysis
-runtime; `src/tenon/propose/` turns the certain sites into a candidate diff and never applies it;
+TypeScript/JavaScript and Rust via tree-sitter, and MCP `call_tool` sites via `locate_mcp`; no Node
+or Rust analysis runtime; `src/tenon/propose/` turns the certain sites into a candidate diff and
+never applies it;
 `src/tenon/prove/` applies that diff to a copy and runs every configured proof stage before and
 after, recording the strongest level that actually passed (`TESTS_PASSED`, `CHARACTERIZED`,
 `REPLAYED`, `TYPES_BUILD_ONLY`) or `UNVERIFIED` with a reason; `src/tenon/pr/` renders a
@@ -40,6 +41,7 @@ any code here.
 ```sh
 uv run tenon check path/to/repo --old v1.yaml --new v2.yaml
 uv run tenon check path/to/ts-repo --old v1.yaml --new v2.yaml --language ts
+uv run tenon check path/to/rust-repo --old v1.yaml --new v2.yaml --language rust
 uv run tenon fix path/to/repo --old v1.yaml --new v2.yaml \
     --check "python -m pytest -q"
 uv run tenon fix path/to/no-test-repo --old v1.yaml --new v2.yaml \
@@ -67,7 +69,18 @@ server over stdio, runs the task file through your agent command and reports wha
 tasks, 1 a failed task, 2 usage/connection).
 `corpus` records a `fix --json` run, updates a human outcome and reports by level/outcome. `--json`
 is byte-stable. Repeated inputs can live in `tenon.toml` under `[locate]` (`source`, `language`,
-`sdk_package`, mappings) and `[tenon]`; probe/corpus use flags only.
+`sdk_package`, mappings) and `[tenon]`; probe/corpus use flags only. `language` is `python`, `ts` or
+`rust`; `source = "mcp"` remains Python-only.
+
+`--language rust` scans `.rs` files with tree-sitter and needs no Rust toolchain. In `tenon.toml`,
+`[locate] sdk_package` is the crate name as written in `use` (for example `stripe`), and the shared
+`[locate.operations]`/`[locate.fields]` tables map the spec to Rust chains, e.g.
+`"POST /v1/charges" = "Charge.create"` and `"Charge.amount" = "amount_cents"`. Supported shapes are
+associated calls (`Charge::create(&params)`), struct literals (`CreateCharge { amount_cents: amount }`),
+field access through a tracked binding (`params.amount_cents`), and `use` aliases
+(`use stripe::Charge as StripeCharge`). Limits: method chains (`client.charges.create`), macros,
+re-exported crates, and multi-hop struct data flow are not followed; they report no site rather than
+a guessed one.
 
 ```python
 from tenon.detect import diff, load
@@ -111,8 +124,9 @@ identity for discovery and cloning. `--api-url` also targets a self-hosted GitHu
 A provider can package one migration as a JSON bundle and run it against one local checkout, a list
 of checkouts or the app installation with
 `tenon provider migrate [<repo>|--repos FILE|--installed] --bundle PATH`. The bundle names the
-provider and migration, the source and language, the two spec files (resolved relative to the
-bundle), the locate config, the required proof level and the optional stage commands:
+provider and migration, the source and language (`python`, `ts` or `rust`), the two spec files
+(resolved relative to the bundle), the locate config, the required proof level and the optional stage
+commands:
 
 ```json
 {
@@ -244,7 +258,7 @@ label.
 
 ## Scope
 
-Languages in order: Python, TypeScript/JavaScript, then Go, Rust, C#. Change sources: OpenAPI and MCP
+Languages in order: Python, TypeScript/JavaScript, Rust, then Go, C#. Change sources: OpenAPI and MCP
 tools/list diffs, with the Python MCP tool-call locator; SDK metadata later. Consumer side first;
 the provider bundle (T10b) packages that run for one repo, local fan-out over a repos file (T10c)
 and installed fan-out through the app (T10d) run it across checkouts; a hosted/webhook-driven

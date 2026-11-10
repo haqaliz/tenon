@@ -3,9 +3,9 @@
 Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR), T6
 (locate, TypeScript/JavaScript), T7 (proof ladder), T8a (MCP tool-schema diffs), T8b (Python MCP
 tool-call locator), T8c (`tenon probe`), T9 (benchmark corpus), T10a (GitHub App remote), T10b
-(provider migration bundle), T10c (local provider fan-out), T10d (installed provider fan-out) and
-the `tenon check` / `tenon fix` / `tenon provider migrate` / `tenon probe` / `tenon corpus` CLI are
-implemented** under
+(provider migration bundle), T10c (local provider fan-out), T10d (installed provider fan-out), T11a
+(locate, Rust) and the `tenon check` / `tenon fix` / `tenon provider migrate` / `tenon probe` /
+`tenon corpus` CLI are implemented** under
 `src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`,
 `src/tenon/provider/`, `src/tenon/probe/`, `src/tenon/corpus/` and `src/tenon/cli/`. The later
 stages are not.
@@ -36,7 +36,7 @@ API change source (OpenAPI v1 -> v2 | MCP schema | SDK metadata)
 ```text
 src/tenon/
   detect/     T1/T8a: spec parsers, differ, Change records <- built (OpenAPI + MCP)
-  locate/     T2/T6/T8b: per-language call-site finders   <- built (Python + TS/JS + MCP)
+  locate/     T2/T6/T8b/T11a: per-language call-site finders <- built (Python + TS/JS + Rust + MCP)
   propose/    T3: proposer seam, rule-based mechanical fixes  <- built (rename only)
   prove/      T4/T7: working-copy runner, proof ladder  <- built (all five levels)
   pr/         T5/T10a/T10d: branch/PR writer + installed discovery <- built (gh + GitHub App)
@@ -54,9 +54,13 @@ tests/        offline; fixture repos and specs; no network, no model calls
   a synthetic `method="tool"` operation; the only taxonomy extension is
   `ADDITIONAL_PROPERTIES_CHANGED`. T8b adds `locate_mcp` for the high-level Python `call_tool`
   pattern behind the same `LocateResult`.
-- **One certainty policy, per-language scanners.** T2 and T6 both emit `Hit`/`Dynamic`/`ScanResult`
-  evidence and call the same `resolve` rule table. Python parses with `ast`, TypeScript/JavaScript
-  with tree-sitter; neither runs the scanned code, needs Node, or infers types.
+- **One certainty policy, per-language scanners.** T2, T6 and T11a all emit `Hit`/`Dynamic`/
+  `ScanResult` evidence and call the same `resolve` rule table. Python parses with `ast`,
+  TypeScript/JavaScript and Rust with tree-sitter; none runs the scanned code, needs Node or a Rust
+  toolchain, or infers types. The Rust scan roots names through `use` declarations and aliases and
+  reports associated calls, struct-literal fields and field access through a tracked binding. Method
+  chains, macros, re-exported crates and multi-hop struct data flow are not followed and produce no
+  site, never a guess.
 - **Proof is a ladder, chosen by the user.** `--require
   TESTS_PASSED|CHARACTERIZED|REPLAYED|TYPES_BUILD_ONLY|UNVERIFIED`. The runner configures up to four
   stage commands (`build`, `characterize`, `replay`, `tests`), runs every baseline, applies the patch
@@ -107,10 +111,10 @@ tests/        offline; fixture repos and specs; no network, no model calls
 
 ## CLI
 
-`tenon check <repo> --old SPEC --new SPEC [--source openapi|mcp] [--language python|ts] [--json]`
+`tenon check <repo> --old SPEC --new SPEC [--source openapi|mcp] [--language python|ts|rust] [--json]`
 lists affected call sites and exits 0 when clean, 1 when a site or an unanalyzable repository is
 found.
-`tenon fix <repo> --old SPEC --new SPEC [--source openapi|mcp] [--language python|ts] [--build CMD]
+`tenon fix <repo> --old SPEC --new SPEC [--source openapi|mcp] [--language python|ts|rust] [--build CMD]
 [--characterize CMD] [--replay CMD] [--check CMD] [--require LEVEL] [--allow-below-required]
 [--open-pr] [--remote gh|app] [--app-id ID] [--app-installation-id ID] [--app-private-key PATH]
 [--api-url URL] [--json]` proposes, proves and prints the diff; `--open-pr` delegates to T5. `LEVEL`
@@ -159,10 +163,19 @@ agent contract are documented in `docs/planning/mcp-probe/prd.md`.
 report` prints the level/outcome table and merge rate. `docs/benchmark/` holds the public seed.
 
 `tenon.toml` provides `[locate]` (`source`, `language`, `sdk_package`, mappings) and `[tenon]`
-defaults; flags override. Exit 2 on usage or bad input. Never a traceback.
+defaults; flags override. Exit 2 on usage or bad input. Never a traceback. `language` is `python`,
+`ts` or `rust`; for Rust, `sdk_package` is one crate identifier as written in `use` (for example
+`stripe`), and the shared `operations`/`fields` tables map the spec to Rust chains.
 
 `--source mcp` selects `load_mcp` / `diff_mcp` / `locate_mcp`; the Python high-level `call_tool`
-pattern is the only locator in this slice. `language=ts` + `source=mcp` is a named error.
+pattern is the only locator in this slice. `source=mcp` with `language=ts` or `language=rust` is a
+named error.
+
+`--language rust` selects `RustLocateConfig` and `locate_rust`: tree-sitter over `.rs` files, `use`
+rooting and aliases, associated calls, struct-literal fields, and field access through a tracked
+binding. A crate path or a blank is a named `sdk_package` error. The limits are method chains,
+macros, re-exported crates and multi-hop struct data flow; each yields no site rather than a guess.
+No Cargo/rustc subprocess or Cargo proof preset ships; `--check "cargo test"` is just a user command.
 
 ## Open questions
 
@@ -180,5 +193,5 @@ pattern is the only locator in this slice. `language=ts` + `source=mcp` is a nam
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
 - Phase 3: T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider
-  fan-out) and T10d (installed provider fan-out) shipped; a hosted/webhook-driven service and T11
-  (Go/Rust/C#) are not started.
+  fan-out), T10d (installed provider fan-out) and T11a (Rust locator) shipped; a hosted/webhook-driven
+  service and the rest of T11 (Go/C#, method chains, macros, re-exports) are not started.
