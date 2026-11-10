@@ -1006,3 +1006,93 @@ def test_an_initializer_on_a_non_rooted_type_emits_nothing(tmp_path):
 
     assert result.modules == ("main.cs",)
     assert result.hits == ()
+
+
+# Spec AC5: a property of a non-rooted binding is unseen, even as a call argument.
+def test_a_non_rooted_property_argument_emits_only_the_call(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var other = new Acme.OtherThing();\n"
+            "        var service = new ChargeService();\n"
+            "        service.Create(other.AmountCents);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeService", "Create"),
+            True,
+        ),
+    )
+
+
+# Spec AC4: a named call argument is unwrapped to its value.
+def test_a_named_argument_is_unwrapped(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var options = new ChargeCreateOptions { AmountCents = 100 };\n"
+            "        var service = new ChargeService();\n"
+            "        service.Create(chargeOptions: options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            49,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeCreateOptions",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            49,
+            SiteShape.KEYWORD,
+            "AmountCents",
+            ("ChargeService", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeService", "Create"),
+            True,
+        ),
+    )

@@ -81,7 +81,9 @@ def _text(node: Node) -> str:
 def _unwrap(node: Node | None) -> Node | None:
     """Strip call arguments and parentheses around an expression."""
     while node is not None:
-        if node.type in {"argument", "parenthesized_expression"}:
+        if node.type == "argument":
+            node = node.named_children[-1] if node.named_children else None
+        elif node.type == "parenthesized_expression":
             node = node.named_children[0] if node.named_children else None
         else:
             return node
@@ -293,12 +295,14 @@ class _Visitor:
     def _member(self, node: Node) -> None:
         expression = node.child_by_field_name("expression")
         name = node.child_by_field_name("name")
-        if expression is not None and expression.type == "identifier" and name is not None:
+        if (
+            expression is not None
+            and expression.type == "identifier"
+            and name is not None
+        ):
             binding = self._bindings.get(_text(expression))
             if binding is not None and binding[0] is not None:
-                self._emit(
-                    name, SiteShape.ATTRIBUTE, _text(name), binding[0], True
-                )
+                self._emit(name, SiteShape.ATTRIBUTE, _text(name), binding[0], True)
         self._visit_children(node)
 
     def _argument(self, argument: Node, call_chain: tuple[str, ...]) -> None:
@@ -318,12 +322,12 @@ class _Visitor:
         elif node.type == "member_access_expression":
             expression = node.child_by_field_name("expression")
             field = node.child_by_field_name("name")
-            if (
-                expression is not None
-                and expression.type == "identifier"
-                and field is not None
-                and _text(expression) in self._bindings
-            ):
+            binding = (
+                self._bindings.get(_text(expression))
+                if expression is not None and expression.type == "identifier"
+                else None
+            )
+            if binding is not None and binding[0] is not None and field is not None:
                 self._emit(field, SiteShape.ATTRIBUTE, _text(field), call_chain, True)
 
     def _call(self, node: Node) -> None:
