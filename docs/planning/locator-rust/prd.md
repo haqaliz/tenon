@@ -3,7 +3,7 @@
 - **Slug:** `locator-rust`
 - **Capability:** T11 in `docs/technical/CAPABILITY_ROADMAP.md` — **first slice, Rust locator**
 - **Milestone:** Phase 3 in `docs/ROADMAP.md`, first T11 slice
-- **Status:** draft for review
+- **Status:** implemented 2026-11-10 (`src/tenon/locate/rust_*.py`, CLI; 1,925 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

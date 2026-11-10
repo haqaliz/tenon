@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20Rust%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -78,9 +78,11 @@ is byte-stable. Repeated inputs can live in `tenon.toml` under `[locate]` (`sour
 `"POST /v1/charges" = "Charge.create"` and `"Charge.amount" = "amount_cents"`. Supported shapes are
 associated calls (`Charge::create(&params)`), struct literals (`CreateCharge { amount_cents: amount }`),
 field access through a tracked binding (`params.amount_cents`), and `use` aliases
-(`use stripe::Charge as StripeCharge`). Limits: method chains (`client.charges.create`), macros,
+(`use stripe::Charge as StripeCharge`). Limits: method chains (`client.charges().create(...)`), macros,
 re-exported crates, and multi-hop struct data flow are not followed; they report no site rather than
-a guessed one.
+a guessed one. A `fields` mapping that changes the spelling locates the site, but `fix` proposes a
+rename only when the located spelling equals the spec's old name (the shipped proposer rule);
+otherwise it reports `NO_EDITABLE_SITES` and the customer renames manually.
 
 ```python
 from tenon.detect import diff, load
@@ -258,10 +260,10 @@ label.
 
 ## Scope
 
-Languages in order: Python, TypeScript/JavaScript, Rust, then Go, C#. Change sources: OpenAPI and MCP
-tools/list diffs, with the Python MCP tool-call locator; SDK metadata later. Consumer side first;
-the provider bundle (T10b) packages that run for one repo, local fan-out over a repos file (T10c)
-and installed fan-out through the app (T10d) run it across checkouts; a hosted/webhook-driven
+Languages: Python, TypeScript/JavaScript and Rust shipped; Go and C# follow. Change sources: OpenAPI
+and MCP tools/list diffs, with the Python MCP tool-call locator; SDK metadata later. Consumer side
+first; the provider bundle (T10b) packages that run for one repo, local fan-out over a repos file
+(T10c) and installed fan-out through the app (T10d) run it across checkouts; a hosted/webhook-driven
 service is later.
 
 ## Docs

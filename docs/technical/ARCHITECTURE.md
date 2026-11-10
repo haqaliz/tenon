@@ -175,6 +175,8 @@ named error.
 rooting and aliases, associated calls, struct-literal fields, and field access through a tracked
 binding. A crate path or a blank is a named `sdk_package` error. The limits are method chains,
 macros, re-exported crates and multi-hop struct data flow; each yields no site rather than a guess.
+A mapping that changes the spelling locates the site, but the shipped proposer only edits when the
+located spelling equals the spec's old name; otherwise it reports `NO_EDITABLE_SITES`.
 No Cargo/rustc subprocess or Cargo proof preset ships; `--check "cargo test"` is just a user command.
 
 ## Open questions

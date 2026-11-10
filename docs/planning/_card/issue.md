@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T11 More languages** — first slice: **Rust locator** (`docs/technical/CAPABILITY_ROADMAP.md:17`)
 - **Milestone:** Phase 3 (`docs/ROADMAP.md`), first T11 slice
+- **State:** shipped 2026-11-10 (`src/tenon/locate/rust_*.py`, CLI; 1,925 tests)
 - **Branch:** `feat/locator-rust/aliz`
 - **Worktree:** `.claude/worktrees/feat-locator-rust`
 
