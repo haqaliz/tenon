@@ -8,6 +8,7 @@ from typing import Literal, Sequence
 
 from tenon.locate import (
     LOCATE_TYPES,
+    CSharpLocateConfig,
     GoLocateConfig,
     LocateConfig,
     McpLocateConfig,
@@ -16,7 +17,7 @@ from tenon.locate import (
 )
 from tenon.prove import ProofLevel
 
-LANGUAGES = ("python", "ts", "rust", "go")
+LANGUAGES = ("python", "ts", "rust", "go", "csharp")
 SOURCES = ("openapi", "mcp")
 
 
@@ -26,7 +27,7 @@ class CliConfig:
 
     locate: (
         LocateConfig | TsLocateConfig | RustLocateConfig | GoLocateConfig
-        | McpLocateConfig
+        | CSharpLocateConfig | McpLocateConfig
     )
     command: tuple[str, ...] = ()
     build: tuple[str, ...] = ()
@@ -34,13 +35,14 @@ class CliConfig:
     replay: tuple[str, ...] = ()
     require: ProofLevel = ProofLevel.TESTS_PASSED
     breaking_only: bool = False
-    language: Literal["python", "ts", "rust", "go"] = "python"
+    language: Literal["python", "ts", "rust", "go", "csharp"] = "python"
     source: Literal["openapi", "mcp"] = "openapi"
 
     def __post_init__(self) -> None:
         if self.language not in LANGUAGES:
             raise ValueError(
-                f"language must be python, ts, rust or go: {self.language!r}"
+                f"language must be python, ts, rust, go or csharp: "
+                f"{self.language!r}"
             )
         if self.source not in SOURCES:
             raise ValueError(
@@ -113,7 +115,8 @@ def load_cli_config(
     chosen = section.get("language", "python") if language is None else language
     if not isinstance(chosen, str) or chosen not in LANGUAGES:
         raise ValueError(
-            f"{path}: [locate] language must be python, ts, rust or go: {chosen!r}"
+            f"{path}: [locate] language must be python, ts, rust, go or csharp: "
+            f"{chosen!r}"
         )
     if chosen_source == "mcp" and chosen != "python":
         raise ValueError(
@@ -139,7 +142,7 @@ def load_cli_config(
 
     locate: (
         LocateConfig | TsLocateConfig | RustLocateConfig | GoLocateConfig
-        | McpLocateConfig
+        | CSharpLocateConfig | McpLocateConfig
     )
     if chosen_source == "mcp":
         # Spec AC2: the MCP client package is optional and defaults to mcp.
@@ -182,7 +185,7 @@ def _split(value: str, flag: str) -> tuple[str, ...]:
 def _package(
     locate: (
         LocateConfig | TsLocateConfig | RustLocateConfig | GoLocateConfig
-        | McpLocateConfig
+        | CSharpLocateConfig | McpLocateConfig
     ),
 ) -> str:
     """The package a locate config scans, under either source."""
@@ -213,7 +216,7 @@ def overrides(
     chosen = config.language if language is None else language
     if chosen not in LANGUAGES:
         raise ValueError(
-            f"--language must be python, ts, rust or go: {language!r}"
+            f"--language must be python, ts, rust, go or csharp: {language!r}"
         )
     chosen_source = config.source if source is None else source
     if chosen_source not in SOURCES:
