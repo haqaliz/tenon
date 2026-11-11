@@ -3,7 +3,7 @@
 - **Slug:** `provider-service`
 - **Capability:** T10 in `docs/technical/CAPABILITY_ROADMAP.md` — **fifth slice, hosted service MVP**
 - **Milestone:** Phase 3 in `docs/ROADMAP.md`, final T10 slice
-- **Status:** draft for review
+- **Status:** implemented 2026-11-11 (`src/tenon/service/`, `tenon provider serve`; 2,235 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

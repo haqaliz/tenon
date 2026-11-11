@@ -108,6 +108,15 @@ def test_exit_two_uses_the_json_error_message(tmp_path):
     assert outcome.error == "--api-token is required"
 
 
+# Spec AC4: an exit with no output still names the failure.
+def test_exit_two_without_output_names_the_exit(tmp_path):
+    runner, _calls = a_runner(a_completed(returncode=2))
+
+    outcome = runner.run(tmp_path / "bundle.json")
+
+    assert outcome.error == "run failed with exit 2"
+
+
 # Spec AC4: a non-JSON stdout at exit 0/1 is a named error.
 def test_exit_zero_without_json_is_an_invalid_report(tmp_path):
     runner, _calls = a_runner(a_completed(stdout="not json"))

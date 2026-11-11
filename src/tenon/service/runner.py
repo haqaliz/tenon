@@ -59,10 +59,11 @@ class CommandRunner:
 
         # Spec AC4: only the CLI's completed envelope (0/1) carries a report.
         if result.returncode not in (0, 1):
+            detail = tail(_error_message(result) or result.stderr)
             return Outcome(
                 result.returncode,
                 None,
-                tail(_error_message(result) or result.stderr),
+                detail or f"run failed with exit {result.returncode}",
             )
         try:
             report = json.loads(result.stdout)

@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T10 Provider layer and GitHub App (hosted)** — fifth slice: **hosted service MVP**
 - **Milestone:** Phase 3 (`docs/ROADMAP.md`), final T10 slice
+- **State:** shipped 2026-11-11 (`src/tenon/service/`, `tenon provider serve`; 2,235 tests)
 - **Branch:** `feat/provider-service/aliz`
 - **Worktree:** `.claude/worktrees/feat-provider-service`
 
