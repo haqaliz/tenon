@@ -16,6 +16,7 @@ def test_a_valid_crate_loads():
     assert config.sdk_package == "stripe"
     assert config.operations == {}
     assert config.fields == {}
+    assert config.receivers == {}
 
 
 def test_a_crate_with_underscores_and_digits_loads():
@@ -57,3 +58,32 @@ def test_the_config_is_frozen_and_slotted():
     with pytest.raises((AttributeError, TypeError)):
         config.sdk_package = "other"
     assert not hasattr(config, "__dict__")
+
+
+# Spec AC1: a receiver mapping loads as a read-only copy.
+def test_a_receiver_mapping_loads_read_only():
+    receivers = {"stripe.NewClient": "Client"}
+    config = a_config(sdk_package="stripe", receivers=receivers)
+
+    receivers["stripe.NewOther"] = "Other"
+
+    assert dict(config.receivers) == {"stripe.NewClient": "Client"}
+    with pytest.raises(TypeError):
+        config.receivers["x"] = "y"
+
+
+# Spec AC1: a blank or split receiver key or value is a named ValueError.
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("", "Client"),
+        ("stripe NewClient", "Client"),
+        ("stripe.NewClient", ""),
+        ("stripe.NewClient", "Client Chain"),
+        (1, "Client"),
+        ("stripe.NewClient", 1),
+    ],
+)
+def test_a_bad_receiver_entry_is_a_named_value_error(key, value):
+    with pytest.raises(ValueError, match="receivers"):
+        a_config(sdk_package="stripe", receivers={key: value})
