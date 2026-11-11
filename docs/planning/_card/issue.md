@@ -1,47 +1,61 @@
-# Card: feat/provider-service
+# Card: feat/receiver-tracking
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T10 Provider layer and GitHub App (hosted)** — fifth slice: **hosted service MVP**
-- **Milestone:** Phase 3 (`docs/ROADMAP.md`), final T10 slice
-- **State:** shipped 2026-11-11 (`src/tenon/service/`, `tenon provider serve`; 2,235 tests)
-- **Branch:** `feat/provider-service/aliz`
-- **Worktree:** `.claude/worktrees/feat-provider-service`
+- **Capability:** **Post-T11 hardening — receiver tracking** (a follow-up to the T11 locator limits)
+- **Milestone:** next phase after Phase 3; the original roadmap ends at T11
+- **Branch:** `feat/receiver-tracking/aliz`
+- **Worktree:** `.claude/worktrees/feat-receiver-tracking`
 
 ## Brief
 
-T10a–T10d give a provider an app identity, a bundle, local and installed fan-out. The provider still
-runs the CLI by hand for each migration. The last T10 piece is a self-hosted service that accepts a
-run request, executes the installed fan-out in a worker, records the per-repo report, and exposes the
-run's status.
+The shipped locators root names through imports (`use`, `using`, `import`), package names and
+explicit `new`/struct bindings. The common alternative style — a client object built once and then
+used through method/property chains — is either unrooted or not seen:
 
-T10e adds **`tenon provider serve`**:
-- a small stdlib HTTP API: `POST /runs` to queue a migration, `GET /runs/{id}` and `GET /runs` to
-  read status/reports; an API bearer token guards them;
-- a **SQLite run store** (queued/running/succeeded/failed, timestamps, exit, report JSON, error);
-- one background worker that runs the shipped T10d installed fan-out (the same bundle/config,
-  discovery, temp clones, report) and records the result;
-- a `POST /webhooks/github` endpoint that verifies `X-Hub-Signature-256` with a configured secret
-  and records `installation`/`installation_repositories` events (no auto-run trigger in this slice);
-- bundle registration by name under a configured `--bundles DIR` (no arbitrary server paths);
-- no cloud deployment, database server, queue service or parallel workers: the service is
-  self-hosted, local-first, and honest about its single worker.
+```rust
+let client = Client::new(key);
+client.charges().create(params);
+```
+```go
+client := stripe.NewClient(key)
+client.Charges.New(params)
+```
+```csharp
+var client = new StripeClient(key);
+client.Charges.Create(options);
+```
+```python
+client = stripe.Client(key)
+client.charges.create(amount=100)
+```
+```ts
+const client = new StripeClient(key);
+client.charges.create({ amount: 100 });
+```
 
-The hard rules do not change: the service never merges or pushes the default branch; the app identity
-is the T10a one; the T5 proof/PR gate applies per repo; the API token and webhook secret are secrets,
-never logged; bundle names are confined to the bundle directory; the report is the T10c/T10d fan-out
-envelope.
+This phase adds **receiver tracking**: infer the SDK type of a local receiver from explicit evidence
+(a visible constructor/`new`, a type annotation, or an operator-provided `receivers` mapping for
+factories), then root the subsequent method/property chain and let the shared certainty policy
+decide. The canonical chain keeps the type and its members, so the provider can map
+`POST /v1/charges` -> `Client.charges.create`.
+
+The hard rules do not change: no full type inference, no guessing from a name alone, no new proof
+levels or ambiguity vocabulary, the shared `derive`/`resolve` policy decides, and a chain whose
+receiver is not explicitly known stays unrooted/absent.
 
 ## Constraints carried in from the repo
 
-- T10d's `_installed`/`list_installation_repos`/`clone_repo`, T10c's report types and the T10a app
-  identity are the seams to reuse; no new pipeline.
-- `CLAUDE.md` §1–5: execution decides, honest levels, no merge/default branch, no egress by default.
-- Stdlib only: `http.server`/`wsgiref`, `sqlite3`, `hmac`, `threading`; no new dependency.
-- Offline tests: fake fan-out, fake app API, temp SQLite, no network/live GitHub.
+- `src/tenon/locate/{scan,resolve}.py` is the shared policy; receiver evidence must arrive as
+  `Hit`s with a canonical chain, not a second resolver.
+- The five scanners (`scan`/`ts_scan`/`rust_scan`/`go_scan`/`csharp_scan`) own the language syntax;
+  the shared configs gain the optional receiver mapping.
+- `CliConfig`/`tenon.toml`/`MigrationBundle` are the config seams; a provider must be able to declare
+  factories without writing code.
+- Offline fixtures/tests; no new dependency (tree-sitter grammars already exist).
 
 ## Scope fence
 
-Not this card: cloud deployment/Docker, Postgres/Redis, parallel workers, a web UI, webhook-triggered
-runs, multi-tenant auth, bundle upload/signing, provider branding, receiver tracking.
+Not this phase: full type inference, generics/return-type analysis, `dynamic`/reflection, macros,
+interprocedural data flow, new proof levels, new ambiguity reasons, a service/deployment change.
