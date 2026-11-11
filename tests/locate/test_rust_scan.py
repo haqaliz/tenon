@@ -671,3 +671,281 @@ def test_a_base_field_initializer_is_not_a_field(tmp_path):
             False,
         ),
     )
+
+
+# Spec AC1: `Type::new` binds the type for a later member access.
+def test_a_constructed_receiver_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn main() {\n"
+            '    let client = Client::new("key");\n'
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 18, SiteShape.CALL, "new", ("Client", "new"), True),
+        a_hit(repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+    )
+
+
+# Spec AC1: a crate-qualified `new` binds the type.
+def test_a_crate_qualified_construction_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "fn main() {\n"
+            '    let client = stripe::Client::new("key");\n'
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 2, 18, SiteShape.CALL, "new", ("Client", "new"), True),
+        a_hit(repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+    )
+
+
+# Spec AC1: `default` is the other implicit constructor.
+def test_a_default_constructed_receiver_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn main() {\n"
+            "    let client = Client::default();\n"
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 18, SiteShape.CALL, "default", ("Client", "default"), True),
+        a_hit(repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+    )
+
+
+# Spec AC2: an annotated simple type binds the name.
+def test_an_annotated_receiver_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn main() {\n"
+            "    let client: Client = build();\n"
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+    )
+
+
+# Spec AC2: a crate-qualified annotation binds the name.
+def test_a_crate_qualified_annotation_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "fn main() {\n"
+            "    let client: stripe::Client = build();\n"
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+    )
+
+
+# Spec AC2: an alias in the annotation resolves to the canonical type.
+def test_an_aliased_annotation_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client as C;\n"
+            "\n"
+            "fn main() {\n"
+            "    let client: C = build();\n"
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+    )
+
+
+# Spec AC3: a mapped factory binds the mapped type.
+def test_a_mapped_factory_receiver_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "fn main() {\n"
+            '    let client = make_client("key");\n'
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe", {"make_client": "Client"})
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+    )
+
+
+# Spec AC3: a crate-qualified factory matches the canonical key.
+def test_a_crate_qualified_factory_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "fn main() {\n"
+            '    let client = stripe::make_client("key");\n'
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe", {"make_client": "Client"})
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.rs",
+            2,
+            18,
+            SiteShape.CALL,
+            "make_client",
+            ("make_client",),
+            True,
+        ),
+        a_hit(repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+    )
+
+
+# Spec AC3: the source dotted key also matches, with a multi-part mapped chain.
+def test_a_source_dotted_factory_key_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "fn main() {\n"
+            '    let client = stripe::make_client("key");\n'
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(
+        repo, "stripe", {"stripe::make_client": "resources::Client"}
+    )
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.rs",
+            2,
+            18,
+            SiteShape.CALL,
+            "make_client",
+            ("make_client",),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.rs",
+            3,
+            25,
+            SiteShape.ATTRIBUTE,
+            "amount",
+            ("resources", "Client"),
+            True,
+        ),
+    )
+
+
+# Spec AC3: a factory with no mapping is not evidence.
+def test_an_unmapped_factory_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn main() {\n"
+            '    let client = make_client("key");\n'
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == ()
+
+
+# Spec AC5: a rebinding replaces the receiver type.
+def test_a_rebinding_replaces_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::{Client, Customer};\n"
+            "\n"
+            "fn main() {\n"
+            '    let client = Client::new("key");\n'
+            '    let client = Customer::new("key");\n'
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 18, SiteShape.CALL, "new", ("Client", "new"), True),
+        a_hit(repo, "main.rs", 5, 18, SiteShape.CALL, "new", ("Customer", "new"), True),
+        a_hit(repo, "main.rs", 6, 25, SiteShape.ATTRIBUTE, "amount", ("Customer",), True),
+    )
+
+
+# Spec AC5: a let without evidence clears the previous binding.
+def test_a_let_without_evidence_clears_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn main() {\n"
+            '    let client = Client::new("key");\n'
+            "    let client = build();\n"
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 18, SiteShape.CALL, "new", ("Client", "new"), True),
+    )
