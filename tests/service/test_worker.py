@@ -30,7 +30,11 @@ def test_run_once_executes_and_finishes_succeeded(tmp_path):
     store = a_store(tmp_path)
     run = store.create_run("bundle.json")
     executed = []
-    worker = Worker(store, lambda claimed: executed.append(claimed) or Outcome(0, a_report(), None))
+    worker = Worker(
+        store,
+        lambda claimed: executed.append(claimed)
+        or Outcome(0, a_report(), None),
+    )
 
     assert worker.run_once() is True
 
@@ -105,7 +109,10 @@ def test_run_once_is_fifo_and_sequential(tmp_path):
     store.create_run("first.json")
     store.create_run("second.json")
     seen = []
-    worker = Worker(store, lambda claimed: seen.append(claimed.bundle) or Outcome(0, {}, None))
+    worker = Worker(
+        store,
+        lambda claimed: seen.append(claimed.bundle) or Outcome(0, {}, None),
+    )
 
     assert worker.run_once() is True
     assert worker.run_once() is True

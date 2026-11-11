@@ -3,11 +3,12 @@
 Design intent. **T1 (detect), T2 (locate, Python), T3 (propose), T4 (prove), T5 (PR), T6
 (locate, TypeScript/JavaScript), T7 (proof ladder), T8a (MCP tool-schema diffs), T8b (Python MCP
 tool-call locator), T8c (`tenon probe`), T9 (benchmark corpus), T10a (GitHub App remote), T10b
-(provider migration bundle), T10c (local provider fan-out), T10d (installed provider fan-out), T11a
-(locate, Rust), T11b (locate, Go), T11c (locate, C#) and the `tenon check` / `tenon fix` /
-`tenon provider migrate` / `tenon probe` / `tenon corpus` CLI are implemented** under
-`src/tenon/detect/`, `src/tenon/locate/`, `src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`,
-`src/tenon/provider/`, `src/tenon/probe/`, `src/tenon/corpus/` and `src/tenon/cli/`. The later
+(provider migration bundle), T10c (local provider fan-out), T10d (installed provider fan-out), T10e
+(hosted provider service), T11a (locate, Rust), T11b (locate, Go), T11c (locate, C#) and the
+`tenon check` / `tenon fix` / `tenon provider migrate` / `tenon provider serve` / `tenon probe` /
+`tenon corpus` CLI are implemented** under `src/tenon/detect/`, `src/tenon/locate/`,
+`src/tenon/propose/`, `src/tenon/prove/`, `src/tenon/pr/`, `src/tenon/provider/`,
+`src/tenon/service/`, `src/tenon/probe/`, `src/tenon/corpus/` and `src/tenon/cli/`. The later
 stages are not.
 
 ## Pipeline
@@ -42,9 +43,10 @@ src/tenon/
   prove/      T4/T7: working-copy runner, proof ladder  <- built (all five levels)
   pr/         T5/T10a/T10d: branch/PR writer + installed discovery <- built (gh + GitHub App)
   provider/   T10b/T10c: bundle and repos-file loaders    <- built (JSON + text)
+  service/    T10e: SQLite queue, runner, worker, API       <- built (HTTP + SQLite)
   probe/      T8c: MCP stdio probe, agent plan, report  <- built (tools only)
   corpus/     T9: benchmark records                         <- built (JSONL + report)
-  cli/        tenon check | fix | provider migrate | probe | corpus <- built
+  cli/        tenon check | fix | provider migrate | provider serve | probe | corpus <- built
 tests/        offline; fixture repos and specs; no network, no model calls
 ```
 
@@ -93,7 +95,13 @@ tests/        offline; fixture repos and specs; no network, no model calls
   and runs that flow sequentially once per listed checkout, reusing one bundle/config and one PR
   remote; a bad path is a per-repo failure, a shared spec refusal aborts, and there is no rollback.
   The bundle never upgrades a proof level and adds no PR branding. Installed fan-out shipped in
-  T10d; a hosted/webhook-driven service is later.
+  T10d.
+- **The service is a thin host, not a new pipeline.** T10e queues a bundle in SQLite and one worker
+  invokes the shipped `provider migrate --installed` as a subprocess, so detection, proof and PR
+  behavior are unchanged. The API is a pure `Api.handle` behind a stdlib `ThreadingHTTPServer`; a
+  bearer token and constant-time HMAC comparison guard it, bundle names are confined to `--bundles`,
+  and the token/secret never enter the store, a response or the log. It is a local MVP: one worker,
+  one process, no deployment, TLS, proxy, parallel runs or webhook-triggered run.
 - **The benchmark is descriptive, not a claim.** T9 records `(change, patch, proof, outcome)` in a
   local JSONL corpus. A merge rate uses only real outcomes (`merged`, `rejected`, `closed`,
   `incident`); `local_only`/`pending` never count as success. The public seed has no merge outcomes,
@@ -106,11 +114,14 @@ tests/        offline; fixture repos and specs; no network, no model calls
   `NO_TESTS_FOUND`, `TESTS_FAILED_BEFORE`, `TESTS_FAILED_AFTER`, `BUILD_FAILED_BEFORE`,
   `BUILD_FAILED_AFTER`, `CHARACTERIZE_FAILED_BEFORE`, `CHARACTERIZE_FAILED_AFTER`,
   `REPLAY_FAILED_BEFORE`, `REPLAY_FAILED_AFTER`, `CHECK_TIMED_OUT`, `COPY_FAILED`.
-- **A thin CLI with honest exit codes.** `tenon check`, `tenon fix` and `tenon provider migrate`
-  parse, configure, compose and render; they add no detection or proof logic. `check` exits 0 clean /
+- **A thin CLI with honest exit codes.** `tenon check`, `tenon fix`, `tenon provider migrate` and
+  `tenon provider serve` parse, configure, compose and render; they add no detection or proof logic.
+  `check` exits 0 clean /
   1 affected or unanalyzable / 2 usage; `fix` exits 0 required proof / 1 not / 2 usage.
   `provider migrate` exits 0 every repo passed / 1 any repo failed / 2 usage, bundle, repos-file,
-  app-identity, discovery or shared spec/config errors. `--json` is one byte-stable object; `fix`
+  app-identity, discovery or shared spec/config errors. `provider serve` exits 2 on a missing
+  token, a non-directory `--bundles`, an unopenable store or a bind failure, and 0 after a clean
+  SIGINT. `--json` is one byte-stable object; `fix`
   prints unless `--open-pr`, which delegates to T5. No traceback.
 - **Baseline first.** Run the user's checks before patching, so a red baseline is reported as such
   and not blamed on the patch.
@@ -130,8 +141,9 @@ is one of the five proof levels; the strongest configured stage that is green is
 needs `contents:write` and `pull_requests:write`. Its inputs come from those flags or
 `TENON_GITHUB_APP_ID`, `TENON_GITHUB_APP_INSTALLATION_ID`, `TENON_GITHUB_APP_PRIVATE_KEY` (a path)
 and `TENON_GITHUB_API_URL`; a flag wins. An explicit `--remote` requires `--open-pr`; missing inputs
-or an unreadable key exit 2. The app remote is self-hosted: webhooks and a hosted service are
-deferred; `--installed` reuses the same app identity for discovery and cloning.
+or an unreadable key exit 2. The app remote is self-hosted: a deployment is deferred;
+`--installed` reuses the same app identity for discovery and cloning and `tenon provider serve`
+serves that installed fan-out locally.
 `tenon provider migrate [<repo>|--repos FILE|--installed] --bundle PATH [--open-pr] [--remote gh|app]
 [--app-id ID] [--app-installation-id ID] [--app-private-key PATH] [--api-url URL] [--check CMD]
 [--require LEVEL] [--allow-below-required] [--allow-unverified] [--json]` builds the `CliConfig`
@@ -158,8 +170,17 @@ missing input or unreadable key exits 2, and `--remote gh` is rejected (`--insta
 --remote app`). Each repo is cloned by the app credential helper into a temp dir (token in the git
 child env, never argv/URL) that is removed even on failure; without `--open-pr` no PR call is made
 (dry run). A clone failure is a per-repo `error` and the others still run; a token/list failure
-exits 2. The report keys are `owner/name`. There is no rollback, parallelism or retry; webhooks, a
-database and a hosted runner are deferred.
+exits 2. The report keys are `owner/name`. There is no rollback, parallelism or retry.
+`tenon provider serve --bundles DIR --db PATH --api-token TOKEN [--webhook-secret SECRET]
+[--host 127.0.0.1] [--port 8080] [--run-timeout SEC] [--poll SEC] [--dry-run] [--app-id ID]
+[--app-installation-id ID] [--app-private-key PATH] [--api-url URL]` starts one worker and a
+stdlib HTTP server. `POST /runs` (bearer auth) queues a relative `.json` bundle under `--bundles` and
+returns 201, or the existing run with an `Idempotency-Key` (200); `GET /runs/{id}` and
+`GET /runs?limit=N` return the durable record/report; `GET /health` is public; `POST
+/webhooks/github` verifies the HMAC and records a delivery (no auto-run). Auth is
+`hmac.compare_digest`, the token/secret are never stored or logged, and the worker invokes the
+shipped installed fan-out once per run. SQLite is the queue, there is no parallel worker, and the
+service is not internet-hardened: no TLS, proxy or rate limit ships.
 `tenon probe --server-cmd CMD --tasks FILE --agent CMD [--timeout SEC] [--json]` starts an MCP
 server over stdio, lists its tools, runs every task through the agent command and reports what
 worked. Exit 0 when every task passed, 1 when one failed, 2 on usage/connection. The task file and
@@ -226,8 +247,10 @@ No .NET toolchain or proof preset ships; `--check "dotnet test"` is just a user 
   outcomes yet.
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
+- T10e follow-ups: TLS/reverse-proxy deployment, parallel workers, retries/cancel, metrics and
+  webhook-triggered runs. The shipped service is one process and one worker over SQLite.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
 - Phase 3: T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider
-  fan-out), T10d (installed provider fan-out), T11a (Rust locator), T11b (Go locator) and T11c
-  (C# locator) shipped; a hosted/webhook-driven service and fluent-chain receiver tracking are not
-  started.
+  fan-out), T10d (installed provider fan-out), T10e (hosted provider service), T11a (Rust locator),
+  T11b (Go locator) and T11c (C# locator) shipped; a hosted deployment and fluent-chain receiver
+  tracking are not started.
