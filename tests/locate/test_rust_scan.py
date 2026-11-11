@@ -691,7 +691,9 @@ def test_a_constructed_receiver_is_evidence(tmp_path):
 
     assert result.hits == (
         a_hit(repo, "main.rs", 4, 18, SiteShape.CALL, "new", ("Client", "new"), True),
-        a_hit(repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+        a_hit(
+            repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client", "amount"), True
+        ),
     )
 
 
@@ -711,7 +713,9 @@ def test_a_crate_qualified_construction_is_evidence(tmp_path):
 
     assert result.hits == (
         a_hit(repo, "main.rs", 2, 18, SiteShape.CALL, "new", ("Client", "new"), True),
-        a_hit(repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+        a_hit(
+            repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client", "amount"), True
+        ),
     )
 
 
@@ -733,7 +737,9 @@ def test_a_default_constructed_receiver_is_evidence(tmp_path):
 
     assert result.hits == (
         a_hit(repo, "main.rs", 4, 18, SiteShape.CALL, "default", ("Client", "default"), True),
-        a_hit(repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+        a_hit(
+            repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client", "amount"), True
+        ),
     )
 
 
@@ -754,7 +760,9 @@ def test_an_annotated_receiver_is_evidence(tmp_path):
     result = scan_rust(repo, "stripe")
 
     assert result.hits == (
-        a_hit(repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+        a_hit(
+            repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client", "amount"), True
+        ),
     )
 
 
@@ -773,7 +781,9 @@ def test_a_crate_qualified_annotation_is_evidence(tmp_path):
     result = scan_rust(repo, "stripe")
 
     assert result.hits == (
-        a_hit(repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+        a_hit(
+            repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client", "amount"), True
+        ),
     )
 
 
@@ -794,7 +804,9 @@ def test_an_aliased_annotation_is_evidence(tmp_path):
     result = scan_rust(repo, "stripe")
 
     assert result.hits == (
-        a_hit(repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+        a_hit(
+            repo, "main.rs", 5, 25, SiteShape.ATTRIBUTE, "amount", ("Client", "amount"), True
+        ),
     )
 
 
@@ -813,7 +825,9 @@ def test_a_mapped_factory_receiver_is_evidence(tmp_path):
     result = scan_rust(repo, "stripe", {"make_client": "Client"})
 
     assert result.hits == (
-        a_hit(repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+        a_hit(
+            repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client", "amount"), True
+        ),
     )
 
 
@@ -842,7 +856,9 @@ def test_a_crate_qualified_factory_is_evidence(tmp_path):
             ("make_client",),
             True,
         ),
-        a_hit(repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client",), True),
+        a_hit(
+            repo, "main.rs", 3, 25, SiteShape.ATTRIBUTE, "amount", ("Client", "amount"), True
+        ),
     )
 
 
@@ -880,7 +896,7 @@ def test_a_source_dotted_factory_key_is_evidence(tmp_path):
             25,
             SiteShape.ATTRIBUTE,
             "amount",
-            ("resources", "Client"),
+            ("resources", "Client", "amount"),
             True,
         ),
     )
@@ -925,7 +941,7 @@ def test_a_rebinding_replaces_the_receiver(tmp_path):
     assert result.hits == (
         a_hit(repo, "main.rs", 4, 18, SiteShape.CALL, "new", ("Client", "new"), True),
         a_hit(repo, "main.rs", 5, 18, SiteShape.CALL, "new", ("Customer", "new"), True),
-        a_hit(repo, "main.rs", 6, 25, SiteShape.ATTRIBUTE, "amount", ("Customer",), True),
+        a_hit(repo, "main.rs", 6, 25, SiteShape.ATTRIBUTE, "amount", ("Customer", "amount"), True),
     )
 
 
@@ -948,4 +964,147 @@ def test_a_let_without_evidence_clears_the_receiver(tmp_path):
 
     assert result.hits == (
         a_hit(repo, "main.rs", 4, 18, SiteShape.CALL, "new", ("Client", "new"), True),
+    )
+
+
+# Spec AC4: a method chain emits the intermediate call and the full chain.
+def test_a_method_chain_emits_the_intermediate_and_the_call(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn main() {\n"
+            '    let client = Client::new("key");\n'
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 18, SiteShape.CALL, "new", ("Client", "new"), True),
+        a_hit(
+            repo,
+            "main.rs",
+            5,
+            5,
+            SiteShape.CALL,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.rs",
+            5,
+            5,
+            SiteShape.CALL,
+            "create",
+            ("Client", "charges", "create"),
+            True,
+        ),
+    )
+
+
+# Spec AC4: a field chain emits every prefix on a bound receiver.
+def test_a_field_chain_emits_every_prefix(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn main() {\n"
+            '    let client = Client::new("key");\n'
+            "    let id = client.charge.id;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 18, SiteShape.CALL, "new", ("Client", "new"), True),
+        a_hit(
+            repo,
+            "main.rs",
+            5,
+            21,
+            SiteShape.ATTRIBUTE,
+            "charge",
+            ("Client", "charge"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.rs",
+            5,
+            28,
+            SiteShape.ATTRIBUTE,
+            "id",
+            ("Client", "charge", "id"),
+            True,
+        ),
+    )
+
+
+# Spec AC4: a chain on an untracked receiver stays invisible.
+def test_an_untracked_receiver_chain_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn main() {\n"
+            "    let client = build();\n"
+            "    client.charges().create(&params);\n"
+            "    let amount = client.amount;\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == ()
+
+
+# Spec AC4: parentheses around a bound receiver unwrap.
+def test_a_parenthesized_receiver_chain_is_rooted(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn main() {\n"
+            '    let client = Client::new("key");\n'
+            "    (client).charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(repo, "main.rs", 4, 18, SiteShape.CALL, "new", ("Client", "new"), True),
+        a_hit(
+            repo,
+            "main.rs",
+            5,
+            5,
+            SiteShape.CALL,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.rs",
+            5,
+            5,
+            SiteShape.CALL,
+            "create",
+            ("Client", "charges", "create"),
+            True,
+        ),
     )

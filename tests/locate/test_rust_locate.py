@@ -300,3 +300,60 @@ def test_the_rust_api_is_exported():
     assert locate.RustLocateConfig is RustLocateConfig
     assert locate.locate_rust is locate_rust
     assert {"RustLocateConfig", "locate_rust"} <= set(locate.__all__)
+
+
+MAPPED_CHAIN = RustLocateConfig(
+    sdk_package="stripe",
+    operations={"POST /v1/charges": "Client.charges.create"},
+)
+MAPPED_FACTORY = RustLocateConfig(
+    sdk_package="stripe",
+    operations={"POST /v1/charges": "Client.charges.create"},
+    receivers={"make_client": "Client"},
+)
+
+
+# Spec AC6: a mapped operation resolves a bound receiver chain.
+def test_an_operation_mapping_resolves_a_receiver_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn main() {\n"
+            '    let client = Client::new("key");\n'
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = locate_rust(a_removed_endpoint(), repo, MAPPED_CHAIN)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.rs", 5, 5, SiteShape.CALL, "create")]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+# Spec AC3/M4: locate_rust passes the receiver mapping to the scanner.
+def test_a_receiver_mapping_resolves_an_operation_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "fn main() {\n"
+            '    let client = make_client("key");\n'
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = locate_rust(a_removed_endpoint(), repo, MAPPED_FACTORY)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.rs", 3, 5, SiteShape.CALL, "create")]
+    assert result.ambiguous == ()
+    assert result.reason is None

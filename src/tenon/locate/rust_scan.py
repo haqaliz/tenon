@@ -375,13 +375,51 @@ class _Visitor:
                     self._emit(field, SiteShape.KEYWORD, _text(field), chain, True)
         self._visit_children(node)
 
+    def _receiver(self, node: Node | None) -> tuple[str, ...] | None:
+        """The type chain a bound receiver expression stands for."""
+        node = _unwrap(node)
+        if node is None:
+            return None
+        if node.type == "identifier":
+            binding = self._bindings.get(_text(node))
+            return binding.chain if binding is not None else None
+        if node.type == "field_expression":
+            value = node.child_by_field_name("value")
+            field = node.child_by_field_name("field")
+        elif node.type == "call_expression":
+            function = node.child_by_field_name("function")
+            if function is None or function.type != "field_expression":
+                return None
+            value = function.child_by_field_name("value")
+            field = function.child_by_field_name("field")
+        else:
+            return None
+        chain = self._receiver(value)
+        if chain is None or field is None:
+            return None
+        return chain + (_text(field),)
+
     def _field(self, node: Node) -> None:
         value = _unwrap(node.child_by_field_name("value"))
         field = node.child_by_field_name("field")
-        if value is not None and value.type == "identifier" and field is not None:
-            binding = self._bindings.get(_text(value))
-            if binding is not None:
+        if value is not None and field is not None:
+            binding = (
+                self._bindings.get(_text(value))
+                if value.type == "identifier"
+                else None
+            )
+            if binding is not None and binding.literal:
                 self._emit(field, SiteShape.ATTRIBUTE, _text(field), binding.chain, True)
+            else:
+                chain = self._receiver(value)
+                if chain is not None:
+                    self._emit(
+                        field,
+                        SiteShape.ATTRIBUTE,
+                        _text(field),
+                        chain + (_text(field),),
+                        True,
+                    )
         self._visit_children(node)
 
     def _argument(self, argument: Node, call_chain: tuple[str, ...]) -> None:
@@ -411,17 +449,27 @@ class _Visitor:
 
     def _call(self, node: Node) -> None:
         function = node.child_by_field_name("function")
-        ref = _callee_ref(function, self._roots, self._crate)
         call_chain: tuple[str, ...] | None = None
-        if ref is not None:
-            chain, rooted = ref
-            if rooted:
-                self.rooted = True
-                call_chain = chain
-                if chain:
-                    self._emit(function, SiteShape.CALL, chain[-1], chain, True)
-            elif function is not None and function.type == "scoped_identifier":
-                self._emit(function, SiteShape.CALL, chain[-1], chain, False)
+        if function is not None and function.type == "field_expression":
+            method = function.child_by_field_name("field")
+            receiver = self._receiver(function.child_by_field_name("value"))
+            if receiver is not None and method is not None:
+                call_chain = receiver + (_text(method),)
+                self._emit(function, SiteShape.CALL, _text(method), call_chain, True)
+                value = function.child_by_field_name("value")
+                if value is not None:
+                    self.visit(value)
+        else:
+            ref = _callee_ref(function, self._roots, self._crate)
+            if ref is not None:
+                chain, rooted = ref
+                if rooted:
+                    self.rooted = True
+                    call_chain = chain
+                    if chain:
+                        self._emit(function, SiteShape.CALL, chain[-1], chain, True)
+                elif function is not None and function.type == "scoped_identifier":
+                    self._emit(function, SiteShape.CALL, chain[-1], chain, False)
         arguments = node.child_by_field_name("arguments")
         if arguments is not None:
             if call_chain is not None:
