@@ -223,6 +223,14 @@ class RunStore:
             row = self._get_row(run_id)
         return None if row is None else _row_to_run(row)
 
+    def find_by_idempotency_key(self, key: str | None) -> Run | None:
+        """The run for one key, or None; keeps the create path's replay cheap."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM runs WHERE idempotency_key = ?", (key,)
+            ).fetchone()
+        return None if row is None else _row_to_run(row)
+
     def list(self, limit: int = 50) -> tuple[Run, ...]:
         limit = max(1, min(limit, 200))
         with self._lock:

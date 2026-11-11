@@ -96,6 +96,16 @@ def test_create_with_distinct_keys_makes_distinct_runs(tmp_path):
     assert second.idempotency_key == "key-two"
 
 
+# Spec AC2: the key lookup returns the existing run and None when absent.
+def test_find_by_idempotency_key_returns_the_run_or_none(tmp_path):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api", idempotency_key="key-one")
+
+    assert store.find_by_idempotency_key("key-one") == created
+    assert store.find_by_idempotency_key("key-two") is None
+    assert store.find_by_idempotency_key(None) is None
+
+
 # Spec AC7: reopening the file preserves the rows.
 def test_reopening_the_store_preserves_runs(tmp_path):
     first_store = a_store(tmp_path)
