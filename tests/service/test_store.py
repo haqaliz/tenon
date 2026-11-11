@@ -1,5 +1,6 @@
 import sqlite3
 from datetime import datetime, timezone
+from itertools import count
 
 import pytest
 
@@ -13,6 +14,11 @@ def a_now():
     return NOW
 
 
+def a_clock(*values):
+    remaining = iter(values)
+    return lambda: next(remaining)
+
+
 def an_id_factory(*values):
     remaining = iter(values)
     return lambda: next(remaining)
@@ -20,7 +26,8 @@ def an_id_factory(*values):
 
 def a_store(tmp_path, *, name="runs.db", now=a_now, new_id=None):
     if new_id is None:
-        new_id = an_id_factory(*(f"{number:032x}" for number in range(1, 101)))
+        counter = count(1)
+        new_id = lambda: f"{next(counter):032x}"  # noqa: E731
     return RunStore(tmp_path / name, now=now, new_id=new_id)
 
 
@@ -177,3 +184,198 @@ def test_an_in_memory_store_works():
     run = store.create_run("acme/api")
 
     assert store.get(run.id) == run
+
+
+# Spec AC3: claim returns the oldest queued run and marks it running.
+def test_claim_returns_the_oldest_queued_run_and_marks_it_running(tmp_path):
+    times = a_clock(
+        datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc),
+        datetime(2026, 11, 11, 12, 1, tzinfo=timezone.utc),
+        datetime(2026, 11, 11, 12, 2, tzinfo=timezone.utc),
+        datetime(2026, 11, 11, 12, 3, tzinfo=timezone.utc),
+    )
+    store = a_store(tmp_path, now=times)
+    older = store.create_run("acme/api")
+    newer = store.create_run("acme/web")
+
+    claimed = store.claim_next()
+
+    assert claimed.id == older.id
+    assert claimed.bundle == "acme/api"
+    assert claimed.status == "running"
+    assert claimed.started_at == "2026-11-11T12:02:00+00:00"
+    assert store.get(older.id).status == "running"
+    assert store.get(newer.id).status == "queued"
+
+
+# Spec AC3: equal created_at values are claimed in insertion order.
+def test_claim_breaks_ties_by_insertion_order(tmp_path):
+    store = a_store(tmp_path)
+    first = store.create_run("acme/api")
+    second = store.create_run("acme/web")
+
+    assert store.claim_next().id == first.id
+    assert store.claim_next().id == second.id
+
+
+# Spec AC3: an empty queue claims None and a claimed run is never reclaimed.
+def test_claim_is_none_when_empty_and_never_repeats(tmp_path):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+
+    assert store.claim_next().id == created.id
+    assert store.claim_next() is None
+
+
+# Spec AC4: finish succeeds a running run with exit, report and finished_at.
+def test_finish_succeeded_records_exit_report_and_timestamp(tmp_path):
+    times = a_clock(
+        datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc),
+        datetime(2026, 11, 11, 12, 1, tzinfo=timezone.utc),
+        datetime(2026, 11, 11, 12, 2, tzinfo=timezone.utc),
+    )
+    store = a_store(tmp_path, now=times)
+    created = store.create_run("acme/api")
+    store.claim_next()
+
+    finished = store.finish(
+        created.id,
+        status="succeeded",
+        exit=0,
+        report={"results": [], "summary": {"changed": 0}},
+    )
+
+    assert finished.status == "succeeded"
+    assert finished.exit == 0
+    assert finished.report == {"results": [], "summary": {"changed": 0}}
+    assert finished.error is None
+    assert finished.finished_at == "2026-11-11T12:02:00+00:00"
+    assert store.get(created.id) == finished
+
+
+# Spec AC4: a failed run keeps its exit code and error.
+def test_finish_failed_records_the_exit_and_error(tmp_path):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+    store.claim_next()
+
+    finished = store.finish(
+        created.id,
+        status="failed",
+        exit=1,
+        report=None,
+        error="runner exited 1: boom",
+    )
+
+    assert finished.status == "failed"
+    assert finished.exit == 1
+    assert finished.report is None
+    assert finished.error == "runner exited 1: boom"
+    assert finished.finished_at == STAMP
+
+
+# Spec AC4: finish status is only succeeded or failed.
+@pytest.mark.parametrize("status", ["queued", "running", "done", ""])
+def test_finish_rejects_an_invalid_status(tmp_path, status):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+    store.claim_next()
+
+    with pytest.raises(ValueError):
+        store.finish(created.id, status=status, exit=0, report=None)
+
+
+# Spec AC4: only a running run can finish.
+def test_finish_rejects_a_queued_run(tmp_path):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+
+    with pytest.raises(ValueError):
+        store.finish(created.id, status="succeeded", exit=0, report=None)
+
+
+# Spec AC4: a finished run cannot finish twice.
+def test_finish_rejects_a_second_finish(tmp_path):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+    store.claim_next()
+    store.finish(created.id, status="succeeded", exit=0, report=None)
+
+    with pytest.raises(ValueError):
+        store.finish(created.id, status="failed", exit=1, report=None)
+
+
+# Spec AC4: an unknown run cannot finish.
+def test_finish_rejects_an_unknown_run(tmp_path):
+    store = a_store(tmp_path)
+
+    with pytest.raises(ValueError):
+        store.finish("f" * 32, status="succeeded", exit=0, report=None)
+
+
+# Spec AC4: the stored report is canonical JSON.
+def test_finish_stores_the_report_as_canonical_json(tmp_path):
+    path = tmp_path / "runs.db"
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+    store.claim_next()
+    store.finish(
+        created.id,
+        status="succeeded",
+        exit=0,
+        report={"z": 1, "a": {"two": 2, "one": 1}},
+    )
+    store.close()
+
+    with sqlite3.connect(path) as connection:
+        stored = connection.execute(
+            "SELECT report FROM runs WHERE id = ?", (created.id,)
+        ).fetchone()[0]
+
+    assert stored == '{"a":{"one":1,"two":2},"z":1}'
+
+
+# Spec AC5: list returns newest-first.
+def test_list_is_newest_first(tmp_path):
+    times = a_clock(
+        datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc),
+        datetime(2026, 11, 11, 12, 1, tzinfo=timezone.utc),
+        datetime(2026, 11, 11, 12, 2, tzinfo=timezone.utc),
+    )
+    store = a_store(tmp_path, now=times)
+    first = store.create_run("acme/one")
+    second = store.create_run("acme/two")
+    third = store.create_run("acme/three")
+
+    assert store.list() == (third, second, first)
+
+
+# Spec AC5: list accepts a limit and returns a tuple.
+def test_list_respects_the_limit(tmp_path):
+    store = a_store(tmp_path)
+    for number in range(3):
+        store.create_run(f"acme/{number}")
+
+    listed = store.list(limit=2)
+
+    assert isinstance(listed, tuple)
+    assert len(listed) == 2
+
+
+# Spec AC5: the default limit is 50.
+def test_list_defaults_to_fifty(tmp_path):
+    store = a_store(tmp_path)
+    for number in range(51):
+        store.create_run(f"acme/{number}")
+
+    assert len(store.list()) == 50
+
+
+# Spec AC5: the limit is bounded to 1..200.
+def test_list_clamps_the_limit_to_one_and_two_hundred(tmp_path):
+    store = a_store(tmp_path)
+    for number in range(201):
+        store.create_run(f"acme/{number}")
+
+    assert len(store.list(limit=0)) == 1
+    assert len(store.list(limit=500)) == 200

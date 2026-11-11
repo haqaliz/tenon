@@ -5,7 +5,7 @@ import sqlite3
 import threading
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -137,12 +137,73 @@ class RunStore:
                 )
             return run
 
-    def get(self, run_id: str) -> Run | None:
+    def claim_next(self) -> Run | None:
         with self._lock:
             row = self._connection.execute(
-                "SELECT * FROM runs WHERE id = ?", (run_id,)
+                "SELECT * FROM runs WHERE status = 'queued'"
+                " ORDER BY created_at, rowid LIMIT 1"
             ).fetchone()
+            if row is None:
+                return None
+            started_at = self._now().isoformat()
+            with self._connection:
+                self._connection.execute(
+                    "UPDATE runs SET status = 'running', started_at = ?"
+                    " WHERE id = ? AND status = 'queued'",
+                    (started_at, row["id"]),
+                )
+            return replace(_row_to_run(row), status="running", started_at=started_at)
+
+    def finish(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        exit: int,
+        report: dict | None,
+        error: str | None = None,
+    ) -> Run:
+        if status not in ("succeeded", "failed"):
+            raise ValueError(f"invalid finish status: {status}")
+        with self._lock:
+            row = self._get_row(run_id)
+            if row is None:
+                raise ValueError(f"unknown run: {run_id}")
+            if row["status"] != "running":
+                raise ValueError(f"run {run_id} is {row['status']}, not running")
+            with self._connection:
+                self._connection.execute(
+                    "UPDATE runs SET status = ?, finished_at = ?, exit = ?,"
+                    " report = ?, error = ? WHERE id = ? AND status = 'running'",
+                    (
+                        status,
+                        self._now().isoformat(),
+                        exit,
+                        None if report is None else _canonical_json(report),
+                        error,
+                        run_id,
+                    ),
+                )
+            return _row_to_run(self._get_row(run_id))
+
+    def get(self, run_id: str) -> Run | None:
+        with self._lock:
+            row = self._get_row(run_id)
         return None if row is None else _row_to_run(row)
+
+    def list(self, limit: int = 50) -> tuple[Run, ...]:
+        limit = max(1, min(limit, 200))
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM runs ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return tuple(_row_to_run(row) for row in rows)
+
+    def _get_row(self, run_id: str) -> sqlite3.Row | None:
+        return self._connection.execute(
+            "SELECT * FROM runs WHERE id = ?", (run_id,)
+        ).fetchone()
 
     def close(self) -> None:
         with self._lock:
