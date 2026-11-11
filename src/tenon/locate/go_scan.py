@@ -5,7 +5,7 @@ certain is decided elsewhere.
 """
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -167,6 +167,15 @@ def _unwrap(node: Node | None) -> Node | None:
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class _Binding:
+    """A name bound to a rooted type, its literal fields and its evidence kind."""
+
+    chain: tuple[str, ...]
+    fields: tuple[Node, ...] = ()
+    literal: bool = False
+
+
 class _Visitor:
     """Emit rooted calls, literal fields and field accesses."""
 
@@ -174,10 +183,12 @@ class _Visitor:
         self,
         source: _Source,
         roots: dict[str, tuple[str, ...]],
+        receivers: Mapping[str, str],
     ) -> None:
         self._source = source
         self._roots = roots
-        self._bindings: dict[str, tuple[tuple[str, ...], tuple[Node, ...]]] = {}
+        self._receivers = receivers
+        self._bindings: dict[str, _Binding] = {}
         self.hits: list[Hit] = []
 
     def _emit(
@@ -208,6 +219,8 @@ class _Visitor:
 
     def _type_chain(self, type_node: Node | None) -> tuple[str, ...] | None:
         """The canonical chain of a rooted qualified type, else ``None``."""
+        while type_node is not None and type_node.type == "pointer_type":
+            type_node = type_node.named_children[0] if type_node.named_children else None
         if type_node is None or type_node.type != "qualified_type":
             return None
         package = type_node.child_by_field_name("package")
@@ -235,22 +248,53 @@ class _Visitor:
         return tuple(keys)
 
     def _bind(self, name: str, value: Node | None) -> None:
-        literal = _unwrap(value)
-        if literal is None or literal.type != "composite_literal":
+        binding = self._evidence(value)
+        if binding is None:
             self._bindings.pop(name, None)
-            return
-        chain = self._type_chain(literal.child_by_field_name("type"))
-        if chain is None:
-            self._bindings.pop(name, None)
-            return
-        self._bindings[name] = (chain, self._keys(literal))
+        else:
+            self._bindings[name] = binding
+
+    def _evidence(self, value: Node | None) -> _Binding | None:
+        """The rooted type a value binds, from a literal or a mapped factory."""
+        node = _unwrap(value)
+        if node is None:
+            return None
+        if node.type == "composite_literal":
+            chain = self._type_chain(node.child_by_field_name("type"))
+            if chain is None:
+                return None
+            return _Binding(chain, self._keys(node), True)
+        if node.type == "call_expression":
+            return self._call_evidence(node)
+        return None
+
+    def _call_evidence(self, call: Node) -> _Binding | None:
+        """The type a mapped factory call binds, if its key matches."""
+        function = call.child_by_field_name("function")
+        if function is None or function.type != "selector_expression":
+            return None
+        package = function.child_by_field_name("operand")
+        field = function.child_by_field_name("field")
+        if package is None or field is None or package.type != "identifier":
+            return None
+        name = _text(package)
+        if name not in self._roots:
+            return None
+        for key in (f"{name}.{_text(field)}", _text(field)):
+            mapped = self._receivers.get(key)
+            if mapped is None:
+                continue
+            chain = tuple(part for part in mapped.split(".") if part)
+            if chain:
+                return _Binding(chain)
+        return None
 
     def _bind_type(self, name: str, type_node: Node | None) -> None:
         chain = self._type_chain(type_node)
         if chain is None:
             self._bindings.pop(name, None)
         else:
-            self._bindings[name] = (chain, ())
+            self._bindings[name] = _Binding(chain)
 
     def _short_var(self, node: Node) -> None:
         left = node.child_by_field_name("left")
@@ -316,8 +360,8 @@ class _Visitor:
             and field is not None
             and _text(operand) in self._bindings
         ):
-            chain, _ = self._bindings[_text(operand)]
-            self._emit(field, SiteShape.ATTRIBUTE, _text(field), chain, True)
+            binding = self._bindings[_text(operand)]
+            self._emit(field, SiteShape.ATTRIBUTE, _text(field), binding.chain, True)
         self._visit_children(node)
 
     def _argument(self, argument: Node, call_chain: tuple[str, ...]) -> None:
@@ -332,8 +376,7 @@ class _Visitor:
         elif node.type == "identifier":
             binding = self._bindings.get(_text(node))
             if binding is not None:
-                _, keys = binding
-                for key in keys:
+                for key in binding.fields:
                     self._emit(key, SiteShape.KEYWORD, _text(key), call_chain, True)
         elif node.type == "selector_expression":
             operand = node.child_by_field_name("operand")
@@ -398,7 +441,10 @@ class _Visitor:
 
 
 def scan_go(
-    root: str | Path, sdk_package: str, package_name: str | None = None
+    root: str | Path,
+    sdk_package: str,
+    package_name: str | None = None,
+    receivers: Mapping[str, str] | None = None,
 ) -> ScanResult:
     """Parse ``root`` read-only and report SDK-rooted Go evidence."""
     modules: list[str] = []
@@ -407,7 +453,7 @@ def scan_go(
         roots, sdk_imported = _imports(module.tree, sdk_package, package_name)
         if not sdk_imported:
             continue
-        visitor = _Visitor(module.source, roots)
+        visitor = _Visitor(module.source, roots, receivers or {})
         visitor.visit(module.tree.root_node)
         modules.append(module.rel)
         hits.extend(visitor.hits)

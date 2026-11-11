@@ -20,6 +20,14 @@ def a_hit(repo, path, line, column, shape, symbol, chain=(), rooted=False):
     return Hit(path, line, column, shape, symbol, chain, rooted, line_text)
 
 
+def a_attributes(result):
+    return [
+        (hit.symbol, hit.rooted)
+        for hit in result.hits
+        if hit.shape is SiteShape.ATTRIBUTE
+    ]
+
+
 # Spec AC2: the root import's inferred package name roots its calls.
 def test_a_root_import_roots_the_call(tmp_path):
     repo = a_repo(
@@ -664,3 +672,215 @@ def test_a_var_with_a_rooted_literal_binds_the_name(tmp_path):
         a_hit(repo, "main.go", 9, 38, SiteShape.KEYWORD, "Amount", ("charge", "New"), True),
         a_hit(repo, "main.go", 10, 5, SiteShape.CALL, "New", ("charge", "New"), True),
     )
+
+
+# Spec AC1: a pointer annotation binds the receiver type.
+def test_a_pointer_annotation_binds_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    var client *stripe.Client\n"
+            "    client.Charges\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == [("Charges", True)]
+
+
+# Spec AC1: a value annotation binds the receiver type.
+def test_a_value_annotation_binds_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    var client stripe.Client\n"
+            "    client.Charges\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == [("Charges", True)]
+
+
+# Spec AC2: an address-of composite binds the receiver type.
+def test_an_address_of_composite_binds_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            '    client := &stripe.Client{ID: "x"}\n'
+            "    client.Charges\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == [("Charges", True)]
+
+
+# Spec AC2: a value composite binds the receiver type.
+def test_a_value_composite_binds_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    client := stripe.Client{}\n"
+            "    client.Charges\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == [("Charges", True)]
+
+
+# Spec AC3: a source dotted factory key binds the mapped type.
+def test_a_source_dotted_factory_key_binds_the_mapped_type(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            '    client := stripe.NewClient("k")\n'
+            "    client.Charges\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE, receivers={"stripe.NewClient": "Client"})
+
+    assert a_attributes(result) == [("Charges", True)]
+
+
+# Spec AC3: a canonical factory key drops the package prefix.
+def test_a_canonical_factory_key_binds_the_mapped_type(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}/charge"\n'
+            "\n"
+            "func main() {\n"
+            '    client := charge.NewClient("k")\n'
+            "    client.Charges\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE, receivers={"NewClient": "Client"})
+
+    assert a_attributes(result) == [("Charges", True)]
+
+
+# Spec AC3: a subpackage key matches the source chain.
+def test_a_subpackage_factory_key_matches_the_source_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}/charge"\n'
+            "\n"
+            "func main() {\n"
+            '    client := charge.New("k")\n'
+            "    client.Charges\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE, receivers={"charge.New": "Client"})
+
+    assert a_attributes(result) == [("Charges", True)]
+
+
+# Spec AC3: an unmapped factory is not evidence.
+def test_an_unmapped_factory_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            '    client := stripe.Unknown("k")\n'
+            "    client.Charges\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE, receivers={"NewClient": "Client"})
+
+    assert a_attributes(result) == []
+
+
+# Spec AC5: a rebinding without evidence clears the receiver.
+def test_a_rebinding_without_evidence_clears_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            '    client := stripe.NewClient("k")\n'
+            "    client = other.Thing\n"
+            "    client.Charges\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE, receivers={"NewClient": "Client"})
+
+    assert a_attributes(result) == []
+
+
+# Spec AC5: a rebinding with new evidence replaces the receiver.
+def test_a_rebinding_with_new_evidence_replaces_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    var client *stripe.Old\n"
+            '    client = stripe.NewClient("k")\n'
+            "    client.Charges\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE, receivers={"NewClient": "Client"})
+
+    assert a_attributes(result) == [("Charges", True)]
