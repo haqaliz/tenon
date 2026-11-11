@@ -96,6 +96,18 @@ def test_exit_two_uses_the_stderr_as_the_error(tmp_path):
     assert outcome.error == "boom"
 
 
+# Spec AC4: the CLI writes --json errors to stdout; use that message before stderr.
+def test_exit_two_uses_the_json_error_message(tmp_path):
+    stdout = '{"error":{"kind":"usage","message":"--api-token is required"}}'
+    runner, _calls = a_runner(a_completed(returncode=2, stdout=stdout))
+
+    outcome = runner.run(tmp_path / "bundle.json")
+
+    assert outcome.exit == 2
+    assert outcome.report is None
+    assert outcome.error == "--api-token is required"
+
+
 # Spec AC4: a non-JSON stdout at exit 0/1 is a named error.
 def test_exit_zero_without_json_is_an_invalid_report(tmp_path):
     runner, _calls = a_runner(a_completed(stdout="not json"))

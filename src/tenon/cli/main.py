@@ -56,9 +56,9 @@ from tenon.propose import propose
 from tenon.prove import ProofPlan, proof_rank, prove_plan, tail
 from tenon.provider import MigrationBundle, load_bundle, load_repos
 from tenon.service import RunStore
-from tenon.service.api import Api
+from tenon.service.api import Api, resolve_bundle
 from tenon.service.http import serve
-from tenon.service.runner import CommandRunner
+from tenon.service.runner import CommandRunner, Outcome as RunOutcome
 from tenon.service.store import StoreError
 from tenon.service.worker import Worker
 
@@ -763,6 +763,19 @@ def _serve_command(args: argparse.Namespace, bundle: Path) -> list[str]:
     return command
 
 
+# Spec AC4: the worker maps a queued record to its confined bundle path.
+def _serve_execute(runner: CommandRunner, bundles: Path):
+    def execute(run) -> RunOutcome:
+        bundle = resolve_bundle(bundles, run.bundle)
+        if bundle is None:
+            return RunOutcome(
+                None, None, f"bundle is not available: {run.bundle}"
+            )
+        return runner.run(bundle)
+
+    return execute
+
+
 # Spec AC1/AC2/AC4: validate the config, then serve one worker and the API.
 def _serve(args: argparse.Namespace) -> int:
     token = args.api_token or os.environ.get("TENON_API_TOKEN")
@@ -784,7 +797,7 @@ def _serve(args: argparse.Namespace) -> int:
     runner = CommandRunner(
         lambda bundle: _serve_command(args, bundle), timeout=args.run_timeout
     )
-    worker = Worker(store, runner.run, poll=args.poll)
+    worker = Worker(store, _serve_execute(runner, bundles), poll=args.poll)
     api = Api(store, bundles, token, webhook_secret=secret)
     try:
         server = serve(api, args.host, args.port)

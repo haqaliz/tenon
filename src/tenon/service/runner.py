@@ -18,9 +18,19 @@ class Outcome:
     error: str | None
 
 
+def _error_message(result: subprocess.CompletedProcess) -> str:
+    """The CLI's ``--json`` error message, when stdout is one."""
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, ValueError):
+        return ""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    message = error.get("message") if isinstance(error, dict) else None
+    return message if isinstance(message, str) else ""
+
+
 class CommandRunner:
     """The shipped CLI as one injectable subprocess."""
-
     def __init__(
         self,
         builder: Callable[[Path], list[str]],
@@ -49,7 +59,11 @@ class CommandRunner:
 
         # Spec AC4: only the CLI's completed envelope (0/1) carries a report.
         if result.returncode not in (0, 1):
-            return Outcome(result.returncode, None, tail(result.stderr))
+            return Outcome(
+                result.returncode,
+                None,
+                tail(_error_message(result) or result.stderr),
+            )
         try:
             report = json.loads(result.stdout)
         except json.JSONDecodeError as error:

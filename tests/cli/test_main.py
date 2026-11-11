@@ -4900,6 +4900,36 @@ def test_provider_serve_does_not_hit_the_remote_guard(
     assert "--remote" not in captured.err
 
 
+# Spec AC4: the worker maps a run's bundle name to a confined path before the runner.
+def test_serve_execute_resolves_the_bundle_name(tmp_path):
+    from tenon.service import Run
+    from tenon.service.runner import Outcome as RunOutcome
+
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    bundle = bundles / "demo.json"
+    bundle.write_text("{}")
+    seen = []
+
+    class FakeRunner:
+        def run(self, path):
+            seen.append(path)
+            return RunOutcome(0, {"command": "provider"}, None)
+
+    execute = cli_main._serve_execute(FakeRunner(), bundles)
+    done = execute(
+        Run(id="a", bundle="demo.json", status="queued", created_at="t")
+    )
+    missing = execute(
+        Run(id="b", bundle="../demo.json", status="queued", created_at="t")
+    )
+
+    assert seen == [bundle.resolve()]
+    assert done.exit == 0
+    assert missing.exit is None
+    assert "not available" in missing.error
+
+
 # Spec AC1/AC4: the child argv runs the shipped installed fan-out and opens a PR.
 def test_serve_command_builds_the_installed_migrate_argv(tmp_path):
     args = a_serve_args(tmp_path)
