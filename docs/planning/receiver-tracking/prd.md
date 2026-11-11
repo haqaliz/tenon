@@ -4,7 +4,7 @@
 - **Capability:** **T12 Receiver tracking** (post-T11 hardening; the original roadmap ends at T11)
   — **first slice: Rust and Go**
 - **Milestone:** the next phase after Phase 3; T12b (C#, Python, TypeScript) follows
-- **Status:** draft for review
+- **Status:** implemented 2026-11-12 (`src/tenon/locate/{rust,go}_*.py`, `--receiver`; 2,338 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **Post-T11 hardening — receiver tracking** (a follow-up to the T11 locator limits)
 - **Milestone:** next phase after Phase 3; the original roadmap ends at T11
+- **State:** T12a (Rust/Go) shipped 2026-11-12 (`src/tenon/locate/{rust,go}_*.py`, `--receiver`; 2,338 tests); T12b (C#/Python/TS) not started
 - **Branch:** `feat/receiver-tracking/aliz`
 - **Worktree:** `.claude/worktrees/feat-receiver-tracking`
 
