@@ -408,6 +408,130 @@ def test_language_go_with_source_mcp_is_named(a_mcp_repo, a_mcp_specs, capsys):
     assert "Traceback" not in err
 
 
+# Spec AC4: --receiver is a repeatable common check/fix flag.
+@pytest.mark.parametrize("command", ["check", "fix"])
+def test_receiver_is_a_repeatable_common_flag(command):
+    args = cli_main._parser().parse_args(
+        [
+            command,
+            ".",
+            "--old",
+            "old.yaml",
+            "--new",
+            "new.yaml",
+            "--receiver",
+            "a=b",
+            "--receiver",
+            "c=d",
+        ]
+    )
+
+    assert args.receiver == ["a=b", "c=d"]
+
+
+# Spec AC4: --receiver reaches the Rust config and wins over the file.
+def test_receiver_flag_reaches_the_rust_config(tmp_path):
+    (tmp_path / "tenon.toml").write_text(
+        '[locate]\nlanguage = "rust"\nsdk_package = "stripe"\n'
+        '\n[locate.receivers]\n"stripe.NewClient" = "FileClient"\n'
+    )
+    args = cli_main._parser().parse_args(
+        [
+            "check",
+            str(tmp_path),
+            "--old",
+            "old.yaml",
+            "--new",
+            "new.yaml",
+            "--receiver",
+            "stripe.NewClient=FlagClient",
+            "--receiver",
+            "stripe.NewOther=Other",
+        ]
+    )
+
+    config = cli_main._config(args)
+
+    assert isinstance(config.locate, RustLocateConfig)
+    assert dict(config.locate.receivers) == {
+        "stripe.NewClient": "FlagClient",
+        "stripe.NewOther": "Other",
+    }
+
+
+# Spec AC5: the no-config --sdk-package fallback builds the receiver mapping.
+@pytest.mark.parametrize(
+    ("language", "sdk_package", "expected_type"),
+    [
+        ("rust", "stripe", RustLocateConfig),
+        ("go", "github.com/stripe/stripe-go/v76", GoLocateConfig),
+    ],
+)
+def test_missing_config_fallback_builds_the_receivers(
+    tmp_path, language, sdk_package, expected_type
+):
+    args = cli_main._parser().parse_args(
+        [
+            "check",
+            str(tmp_path),
+            "--old",
+            "old.yaml",
+            "--new",
+            "new.yaml",
+            "--language",
+            language,
+            "--sdk-package",
+            sdk_package,
+            "--receiver",
+            "stripe.NewClient=Client",
+        ]
+    )
+
+    config = cli_main._config(args)
+
+    assert isinstance(config.locate, expected_type)
+    assert dict(config.locate.receivers) == {"stripe.NewClient": "Client"}
+
+
+# Spec AC4: the receiver flag is ignored for a Python config.
+def test_receiver_flag_is_ignored_for_python(a_repo):
+    args = cli_main._parser().parse_args(
+        [
+            "check",
+            str(a_repo),
+            "--old",
+            "old.yaml",
+            "--new",
+            "new.yaml",
+            "--receiver",
+            "a=b",
+        ]
+    )
+
+    config = cli_main._config(args)
+
+    assert isinstance(config.locate, LocateConfig)
+    assert not hasattr(config.locate, "receivers")
+
+
+# Spec AC4: a malformed --receiver is one named config error.
+def test_receiver_flag_rejects_a_malformed_pair(a_rust_repo, capsys):
+    assert (
+        a_check(
+            a_rust_repo.repo,
+            a_rust_repo.specs,
+            "--receiver",
+            "missing-equals",
+        )
+        == 2
+    )
+
+    err = capsys.readouterr().err
+    assert "--receiver" in err
+    assert "unrecognized" not in err
+    assert "Traceback" not in err
+
+
 # Spec AC1: --language csharp is a parser choice.
 def test_csharp_language_is_a_parser_choice():
     args = cli_main._parser().parse_args(

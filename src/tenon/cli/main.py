@@ -147,6 +147,13 @@ def _common(parser: argparse.ArgumentParser) -> None:
         help="map a schema field to a Python name",
     )
     parser.add_argument(
+        "--receiver",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="map a Rust/Go factory expression to a type chain",
+    )
+    parser.add_argument(
         "--breaking-only",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -403,6 +410,7 @@ def _config(args: argparse.Namespace) -> CliConfig:
         package_name=args.package_name,
         operations=args.operation,
         fields=args.field,
+        receivers=args.receiver,
         command=getattr(args, "check", None),
         build=getattr(args, "build", None),
         characterize=getattr(args, "characterize", None),
