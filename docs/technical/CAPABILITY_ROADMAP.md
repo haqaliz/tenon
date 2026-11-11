@@ -13,7 +13,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | **Shipped 2026-11-06** |
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Shipped 2026-11-07** |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
-| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Partial 2026-11-10** — GitHub App remote, provider bundle, local fan-out and installed fan-out shipped; hosted/webhook-driven service not started |
+| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Shipped 2026-11-11 (MVP)** — GitHub App remote, provider bundle, local/installed fan-out and a self-hosted service; a hardened cloud deployment is later |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Shipped 2026-11-11** — Rust, Go and C# locators |
 
 ### T1 as shipped (2026-10-26)
@@ -300,6 +300,20 @@ Known limits: fluent/property chains on untracked values, `using static`, `dynam
 generics inference, `csproj` parsing and multi-hop initializer flow are not followed (no site, not a
 guess); a local type sharing an SDK simple name is a documented false positive; a mapped spelling
 locates but is not auto-edited unless it equals the spec's old name.
+
+### T10e as built (2026-11-11)
+
+`src/tenon/service/`: a SQLite `RunStore` (queued/running/succeeded/failed, timestamps, exit, the
+fan-out report JSON, errors, idempotency keys, and a deduplicated webhook-event log), a
+`CommandRunner` that invokes the shipped installed fan-out as one CLI subprocess, one `Worker`
+thread, a pure `Api.handle` with bearer auth, confined bundle names, `POST /runs`,
+`GET /runs/{id}`, `GET /runs`, `GET /health` and a HMAC-verified `POST /webhooks/github`, and a
+stdlib HTTP wrapper. `tenon provider serve --bundles DIR --db PATH --api-token TOKEN ...` starts the
+worker and server; `--dry-run` omits `--open-pr`. 2,235 tests, offline.
+
+Known limits: self-hosted and local-only; no TLS, rate limiting or a reverse proxy (the token and
+webhook secret are the only guards); one sequential worker, no retries/cancel/parallelism; SQLite is
+the store; a run can outlive the HTTP request; a hardened cloud deployment is a later card.
 
 
 

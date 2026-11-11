@@ -40,11 +40,12 @@ Milestone order is my proposal; reorder freely.
 
 GitHub App, provider-facing migration PRs, hosted. Go, Rust and C# locators on demand.
 
-**T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider fan-out) and
-T10d (installed provider fan-out) shipped 2026-11-10; T11a (Rust locator), T11b (Go locator) and
-T11c (C# locator) shipped 2026-11-11** (`src/tenon/pr/{app,api,github_app,installed}.py`,
-`src/tenon/provider/`, `src/tenon/locate/{rust,go,csharp}_*.py`, CLI; 2,099 tests). The
-hosted/webhook-driven service is not started; T11 is complete.
+**T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider fan-out),
+T10d (installed provider fan-out) and T10e (hosted service MVP) shipped 2026-11-11; T11a (Rust
+locator), T11b (Go locator) and T11c (C# locator) shipped 2026-11-11**
+(`src/tenon/pr/{app,api,github_app,installed}.py`, `src/tenon/provider/`, `src/tenon/service/`,
+`src/tenon/locate/{rust,go,csharp}_*.py`, CLI; 2,235 tests). The self-hosted service is local-only
+(no TLS/deployment); a hardened hosted deployment and fluent-chain receiver tracking are not started.
 
 ---
 

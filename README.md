@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20Rust%20%2B%20Go%20%2B%20C%23%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20provider%20service%20%2B%20Rust%20%2B%20Go%20%2B%20C%23%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -16,9 +16,9 @@ affected calls, and proves the fix against your own checks before it opens a pul
 T5 (PR writer), T6 (TypeScript/JavaScript call-site location), T7 (proof ladder), T8 (MCP
 tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark corpus), T10a (GitHub
 App remote), T10b (provider migration bundle), T10c (local provider fan-out), T10d (installed
-provider fan-out), T11a (Rust call-site location), T11b (Go call-site location), T11c (C# call-site
-location) and the `tenon check` / `tenon fix` / `tenon provider migrate` / `tenon probe` /
-`tenon corpus` CLI are shipped.**
+provider fan-out), T10e (hosted provider service), T11a (Rust call-site location), T11b (Go call-site
+location), T11c (C# call-site location) and the `tenon check` / `tenon fix` / `tenon provider
+migrate` / `tenon provider serve` / `tenon probe` / `tenon corpus` CLI are shipped.**
 `src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed
 `Change` records; `src/tenon/locate/` turns one of those records into call sites with file, line and
 column, and keeps anything it cannot prove in a separate ambiguity list — Python via `ast`,
@@ -31,11 +31,12 @@ after, recording the strongest level that actually passed (`TESTS_PASSED`, `CHAR
 deterministic PR whose title and body state that level, then clones a clean checkout, commits the
 exact diff to a new branch and opens the PR through your own `git` and `gh` or a GitHub App
 installation (`--remote app`); `src/tenon/provider/` loads a portable migration bundle and
-`src/tenon/cli/` runs it through the same pipeline; `src/tenon/probe/` connects to an MCP server
-over stdio, runs tasks through a user-supplied agent and reports what worked; `src/tenon/corpus/`
-records `(change, patch, proof, outcome)` runs and reports by level/outcome. The analysis and proof
-run fully offline; only the final push and PR call touch a remote. Read `CLAUDE.md` before writing
-any code here.
+`src/tenon/cli/` runs it through the same pipeline; `src/tenon/service/` queues one bundle in SQLite,
+runs the installed fan-out with one worker and serves a bearer-token API; `src/tenon/probe/`
+connects to an MCP server over stdio, runs tasks through a user-supplied agent and reports what
+worked; `src/tenon/corpus/` records `(change, patch, proof, outcome)` runs and reports by
+level/outcome. The analysis and proof run fully offline; only the final push and PR call touch a
+remote. Read `CLAUDE.md` before writing any code here.
 
 ## CLI
 
@@ -59,6 +60,9 @@ uv run tenon provider migrate --repos repos.txt \
     --bundle stripe-v2500-v2596.json --open-pr --remote app
 uv run tenon provider migrate --installed \
     --bundle stripe-v2500-v2596.json --open-pr --remote app
+uv run tenon provider serve --bundles ./bundles --db ./tenon.db \
+    --api-token "$TENON_API_TOKEN" --app-id 123 \
+    --app-installation-id 456 --app-private-key app.pem
 uv run tenon probe \
     --server-cmd "python server.py" --tasks tasks.json --agent "python agent.py"
 uv run tenon corpus report --corpus docs/benchmark/corpus.jsonl
@@ -68,8 +72,9 @@ uv run tenon corpus report --corpus docs/benchmark/corpus.jsonl
 and `--open-pr` opens a PR whose title states the level. `--require` chooses the level a run must
 reach; `--build`/`--characterize`/`--replay` add the weaker stages; `--source mcp` selects the MCP
 loader/differ/locator. `provider migrate` runs the same pipeline from a portable JSON bundle and
-prints a provider report; `--repos FILE` runs it once per listed checkout, and `--installed`
-discovers and runs it over the app installation's non-archived repositories. `probe` starts a local MCP
+prints a provider report; `--repos FILE` runs it once per listed checkout, `--installed`
+discovers and runs it over the app installation's non-archived repositories, and `provider serve`
+queues that installed run over HTTP. `probe` starts a local MCP
 server over stdio, runs the task file through your agent command and reports what worked (exit 0 all
 tasks, 1 a failed task, 2 usage/connection).
 `corpus` records a `fix --json` run, updates a human outcome and reports by level/outcome. `--json`
@@ -148,8 +153,9 @@ The inputs are flags or environment variables; a flag wins:
 
 The private key is read from a path; key content is never read from the environment. `--remote`
 requires `--open-pr`, and `--remote gh` (the default) keeps the existing `gh` path. The app remote is
-self-hosted: webhooks and a hosted service are deferred, while `--installed` uses the same app
-identity for discovery and cloning. `--api-url` also targets a self-hosted GitHub Enterprise endpoint.
+self-hosted: a deployment is deferred, while `--installed` uses the same app identity for discovery
+and cloning and `tenon provider serve` exposes the installed fan-out as a local service. `--api-url`
+also targets a self-hosted GitHub Enterprise endpoint.
 
 ### Provider migration bundle
 
@@ -228,9 +234,50 @@ report, summary and exits are the `--repos` fan-out's, with `repo` = `owner/name
 
 The fan-out has no rollback: earlier repos may already have branches or PRs when a later repo fails,
 and the report names every repo. It is sequential and mints one app token per run; parallelism,
-retries, repo filtering, webhooks/a hosted service and a provider note in the PR body are deferred.
+retries, repo filtering and a provider note in the PR body are deferred. `tenon provider serve`
+wraps the installed fan-out in a local service; its own limits are below.
 The bundle and repos file are trusted operator input, not a sandbox: their stage commands run as
 given.
+
+### Provider service
+
+`tenon provider serve --bundles DIR --db PATH --api-token TOKEN [--webhook-secret SECRET]
+[--host 127.0.0.1] [--port 8080] [--run-timeout 3600] [--poll 1.0] [--dry-run]
+[--app-id ID] [--app-installation-id ID] [--app-private-key PATH] [--api-url URL]` starts a
+self-hosted HTTP service and one background worker. `--api-token`/`TENON_API_TOKEN` is required and
+non-empty, `--bundles` must be an existing directory, and `--db` is the SQLite store (created and
+migrated on open); a bad value is a named usage error (exit 2). `--webhook-secret`/
+`TENON_WEBHOOK_SECRET` is optional. `--dry-run` runs the installed fan-out with no PR call. The app
+identity is the T10a one; the child receives the private key path, never its contents.
+
+`POST /runs` with `Authorization: Bearer TOKEN` and `{"bundle": "stripe-v2500-v2596.json"}` queues a
+run and returns 201 `{"id","status":"queued","bundle"}`; an `Idempotency-Key` header returns the
+existing run with 200. The bundle name is relative, must end in `.json` and must resolve inside
+`--bundles`; absolute paths, `..`, symlink escapes, missing files and non-JSON names are 400, and a
+body over 64 KiB is 413. `GET /runs/{id}` returns the durable record including the `report` and
+`exit` once finished, `GET /runs?limit=N` (1..200, default 50) returns `{"runs":[...]}` newest-first,
+and `GET /health` returns `{"status":"ok"}` without auth. Unknown paths are 404, wrong methods 405,
+and auth failures are 401 with `WWW-Authenticate: Bearer`.
+
+`POST /webhooks/github` is exempt from the bearer token but requires `--webhook-secret`; without one
+the route is 404. It verifies `X-Hub-Signature-256: sha256=<hex>` with HMAC-SHA256 in constant time
+(401 on a bad signature), parses a JSON object (400 otherwise), and records
+`X-GitHub-Delivery`/`X-GitHub-Event`/`action`/`installation`/`payload` as 202
+`{"status":"recorded"}`. A duplicate delivery is 202 and leaves one row. Webhooks only record; they
+never start a run.
+
+The worker claims the oldest queued run, invokes the shipped `provider migrate --installed --bundle
+PATH --json` child (`--open-pr --remote app` unless `--dry-run`) once, and stores the fan-out
+report/exit; a nonzero exit, exception or timeout is `failed` with a capped error. All responses are
+canonical JSON (sorted keys, compact separators, one newline). The token and webhook secret are
+compared with `hmac.compare_digest`, never stored or logged, and the child gets only the app private
+key path.
+
+The service is a single-process, single-worker local MVP: SQLite is the queue and history, runs are
+sequential, and a run can outlive the HTTP request. There is no deployment, TLS, rate limiting, CORS,
+authentication beyond the bearer token, retry, cancellation, metrics or web UI; expose it behind a
+TLS-terminating reverse proxy with a real token, never directly on the internet. A restart keeps the
+run history, and `--run-timeout` kills a stuck child.
 
 `uv run pytest` — no network, no model calls.
 
@@ -298,8 +345,8 @@ label.
 Languages: Python, TypeScript/JavaScript, Rust, Go and C# shipped. Change sources: OpenAPI
 and MCP tools/list diffs, with the Python MCP tool-call locator; SDK metadata later. Consumer side
 first; the provider bundle (T10b) packages that run for one repo, local fan-out over a repos file
-(T10c) and installed fan-out through the app (T10d) run it across checkouts; a hosted/webhook-driven
-service is later.
+(T10c) and installed fan-out through the app (T10d) run it across checkouts, and the local
+`tenon provider serve` (T10e) queues the installed run; a deployment/TLS service is later.
 
 ## Docs
 
