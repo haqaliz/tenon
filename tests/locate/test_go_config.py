@@ -102,8 +102,12 @@ def test_a_receiver_mapping_loads_read_only():
     [
         ("", "Client"),
         ("stripe NewClient", "Client"),
+        (" Client", "Client"),
+        ("Client ", "Client"),
         ("stripe.NewClient", ""),
         ("stripe.NewClient", "Client Chain"),
+        ("stripe.NewClient", " Client"),
+        ("stripe.NewClient", "Client "),
         (1, "Client"),
         ("stripe.NewClient", 1),
     ],

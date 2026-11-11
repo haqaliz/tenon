@@ -41,8 +41,8 @@ class GoLocateConfig:
             if (
                 not isinstance(key, str)
                 or not isinstance(value, str)
-                or len(key.split()) != 1
-                or len(value.split()) != 1
+                or key.split() != [key]
+                or value.split() != [value]
             ):
                 raise ValueError(
                     f"receivers must map a KEY to a VALUE, both non-empty "
