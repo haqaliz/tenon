@@ -1,51 +1,46 @@
-# Card: feat/locator-csharp
+# Card: feat/provider-service
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T11 More languages** — third slice: **C# locator** (`docs/technical/CAPABILITY_ROADMAP.md:17`)
-- **Milestone:** Phase 3 (`docs/ROADMAP.md`), third T11 slice
-- **State:** shipped 2026-11-11 (`src/tenon/locate/csharp_*.py`, CLI; 2,099 tests)
-- **Branch:** `feat/locator-csharp/aliz`
-- **Worktree:** `.claude/worktrees/feat-locator-csharp`
+- **Capability:** **T10 Provider layer and GitHub App (hosted)** — fifth slice: **hosted service MVP**
+- **Milestone:** Phase 3 (`docs/ROADMAP.md`), final T10 slice
+- **Branch:** `feat/provider-service/aliz`
+- **Worktree:** `.claude/worktrees/feat-provider-service`
 
 ## Brief
 
-Tenon locates Python, TypeScript/JavaScript, Rust and Go call sites. C# SDKs are common in
-enterprise repos, and a provider cannot migrate a C# customer repo today.
+T10a–T10d give a provider an app identity, a bundle, local and installed fan-out. The provider still
+runs the CLI by hand for each migration. The last T10 piece is a self-hosted service that accepts a
+run request, executes the installed fan-out in a worker, records the per-repo report, and exposes the
+run's status.
 
-T11c adds **`--language csharp`** with the same locate contract:
-- `CSharpLocateConfig` (a namespace root, the shared operations/fields mappings);
-- a read-only tree-sitter-c-sharp scan that reports rooted hits and dynamics, reusing the shared
-  `derive`/`resolve` certainty policy and the shared `Site`/`LocateResult` types;
-- namespace/using matching (`using Stripe;`, `using Stripe.Services;`,
-  `using StripeCharge = Stripe.Charge;`) and qualified type usage;
-- static/instance calls (`ChargeService.Create(...)`, `Stripe.ChargeService.Create(...)`),
-  object-initializer properties (`new ChargeCreateOptions { Amount = ... }`) and property access
-  through a tracked binding;
-- the CLI/config/bundle accept `csharp`; OpenAPI only (MCP location stays Python);
-- fixture C# repos and tests for certain sites, aliases, unrooted receivers, unmapped symbols and
-  operation/field mappings.
+T10e adds **`tenon provider serve`**:
+- a small stdlib HTTP API: `POST /runs` to queue a migration, `GET /runs/{id}` and `GET /runs` to
+  read status/reports; an API bearer token guards them;
+- a **SQLite run store** (queued/running/succeeded/failed, timestamps, exit, report JSON, error);
+- one background worker that runs the shipped T10d installed fan-out (the same bundle/config,
+  discovery, temp clones, report) and records the result;
+- a `POST /webhooks/github` endpoint that verifies `X-Hub-Signature-256` with a configured secret
+  and records `installation`/`installation_repositories` events (no auto-run trigger in this slice);
+- bundle registration by name under a configured `--bundles DIR` (no arbitrary server paths);
+- no cloud deployment, database server, queue service or parallel workers: the service is
+  self-hosted, local-first, and honest about its single worker.
 
-The proof runner is unchanged: a C# repo uses `--check "dotnet test"` or `dotnet build` like any
-other command. No .NET toolchain is required to locate.
-
-The hard rules do not change: locate reports evidence, the shared policy decides certainty, no
-guessing, honest reasons/ambiguity groups, no new proof levels, no network.
+The hard rules do not change: the service never merges or pushes the default branch; the app identity
+is the T10a one; the T5 proof/PR gate applies per repo; the API token and webhook secret are secrets,
+never logged; bundle names are confined to the bundle directory; the report is the T10c/T10d fan-out
+envelope.
 
 ## Constraints carried in from the repo
 
-- `src/tenon/locate/resolve.py` is the only certainty policy; the C# path must not fork it.
-- `src/tenon/locate/result.py` is the shared contract (`Site`, `SiteShape`, `LocateReason`,
-  `AmbiguityReason`, `LocateResult`).
-- `src/tenon/locate/{ts,rust,go}_scan.py` are the tree-sitter patterns; the C# scanner reports
-  `Hit`/`Dynamic` evidence only.
-- `LOCATE_TYPES`/`LOCATORS` are the one dispatch registry; extend them, do not add if-chains.
-- `CliConfig`/`tenon.toml`/`MigrationBundle` validate `language`; extend them to `csharp` with named
-  errors.
-- Offline tests: fixture C# repos, no network, no .NET toolchain.
+- T10d's `_installed`/`list_installation_repos`/`clone_repo`, T10c's report types and the T10a app
+  identity are the seams to reuse; no new pipeline.
+- `CLAUDE.md` §1–5: execution decides, honest levels, no merge/default branch, no egress by default.
+- Stdlib only: `http.server`/`wsgiref`, `sqlite3`, `hmac`, `threading`; no new dependency.
+- Offline tests: fake fan-out, fake app API, temp SQLite, no network/live GitHub.
 
 ## Scope fence
 
-Not this card: Go/Rust changes, a .NET proof preset, MCP C# location, new ambiguity/proof
-vocabularies, fluent-chain receiver tracking, a hosted service.
+Not this card: cloud deployment/Docker, Postgres/Redis, parallel workers, a web UI, webhook-triggered
+runs, multi-tenant auth, bundle upload/signing, provider branding, receiver tracking.
