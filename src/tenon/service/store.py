@@ -21,6 +21,16 @@ CREATE TABLE IF NOT EXISTS runs (
     report TEXT,
     error TEXT,
     idempotency_key TEXT UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    delivery TEXT UNIQUE,
+    event TEXT,
+    action TEXT,
+    installation TEXT,
+    received_at TEXT,
+    payload TEXT
 )
 """
 
@@ -62,6 +72,28 @@ class Run:
             "report": self.report,
             "error": self.error,
             "idempotency_key": self.idempotency_key,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class Event:
+    """One deduplicated webhook delivery."""
+
+    delivery: str
+    event: str
+    action: str | None
+    installation: str | None
+    received_at: str
+    payload: dict | None
+
+    def to_dict(self) -> dict:
+        return {
+            "delivery": self.delivery,
+            "event": self.event,
+            "action": self.action,
+            "installation": self.installation,
+            "received_at": self.received_at,
+            "payload": self.payload,
         }
 
 
@@ -199,6 +231,34 @@ class RunStore:
                 (limit,),
             ).fetchall()
         return tuple(_row_to_run(row) for row in rows)
+
+    def record_event(
+        self,
+        delivery: str,
+        event: str,
+        action: str | None = None,
+        installation: str | None = None,
+        payload: dict | None = None,
+    ) -> bool:
+        with self._lock:
+            try:
+                with self._connection:
+                    self._connection.execute(
+                        "INSERT INTO events (delivery, event, action,"
+                        " installation, received_at, payload)"
+                        " VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            delivery,
+                            event,
+                            action,
+                            installation,
+                            self._now().isoformat(),
+                            None if payload is None else _canonical_json(payload),
+                        ),
+                    )
+            except sqlite3.IntegrityError:
+                return False
+        return True
 
     def _get_row(self, run_id: str) -> sqlite3.Row | None:
         return self._connection.execute(

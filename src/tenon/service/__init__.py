@@ -1,5 +1,5 @@
 """The hosted provider service."""
 
-from .store import Run, RunStore
+from .store import Event, Run, RunStore
 
-__all__ = ["Run", "RunStore"]
+__all__ = ["Event", "Run", "RunStore"]

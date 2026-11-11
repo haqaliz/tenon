@@ -1,10 +1,14 @@
 import sqlite3
+from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 from itertools import count
 
 import pytest
 
-from tenon.service.store import Run, RunStore, StoreError
+from tenon.service import Event as ExportedEvent
+from tenon.service import Run as ExportedRun
+from tenon.service import RunStore as ExportedRunStore
+from tenon.service.store import Event, Run, RunStore, StoreError
 
 NOW = datetime(2026, 11, 11, 12, 0, tzinfo=timezone.utc)
 STAMP = "2026-11-11T12:00:00+00:00"
@@ -379,3 +383,133 @@ def test_list_clamps_the_limit_to_one_and_two_hundred(tmp_path):
 
     assert len(store.list(limit=0)) == 1
     assert len(store.list(limit=500)) == 200
+
+
+# Spec AC6: a webhook event round-trips with a UTC timestamp and its payload.
+def test_record_event_stores_the_event_and_payload(tmp_path):
+    path = tmp_path / "runs.db"
+    store = a_store(tmp_path)
+
+    recorded = store.record_event(
+        "delivery-one",
+        "installation",
+        action="created",
+        installation="42",
+        payload={"z": 1, "a": {"two": 2, "one": 1}},
+    )
+    store.close()
+
+    assert recorded is True
+    with sqlite3.connect(path) as connection:
+        row = connection.execute(
+            "SELECT delivery, event, action, installation, received_at, payload"
+            " FROM events"
+        ).fetchone()
+    assert row == (
+        "delivery-one",
+        "installation",
+        "created",
+        "42",
+        STAMP,
+        '{"a":{"one":1,"two":2},"z":1}',
+    )
+
+
+# Spec AC6: a duplicate delivery returns False and leaves the first event only.
+def test_record_event_deduplicates_the_delivery(tmp_path):
+    path = tmp_path / "runs.db"
+    store = a_store(tmp_path)
+    store.record_event("delivery-one", "push", payload={"number": 1})
+
+    duplicate = store.record_event(
+        "delivery-one", "pull_request", payload={"number": 2}
+    )
+    store.close()
+
+    assert duplicate is False
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute(
+            "SELECT event, payload FROM events WHERE delivery = ?",
+            ("delivery-one",),
+        ).fetchall()
+    assert rows == [("push", '{"number":1}')]
+
+
+# Spec AC6: the optional event fields default to NULL.
+def test_record_event_allows_omitted_details(tmp_path):
+    path = tmp_path / "runs.db"
+    store = a_store(tmp_path)
+
+    assert store.record_event("delivery-one", "ping") is True
+    store.close()
+
+    with sqlite3.connect(path) as connection:
+        row = connection.execute(
+            "SELECT action, installation, payload FROM events"
+        ).fetchone()
+    assert row == (None, None, None)
+
+
+# Spec AC6: Event is a frozen value with a full to_dict.
+def test_event_to_dict_has_the_stored_fields():
+    event = Event(
+        delivery="delivery-one",
+        event="push",
+        action=None,
+        installation="42",
+        received_at=STAMP,
+        payload={"number": 1},
+    )
+
+    assert event.to_dict() == {
+        "delivery": "delivery-one",
+        "event": "push",
+        "action": None,
+        "installation": "42",
+        "received_at": STAMP,
+        "payload": {"number": 1},
+    }
+    with pytest.raises(FrozenInstanceError):
+        event.delivery = "other"
+
+
+# Spec dependency: the schema is the planned events table.
+def test_the_events_schema_is_created(tmp_path):
+    path = tmp_path / "runs.db"
+    store = a_store(tmp_path)
+    store.close()
+
+    with sqlite3.connect(path) as connection:
+        columns = [
+            row[1] for row in connection.execute("PRAGMA table_info(events)")
+        ]
+
+    assert columns == [
+        "id",
+        "delivery",
+        "event",
+        "action",
+        "installation",
+        "received_at",
+        "payload",
+    ]
+
+
+# Spec AC7: reopening the file preserves runs and events.
+def test_reopening_preserves_both_tables(tmp_path):
+    first_store = a_store(tmp_path)
+    run = first_store.create_run("acme/api")
+    first_store.record_event("delivery-one", "push", payload={"number": 1})
+    first_store.close()
+
+    reopened = a_store(tmp_path)
+
+    assert reopened.get(run.id) == run
+    assert reopened.record_event("delivery-one", "push") is False
+
+
+# Spec surface: the package exports the three public values.
+def test_the_service_package_exports_the_store_surface():
+    assert ExportedRun is Run
+    assert ExportedEvent is Event
+    assert ExportedRunStore is RunStore
