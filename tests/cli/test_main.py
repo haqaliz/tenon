@@ -4732,3 +4732,282 @@ def test_benchmark_readme_documents_the_method_and_no_merge_outcomes():
     assert "stripe-template" in text
     assert "local" in lowered
     assert "opt-in" in lowered
+
+SERVE_TOKEN = "serve-api-token"
+
+
+def a_serve_argv(tmp_path, *extra, bundles=None, db=None):
+    return [
+        "provider",
+        "serve",
+        "--bundles",
+        str(bundles if bundles is not None else tmp_path / "bundles"),
+        "--db",
+        str(db if db is not None else tmp_path / "runs.db"),
+        *extra,
+    ]
+
+
+def a_serve_args(tmp_path, *extra):
+    return cli_main._parser().parse_args(
+        a_serve_argv(tmp_path, "--api-token", SERVE_TOKEN, *extra)
+    )
+
+
+def a_fake_server(monkeypatch):
+    """Patch the module's serve and return its recorded api, host and port."""
+    seen = {}
+
+    class Server:
+        closed = False
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            Server.closed = True
+
+    server = Server()
+
+    def fake_serve(api, host, port):
+        seen.update(api=api, host=host, port=port)
+        return server
+
+    monkeypatch.setattr(cli_main, "serve", fake_serve)
+    return seen, server
+
+
+# Spec AC1: provider serve --help is a zero and lists every flag.
+def test_provider_serve_help_lists_the_flags(capsys):
+    assert main(["provider", "serve", "--help"]) == 0
+
+    out = capsys.readouterr().out
+    for flag in (
+        "--bundles",
+        "--db",
+        "--api-token",
+        "--webhook-secret",
+        "--host",
+        "--port",
+        "--run-timeout",
+        "--poll",
+        "--dry-run",
+        "--app-id",
+        "--app-installation-id",
+        "--app-private-key",
+        "--api-url",
+    ):
+        assert flag in out
+
+
+# Spec AC1: the serve defaults are the documented ones.
+def test_provider_serve_defaults(tmp_path):
+    args = a_serve_args(tmp_path)
+
+    assert args.host == "127.0.0.1"
+    assert args.port == 8080
+    assert args.run_timeout == 3600
+    assert args.poll == 1.0
+    assert args.dry_run is False
+
+
+# Spec AC1: a missing token is a named usage error, before any store opens.
+def test_provider_serve_missing_token_is_usage(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.delenv("TENON_API_TOKEN", raising=False)
+
+    assert main(a_serve_argv(tmp_path)) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--api-token or TENON_API_TOKEN" in captured.err
+    assert "Traceback" not in captured.err
+    assert not (tmp_path / "runs.db").exists()
+
+
+# Spec AC1: an empty token is the same named usage error.
+def test_provider_serve_empty_token_is_usage(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.delenv("TENON_API_TOKEN", raising=False)
+
+    assert main(a_serve_argv(tmp_path, "--api-token", "")) == 2
+
+    assert "--api-token or TENON_API_TOKEN" in capsys.readouterr().err
+
+
+# Spec AC1: the token may come from TENON_API_TOKEN.
+def test_provider_serve_reads_the_token_from_the_env(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("TENON_API_TOKEN", SERVE_TOKEN)
+    missing = tmp_path / "missing"
+
+    assert main(a_serve_argv(tmp_path, bundles=missing)) == 2
+
+    err = capsys.readouterr().err
+    assert "not a directory" in err
+    assert "TENON_API_TOKEN" not in err
+
+
+# Spec AC1: --bundles must be an existing directory.
+@pytest.mark.parametrize("kind", ["missing", "file"])
+def test_provider_serve_bundles_must_be_a_directory(
+    tmp_path, monkeypatch, capsys, kind
+):
+    monkeypatch.delenv("TENON_API_TOKEN", raising=False)
+    bundles = tmp_path / "bundles"
+    if kind == "file":
+        bundles.write_text("not a directory")
+
+    assert main(a_serve_argv(tmp_path, "--api-token", SERVE_TOKEN, bundles=bundles)) == 2
+
+    err = capsys.readouterr().err
+    assert "not a directory" in err
+    assert "Traceback" not in err
+
+
+# Spec AC1: a db whose parent is missing is a named usage error.
+def test_provider_serve_bad_db_is_usage(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("TENON_API_TOKEN", raising=False)
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    db = tmp_path / "missing" / "runs.db"
+
+    assert main(a_serve_argv(tmp_path, "--api-token", SERVE_TOKEN, bundles=bundles, db=db)) == 2
+
+    err = capsys.readouterr().err
+    assert "cannot open store" in err
+    assert str(db) in err
+    assert "Traceback" not in err
+
+
+# Spec AC1: the serve parser never reaches the fix/migrate --remote guard and
+# never reads an args.json that serve does not define.
+def test_provider_serve_does_not_hit_the_remote_guard(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.delenv("TENON_API_TOKEN", raising=False)
+    bundles = tmp_path / "missing"
+
+    assert main(a_serve_argv(tmp_path, "--api-token", SERVE_TOKEN, bundles=bundles)) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "not a directory" in captured.err
+    assert "internal" not in captured.err
+    assert "--remote" not in captured.err
+
+
+# Spec AC1/AC4: the child argv runs the shipped installed fan-out and opens a PR.
+def test_serve_command_builds_the_installed_migrate_argv(tmp_path):
+    args = a_serve_args(tmp_path)
+    bundle = tmp_path / "bundle.json"
+
+    argv = cli_main._serve_command(args, bundle)
+
+    assert argv == [
+        sys.executable,
+        "-c",
+        "from tenon.cli import main; raise SystemExit(main())",
+        "provider",
+        "migrate",
+        "--installed",
+        "--bundle",
+        str(bundle),
+        "--json",
+        "--open-pr",
+        "--remote",
+        "app",
+    ]
+
+
+# Spec AC1: a dry run omits both the PR flag and the remote.
+def test_serve_command_omits_open_pr_for_a_dry_run(tmp_path):
+    args = a_serve_args(tmp_path, "--dry-run")
+
+    argv = cli_main._serve_command(args, tmp_path / "bundle.json")
+
+    assert "--installed" in argv
+    assert "--bundle" in argv
+    assert "--json" in argv
+    assert "--open-pr" not in argv
+    assert "--remote" not in argv
+
+
+# Spec AC1: the non-None app flags and api URL reach the child.
+def test_serve_command_includes_the_app_flags(tmp_path):
+    args = a_serve_args(
+        tmp_path,
+        "--app-id",
+        "123",
+        "--app-installation-id",
+        "456",
+        "--app-private-key",
+        "/keys/app.pem",
+        "--api-url",
+        "https://ghe.example/api/v3",
+    )
+
+    argv = cli_main._serve_command(args, tmp_path / "bundle.json")
+
+    for flag, value in (
+        ("--app-id", "123"),
+        ("--app-installation-id", "456"),
+        ("--app-private-key", "/keys/app.pem"),
+        ("--api-url", "https://ghe.example/api/v3"),
+    ):
+        assert argv[argv.index(flag) + 1] == value
+
+
+# Spec AC1: omitted app flags are not invented for the child.
+def test_serve_command_leaves_omitted_app_flags_out(tmp_path):
+    args = a_serve_args(tmp_path)
+
+    argv = cli_main._serve_command(args, tmp_path / "bundle.json")
+
+    for flag in (
+        "--app-id",
+        "--app-installation-id",
+        "--app-private-key",
+        "--api-url",
+    ):
+        assert flag not in argv
+
+
+# Spec AC1/AC6: serve builds the API, listens, and stops cleanly on SIGINT.
+def test_provider_serve_starts_the_worker_and_stops_on_interrupt(
+    tmp_path, monkeypatch, capsys
+):
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    seen, server = a_fake_server(monkeypatch)
+
+    assert main(a_serve_argv(tmp_path, "--api-token", SERVE_TOKEN, bundles=bundles)) == 0
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        "tenon: provider serve: listening on http://127.0.0.1:8080\n"
+    )
+    assert seen["host"] == "127.0.0.1"
+    assert seen["port"] == 8080
+    assert seen["api"].handle("GET", "/health", {}, b"").status == 200
+    assert server.closed is True
+    assert SERVE_TOKEN not in captured.out + captured.err
+
+
+# Spec AC1/AC5: the webhook secret may come from TENON_WEBHOOK_SECRET.
+def test_provider_serve_reads_the_webhook_secret_from_the_env(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("TENON_WEBHOOK_SECRET", "hook-secret")
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    seen, _server = a_fake_server(monkeypatch)
+
+    assert main(a_serve_argv(tmp_path, "--api-token", SERVE_TOKEN, bundles=bundles)) == 0
+
+    response = seen["api"].handle("POST", "/webhooks/github", {}, b"{}")
+    assert response.status == 401
+    capsys.readouterr()

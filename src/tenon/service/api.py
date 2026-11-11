@@ -89,6 +89,11 @@ class Api:
         self._webhook_secret = webhook_secret
         self._max_body = max_body
 
+    @property
+    def max_body(self) -> int:
+        """The largest body the API accepts; the HTTP layer reads only this."""
+        return self._max_body
+
     def handle(
         self,
         method: str,

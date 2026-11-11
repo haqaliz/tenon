@@ -55,6 +55,12 @@ from tenon.probe import AgentError, ProbeError, load_tasks, probe
 from tenon.propose import propose
 from tenon.prove import ProofPlan, proof_rank, prove_plan, tail
 from tenon.provider import MigrationBundle, load_bundle, load_repos
+from tenon.service import RunStore
+from tenon.service.api import Api
+from tenon.service.http import serve
+from tenon.service.runner import CommandRunner
+from tenon.service.store import StoreError
+from tenon.service.worker import Worker
 
 from .config import (
     LANGUAGES,
@@ -245,6 +251,61 @@ def _parser() -> argparse.ArgumentParser:
         help="allow a draft PR below the required proof level",
     )
     migrate.add_argument("--json", action="store_true", help="machine output")
+
+    # Spec AC1/AC2: the last T10 slice serves the installed fan-out over HTTP.
+    serve_command = provider_commands.add_parser(
+        "serve", help="serve the provider API and run one worker"
+    )
+    serve_command.add_argument(
+        "--bundles", required=True, metavar="DIR", help="bundle directory"
+    )
+    serve_command.add_argument(
+        "--db", required=True, metavar="PATH", help="SQLite run store"
+    )
+    serve_command.add_argument(
+        "--api-token",
+        default=None,
+        help="bearer token (or TENON_API_TOKEN)",
+    )
+    serve_command.add_argument(
+        "--webhook-secret",
+        default=None,
+        help="GitHub webhook secret (or TENON_WEBHOOK_SECRET)",
+    )
+    serve_command.add_argument(
+        "--host", default="127.0.0.1", help="listen host (default: 127.0.0.1)"
+    )
+    serve_command.add_argument(
+        "--port", type=int, default=8080, help="listen port (default: 8080)"
+    )
+    serve_command.add_argument(
+        "--run-timeout",
+        type=float,
+        default=3600,
+        help="seconds per run (default: 3600)",
+    )
+    serve_command.add_argument(
+        "--poll",
+        type=float,
+        default=1.0,
+        help="queue poll seconds (default: 1.0)",
+    )
+    serve_command.add_argument(
+        "--dry-run", action="store_true", help="migrate without opening PRs"
+    )
+    serve_command.add_argument("--app-id", default=None, help="GitHub App id")
+    serve_command.add_argument(
+        "--app-installation-id", default=None, help="GitHub App installation id"
+    )
+    serve_command.add_argument(
+        "--app-private-key",
+        default=None,
+        metavar="PATH",
+        help="GitHub App private key PEM path",
+    )
+    serve_command.add_argument(
+        "--api-url", default=None, help="GitHub API base URL"
+    )
 
     # Spec AC1: the third subcommand, with no repo/--old/--new.
     probe_command = commands.add_parser("probe", help="probe an MCP server with an agent")
@@ -674,6 +735,81 @@ def _provider(args: argparse.Namespace, remote: Remote | None) -> int:
     return fix_exit(len(changes), results, config.require)
 
 
+# Spec AC1/AC4: the child is exactly `provider migrate --installed` and opens
+# PRs unless the service is a dry run.
+def _serve_command(args: argparse.Namespace, bundle: Path) -> list[str]:
+    """The argv one worker run executes for one bundle."""
+    command = [
+        sys.executable,
+        "-c",
+        "from tenon.cli import main; raise SystemExit(main())",
+        "provider",
+        "migrate",
+        "--installed",
+        "--bundle",
+        str(bundle),
+        "--json",
+    ]
+    if not args.dry_run:
+        command += ["--open-pr", "--remote", "app"]
+    for flag, value in (
+        ("--app-id", args.app_id),
+        ("--app-installation-id", args.app_installation_id),
+        ("--app-private-key", args.app_private_key),
+        ("--api-url", args.api_url),
+    ):
+        if value:
+            command += [flag, str(value)]
+    return command
+
+
+# Spec AC1/AC2/AC4: validate the config, then serve one worker and the API.
+def _serve(args: argparse.Namespace) -> int:
+    token = args.api_token or os.environ.get("TENON_API_TOKEN")
+    if not token:
+        raise _Usage("--api-token or TENON_API_TOKEN is required")
+    bundles = Path(args.bundles)
+    if not bundles.is_dir():
+        raise _Usage(
+            f"bundle directory is not a directory: {args.bundles}"
+        )
+    try:
+        store = RunStore(args.db)
+    except StoreError as error:
+        raise _Usage(str(error)) from None
+
+    secret = (
+        args.webhook_secret or os.environ.get("TENON_WEBHOOK_SECRET") or None
+    )
+    runner = CommandRunner(
+        lambda bundle: _serve_command(args, bundle), timeout=args.run_timeout
+    )
+    worker = Worker(store, runner.run, poll=args.poll)
+    api = Api(store, bundles, token, webhook_secret=secret)
+    try:
+        server = serve(api, args.host, args.port)
+    except OSError as error:
+        store.close()
+        raise _Usage(
+            f"cannot listen on {args.host}:{args.port}: {error}"
+        ) from None
+
+    print(
+        f"tenon: provider serve: listening on http://{args.host}:{args.port}",
+        file=sys.stderr,
+    )
+    worker.start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        worker.stop()
+        server.server_close()
+        store.close()
+    return 0
+
+
 # Spec AC4: a setup failure is one named probe error, never a traceback.
 def _probe_fail(reason: str, detail: str, *, json_mode: bool) -> int:
     message = tail(detail)
@@ -871,13 +1007,13 @@ def main(argv: Sequence[str] | None = None, *, remote: Remote | None = None) -> 
     except SystemExit as status:
         return int(status.code or 0)
 
-    json_mode = bool(args.json)
-    # Spec AC4: an explicit remote is meaningless without --open-pr.
-    if (
-        args.command in ("fix", "provider")
-        and args.remote is not None
-        and not args.open_pr
-    ):
+    json_mode = bool(getattr(args, "json", False))
+    # Spec AC4: an explicit remote is meaningless without --open-pr. Only fix
+    # and provider migrate define a remote; provider serve has neither.
+    remote_guarded = args.command == "fix" or (
+        args.command == "provider" and args.provider_command == "migrate"
+    )
+    if remote_guarded and args.remote is not None and not args.open_pr:
         return _fail("usage", "--remote requires --open-pr", json_mode=json_mode)
     try:
         # Spec AC1: corpus and probe are dispatched before _config, which needs a repo.
@@ -886,6 +1022,8 @@ def main(argv: Sequence[str] | None = None, *, remote: Remote | None = None) -> 
         if args.command == "probe":
             return _probe(args)
         if args.command == "provider":
+            if args.provider_command == "serve":
+                return _serve(args)
             return _provider(args, remote)
         config = _config(args)
         if args.command == "check":
