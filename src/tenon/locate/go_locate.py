@@ -23,6 +23,6 @@ def locate_go(
     return resolve(
         change,
         query,
-        scan_go(root, config.sdk_package, config.package_name),
+        scan_go(root, config.sdk_package, config.package_name, config.receivers),
         config,
     )

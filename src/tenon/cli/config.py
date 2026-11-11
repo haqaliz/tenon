@@ -155,6 +155,12 @@ def load_cli_config(
             "operations": operations,
             "fields": fields,
         }
+        # Spec AC2: the receiver table is Rust/Go-only; other languages ignore it.
+        if chosen in ("rust", "go"):
+            receivers = section.get("receivers", {})
+            if not isinstance(receivers, dict):
+                raise ValueError(f"{path}: [locate] receivers must be a table")
+            options["receivers"] = receivers
         # Spec AC3: the root import's package clause is a Go-only override.
         if chosen == "go":
             options["package_name"] = section.get("package_name")
@@ -203,6 +209,7 @@ def overrides(
     package_name: str | None = None,
     operations: Sequence[str] = (),
     fields: Sequence[str] = (),
+    receivers: Sequence[str] = (),
     command: str | None = None,
     build: str | None = None,
     characterize: str | None = None,
@@ -239,12 +246,14 @@ def overrides(
     else:
         operations_over = a_pairs(operations, "--operation")
         fields_over = a_pairs(fields, "--field")
+        receivers_over = a_pairs(receivers, "--receiver")
         if (
             source_changed
             or sdk_package is not None
             or (chosen == "go" and package_name is not None)
             or operations_over
             or fields_over
+            or receivers_over
             or chosen != config.language
         ):
             openapi = not isinstance(config.locate, McpLocateConfig)
@@ -263,6 +272,18 @@ def overrides(
                     **fields_over,
                 },
             }
+            # Spec AC4: the receiver mapping is Rust/Go-only.
+            if chosen in ("rust", "go"):
+                options["receivers"] = {
+                    **(
+                        config.locate.receivers
+                        if isinstance(
+                            config.locate, (RustLocateConfig, GoLocateConfig)
+                        )
+                        else {}
+                    ),
+                    **receivers_over,
+                }
             # Spec AC3: --package-name is the Go root import's package clause.
             if chosen == "go":
                 options["package_name"] = (

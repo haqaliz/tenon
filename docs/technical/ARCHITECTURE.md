@@ -204,8 +204,10 @@ pattern is the only locator in this slice. `source=mcp` with `language=ts`, `lan
 
 `--language rust` selects `RustLocateConfig` and `locate_rust`: tree-sitter over `.rs` files, `use`
 rooting and aliases, associated calls, struct-literal fields, and field access through a tracked
-binding. A crate path or a blank is a named `sdk_package` error. The limits are method chains,
-macros, re-exported crates and multi-hop struct data flow; each yields no site rather than a guess.
+binding. A crate path or a blank is a named `sdk_package` error. The limits are method chains on an
+untracked receiver, macros, re-exported crates and multi-hop struct data flow; each yields no site
+rather than a guess. T12a roots a receiver built with `Client::new`/`default`, a type annotation or a
+configured factory, so `client.charges().create(...)` locates as `Client.charges.create`.
 A mapping that changes the spelling locates the site, but the shipped proposer only edits when the
 located spelling equals the spec's old name; otherwise it reports `NO_EDITABLE_SITES`.
 No Cargo/rustc subprocess or Cargo proof preset ships; `--check "cargo test"` is just a user command.
@@ -214,9 +216,10 @@ No Cargo/rustc subprocess or Cargo proof preset ships; `--check "cargo test"` is
 root plus every subpackage under it, and import aliases. The chain keeps the relative subpackage
 (`.../v76/charge` -> `charge.New`); `--package-name`/`[locate] package_name` sets the root import's
 package clause. Supported shapes are package-qualified calls, composite literals, field access
-through a tracked binding and import aliases. The limits are method chains on a local value
-(`client.Charges.New(...)`), dot imports, reflection and multi-hop data flow; each yields no site
-rather than a guess. A bad import root or package name is a named `sdk_package`/`package_name` error,
+through a tracked binding and import aliases. The limits are method chains on an untracked value,
+dot imports, reflection and multi-hop data flow; each yields no site rather than a guess. T12a roots
+a receiver from a pointer/simple annotation, a composite literal or a configured factory, so
+`client.Charges.New(...)` locates as `Client.Charges.New`. A bad import root or package name is a named `sdk_package`/`package_name` error,
 and `source=mcp` remains Python-only. A mapping that changes the spelling locates the site, but the
 shipped proposer only edits when the located spelling equals the spec's old name; otherwise it
 reports `NO_EDITABLE_SITES`. No Go toolchain or proof preset ships; `--check "go test ./..."`
@@ -252,5 +255,5 @@ No .NET toolchain or proof preset ships; `--check "dotnet test"` is just a user 
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
 - Phase 3: T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider
   fan-out), T10d (installed provider fan-out), T10e (hosted provider service), T11a (Rust locator),
-  T11b (Go locator) and T11c (C# locator) shipped; a hosted deployment and fluent-chain receiver
-  tracking are not started.
+  T11b (Go locator) and T11c (C# locator) shipped; T12a (Rust/Go receiver tracking) shipped. A
+  hosted deployment and T12b (C#/Python/TS receiver tracking) are not started.

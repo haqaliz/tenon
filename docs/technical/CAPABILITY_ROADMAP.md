@@ -15,6 +15,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Shipped 2026-11-11 (MVP)** — GitHub App remote, provider bundle, local/installed fan-out and a self-hosted service; a hardened cloud deployment is later |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Shipped 2026-11-11** — Rust, Go and C# locators |
+| **T12** | **Receiver tracking.** Method/fluent chains through an explicitly typed client. | T11 | Explicit evidence only | **Partial 2026-11-12** — Rust and Go shipped; C#/Python/TS (T12b) not started |
 
 ### T1 as shipped (2026-10-26)
 
@@ -267,9 +268,10 @@ repo's spelling, but `fix` proposes a rename only when that spelling equals the 
 (the shipped proposer rule); otherwise it reports `NO_EDITABLE_SITES` and the customer renames
 manually. 1,925 tests, offline.
 
-Known limits: method chains, macros, re-exported crates and multi-hop struct data flow are not
-followed (no site, not a guess); a local module named like the crate is a documented false positive;
-Go and C# are T11b/T11c.
+Known limits: method chains on an untracked receiver, macros, re-exported crates and multi-hop struct
+data flow are not followed (no site, not a guess); a local module named like the crate is a
+documented false positive; Go and C# are T11b/T11c. T12a adds explicit receiver tracking for a
+client built with `Client::new`/`default`, an annotation or a `receivers` factory.
 
 ### T11b as built (2026-11-10)
 
@@ -281,10 +283,11 @@ the shipped `derive`/`resolve` policy unchanged. `--language go`, `--package-nam
 `tenon.toml`/bundle `locate.package_name` and provider bundles accept `go`; MCP stays Python-only;
 no Go toolchain or proof preset. 2,013 tests, offline.
 
-Known limits: method chains on a local value, dot imports, reflection, generics inference, `go.mod`
-parsing and multi-hop composite data flow are not followed (no site, not a guess); a local variable
-named like the package alias is a documented false positive; a mapped spelling locates but is not
-auto-edited unless it equals the spec's old name; C# is T11c.
+Known limits: method chains on an untracked value, dot imports, reflection, generics inference,
+`go.mod` parsing and multi-hop composite data flow are not followed (no site, not a guess); a local
+variable named like the package alias is a documented false positive; a mapped spelling locates but
+is not auto-edited unless it equals the spec's old name; C# is T11c. T12a adds explicit receiver
+tracking for an annotation, a composite literal or a `receivers` factory.
 
 ### T11c as built (2026-11-11)
 
@@ -300,6 +303,22 @@ Known limits: fluent/property chains on untracked values, `using static`, `dynam
 generics inference, `csproj` parsing and multi-hop initializer flow are not followed (no site, not a
 guess); a local type sharing an SDK simple name is a documented false positive; a mapped spelling
 locates but is not auto-edited unless it equals the spec's old name.
+
+### T12a as built (2026-11-12)
+
+`RustLocateConfig`/`GoLocateConfig` gain a read-only `receivers` mapping from a factory/constructor
+expression to a type chain, fed by `[locate.receivers]`, a bundle `locate.receivers` and a
+repeatable `--receiver KEY=VALUE`. The Rust scanner binds a receiver from `Client::new`/`default`, a
+type annotation or a configured factory; the Go scanner from a pointer/simple annotation, a
+composite literal or a configured factory. A method/selector chain on a bound receiver emits rooted
+`CALL`/`ATTRIBUTE` hits with the stable `Type.member...` chain, so `client.charges().create(...)`
+locates as `Client.charges.create` and `client.Charges.New(...)` as `Client.Charges.New`; an
+untracked receiver keeps the old no-site/unrooted behavior. The shared `derive`/`resolve` policy is
+unchanged. 2,338 tests, offline.
+
+Known limits: a factory not in `receivers` and not annotated is not evidence; a local type named like
+a mapped/rooted type is a documented false positive; rebinding clears; no return-type or
+interprocedural inference. T12b covers C#, Python and TypeScript.
 
 ### T10e as built (2026-11-11)
 

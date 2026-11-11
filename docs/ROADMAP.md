@@ -44,8 +44,9 @@ GitHub App, provider-facing migration PRs, hosted. Go, Rust and C# locators on d
 T10d (installed provider fan-out) and T10e (hosted service MVP) shipped 2026-11-11; T11a (Rust
 locator), T11b (Go locator) and T11c (C# locator) shipped 2026-11-11**
 (`src/tenon/pr/{app,api,github_app,installed}.py`, `src/tenon/provider/`, `src/tenon/service/`,
-`src/tenon/locate/{rust,go,csharp}_*.py`, CLI; 2,235 tests). The self-hosted service is local-only
-(no TLS/deployment); a hardened hosted deployment and fluent-chain receiver tracking are not started.
+`src/tenon/locate/{rust,go,csharp,rust_scan,go_scan}_*.py`, CLI; 2,338 tests). T12a (Rust/Go receiver
+tracking) shipped 2026-11-12. The self-hosted service is local-only (no TLS/deployment); a hardened
+hosted deployment and T12b (C#/Python/TS receiver tracking) are not started.
 
 ---
 

@@ -325,3 +325,67 @@ def test_the_go_api_is_exported():
     assert locate.locate_go is locate_go
     assert {"GoLocateConfig", "locate_go"} <= set(locate.__all__)
     assert locate.LOCATE_TYPES["go"] is GoLocateConfig
+
+
+# Spec AC4: a mapped receiver chain resolves the operation.
+def test_a_mapped_receiver_chain_resolves_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{ROOT}"\n'
+            "\n"
+            "func main() {\n"
+            '    client := stripe.NewClient("k")\n'
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+    config = GoLocateConfig(
+        sdk_package=ROOT,
+        package_name="stripe",
+        operations={"POST /v1/charges": "Client.Charges.New"},
+        receivers={"NewClient": "Client"},
+    )
+
+    result = locate_go(a_removed_endpoint(), repo, config)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.go", 7, 5, SiteShape.CALL, "New")]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+# Spec AC4: a mapped receiver field is certain on the component change.
+def test_a_mapped_receiver_field_is_certain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{ROOT}"\n'
+            "\n"
+            "func main() {\n"
+            '    client := stripe.NewClient("k")\n'
+            "    amount := client.Amount\n"
+            "    _ = amount\n"
+            "}\n"
+        },
+    )
+    config = GoLocateConfig(
+        sdk_package=ROOT,
+        package_name="stripe",
+        receivers={"NewClient": "Client"},
+    )
+
+    result = locate_go(a_component_rename(), repo, config)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.go", 7, 22, SiteShape.ATTRIBUTE, "Amount")]
+    assert result.ambiguous == ()
+    assert result.reason is None

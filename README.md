@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20provider%20service%20%2B%20Rust%20%2B%20Go%20%2B%20C%23%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20provider%20service%20%2B%20Rust%20%2B%20Go%20%2B%20C%23%20%2B%20receivers%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -17,8 +17,9 @@ T5 (PR writer), T6 (TypeScript/JavaScript call-site location), T7 (proof ladder)
 tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark corpus), T10a (GitHub
 App remote), T10b (provider migration bundle), T10c (local provider fan-out), T10d (installed
 provider fan-out), T10e (hosted provider service), T11a (Rust call-site location), T11b (Go call-site
-location), T11c (C# call-site location) and the `tenon check` / `tenon fix` / `tenon provider
-migrate` / `tenon provider serve` / `tenon probe` / `tenon corpus` CLI are shipped.**
+location), T11c (C# call-site location), T12a (Rust/Go receiver tracking) and the `tenon check` /
+`tenon fix` / `tenon provider migrate` / `tenon provider serve` / `tenon probe` / `tenon corpus` CLI
+are shipped.**
 `src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed
 `Change` records; `src/tenon/locate/` turns one of those records into call sites with file, line and
 column, and keeps anything it cannot prove in a separate ambiguity list — Python via `ast`,
@@ -88,11 +89,15 @@ is byte-stable. Repeated inputs can live in `tenon.toml` under `[locate]` (`sour
 `"POST /v1/charges" = "Charge.create"` and `"Charge.amount" = "amount_cents"`. Supported shapes are
 associated calls (`Charge::create(&params)`), struct literals (`CreateCharge { amount_cents: amount }`),
 field access through a tracked binding (`params.amount_cents`), and `use` aliases
-(`use stripe::Charge as StripeCharge`). Limits: method chains (`client.charges().create(...)`), macros,
-re-exported crates, and multi-hop struct data flow are not followed; they report no site rather than
-a guessed one. A `fields` mapping that changes the spelling locates the site, but `fix` proposes a
-rename only when the located spelling equals the spec's old name (the shipped proposer rule);
-otherwise it reports `NO_EDITABLE_SITES` and the customer renames manually.
+(`use stripe::Charge as StripeCharge`). **Receiver tracking** (T12a) roots a client built with
+`Client::new(...)`/`Client::default(...)`, a type annotation (`let client: Client = ...`) or a
+`[locate.receivers]` entry (`"make_client" = "Client"`), so `client.charges().create(...)` locates as
+`Client.charges.create`; `--receiver "make_client=Client"` does the same from the CLI. Limits: a
+method chain on an untracked receiver, macros, re-exported crates, and multi-hop struct data flow are
+not followed; they report no site rather than a guessed one. A `fields` mapping that changes the
+spelling locates the site, but `fix` proposes a rename only when the located spelling equals the
+spec's old name (the shipped proposer rule); otherwise it reports `NO_EDITABLE_SITES` and the
+customer renames manually.
 
 `--language go` scans `.go` files with tree-sitter and needs no Go toolchain. `sdk_package` is the
 Go **import root** (for example `github.com/stripe/stripe-go/v76`): the root import and every
@@ -101,9 +106,13 @@ subpackage under it are rooted, and the chain keeps the relative subpackage (`..
 package clause; subpackages infer their name, and an explicit import alias always wins. Supported
 shapes are package-qualified calls (`stripe.Charge.New(...)`, `charge.New(...)`), composite literals
 (`&stripe.ChargeParams{AmountCents: 100}`), field access through a tracked `var`/`:=` binding
-(`params.AmountCents`), and import aliases. Limits: method chains on a local value
-(`client.Charges.New(...)`), dot imports, reflection, and multi-hop data flow are not followed; they
-report no site rather than a guessed one. `fix` follows the same proposer rule as Rust.
+(`params.AmountCents`), and import aliases. **Receiver tracking** (T12a) roots a client built with a
+pointer/simple annotation (`var client *stripe.Client`), a composite literal
+(`client := &stripe.Client{}`) or a `[locate.receivers]` entry (`"stripe.NewClient" = "Client"`), so
+`client.Charges.New(...)` locates as `Client.Charges.New`; `--receiver "stripe.NewClient=Client"`
+does the same from the CLI (the key may omit the root package). Limits: method chains on an untracked
+value, dot imports, reflection, and multi-hop data flow are not followed; they report no site rather
+than a guessed one. `fix` follows the same proposer rule as Rust.
 
 `--language csharp` scans `.cs` files with tree-sitter and needs no .NET toolchain. In `tenon.toml`,
 `[locate] sdk_package` is the C# **namespace root** (for example `Stripe`): root usings, subnamespace

@@ -27,6 +27,7 @@ def a_config(
     sdk_package="stripe",
     operations=None,
     fields=None,
+    receivers=None,
     command=(),
     build=(),
     characterize=(),
@@ -45,13 +46,17 @@ def a_config(
             package_name=package_name,
             operations=operations or {},
             fields=fields or {},
+            receivers=receivers or {},
         )
     else:
-        locate = LOCATE_TYPES[language](
-            sdk_package=sdk_package,
-            operations=operations or {},
-            fields=fields or {},
-        )
+        options = {
+            "sdk_package": sdk_package,
+            "operations": operations or {},
+            "fields": fields or {},
+        }
+        if language == "rust":
+            options["receivers"] = receivers or {}
+        locate = LOCATE_TYPES[language](**options)
     return CliConfig(
         locate=locate,
         command=command,
@@ -186,6 +191,86 @@ def test_load_cli_config_rejects_a_bad_go_package_name(tmp_path):
 
     with pytest.raises(ValueError, match="package_name"):
         load_cli_config(path)
+
+
+# Spec AC2: [locate.receivers] reaches the Rust config.
+def test_file_selects_rust_and_keeps_the_receiver_mapping(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nlanguage = "rust"\nsdk_package = "stripe"\n'
+        '\n[locate.receivers]\n"stripe.NewClient" = "Client"\n',
+    )
+
+    config = load_cli_config(path)
+
+    assert isinstance(config.locate, RustLocateConfig)
+    assert dict(config.locate.receivers) == {"stripe.NewClient": "Client"}
+
+
+# Spec AC2: [locate.receivers] reaches the Go config.
+def test_file_selects_go_and_keeps_the_receiver_mapping(tmp_path):
+    path = a_file(
+        tmp_path,
+        '[locate]\nlanguage = "go"\n'
+        'sdk_package = "github.com/stripe/stripe-go/v76"\n'
+        '\n[locate.receivers]\n"stripe.NewClient" = "Client"\n',
+    )
+
+    config = load_cli_config(path)
+
+    assert isinstance(config.locate, GoLocateConfig)
+    assert dict(config.locate.receivers) == {"stripe.NewClient": "Client"}
+
+
+# Spec AC2: a non-string receiver entry is a named error.
+@pytest.mark.parametrize("language", ["rust", "go"])
+def test_load_cli_config_rejects_a_non_string_receiver(tmp_path, language):
+    package = (
+        "stripe" if language == "rust" else "github.com/stripe/stripe-go/v76"
+    )
+    path = a_file(
+        tmp_path,
+        f'[locate]\nlanguage = "{language}"\nsdk_package = "{package}"\n'
+        '\n[locate.receivers]\n"stripe.NewClient" = 1\n',
+    )
+
+    with pytest.raises(ValueError, match="receivers"):
+        load_cli_config(path)
+
+
+# Spec AC2: receivers is a table, not an array.
+@pytest.mark.parametrize("language", ["rust", "go"])
+def test_load_cli_config_rejects_a_non_table_receiver_mapping(tmp_path, language):
+    package = (
+        "stripe" if language == "rust" else "github.com/stripe/stripe-go/v76"
+    )
+    path = a_file(
+        tmp_path,
+        f'[locate]\nlanguage = "{language}"\nsdk_package = "{package}"\n'
+        'receivers = ["stripe.NewClient"]\n',
+    )
+
+    with pytest.raises(ValueError, match="receivers"):
+        load_cli_config(path)
+
+
+# Spec AC2: the receiver table is ignored for the other languages.
+@pytest.mark.parametrize("language", ["python", "ts", "csharp"])
+@pytest.mark.parametrize(
+    "receivers",
+    ['\n[locate.receivers]\n"stripe.NewClient" = "Client"\n', '\nreceivers = ["x"]\n'],
+)
+def test_other_languages_ignore_the_receiver_table(tmp_path, language, receivers):
+    path = a_file(
+        tmp_path,
+        f'[locate]\nlanguage = "{language}"\nsdk_package = "stripe"\n'
+        f"{receivers}",
+    )
+
+    config = load_cli_config(path)
+
+    assert isinstance(config.locate, LOCATE_TYPES[language])
+    assert not hasattr(config.locate, "receivers")
 
 
 # Spec AC3: the file selects C# and keeps the shared operation/field tables.
@@ -643,6 +728,58 @@ def test_overrides_keeps_go_when_merging_operations():
     assert dict(result.locate.operations) == {"a": "b"}
 
 
+# Spec AC4: --receiver merges over the config, with flags winning.
+def test_overrides_merges_receivers_with_flags_winning():
+    config = a_config(language="rust", receivers={"a": "One", "b": "Two"})
+
+    result = overrides(config, receivers=["b=Changed", "c=Three"])
+
+    assert isinstance(result.locate, RustLocateConfig)
+    assert dict(result.locate.receivers) == {
+        "a": "One",
+        "b": "Changed",
+        "c": "Three",
+    }
+    assert dict(config.locate.receivers) == {"a": "One", "b": "Two"}
+
+
+# Spec AC4: a Go receiver merge keeps the package name.
+def test_overrides_keeps_go_when_merging_receivers():
+    config = a_config(
+        language="go",
+        sdk_package="github.com/stripe/stripe-go/v76",
+        package_name="stripe",
+        receivers={"a": "One"},
+    )
+
+    result = overrides(config, receivers=["b=Two"])
+
+    assert isinstance(result.locate, GoLocateConfig)
+    assert result.locate.package_name == "stripe"
+    assert dict(result.locate.receivers) == {"a": "One", "b": "Two"}
+
+
+# Spec AC4: --language rust carries the receiver flag into the new config.
+def test_overrides_changes_the_language_to_rust_with_receivers():
+    result = overrides(
+        a_config(sdk_package="stripe"), language="rust", receivers=["a=b"]
+    )
+
+    assert isinstance(result.locate, RustLocateConfig)
+    assert dict(result.locate.receivers) == {"a": "b"}
+
+
+# Spec AC4: the receiver flag is ignored for the other languages.
+@pytest.mark.parametrize("language", ["python", "ts", "csharp"])
+def test_overrides_ignores_receivers_for_other_languages(language):
+    config = a_config(language=language)
+
+    result = overrides(config, receivers=["a=b"])
+
+    assert isinstance(result.locate, LOCATE_TYPES[language])
+    assert not hasattr(result.locate, "receivers")
+
+
 # Spec AC3: a bad --package-name is one named error.
 def test_overrides_rejects_a_bad_package_name():
     with pytest.raises(ValueError, match="package_name"):
@@ -871,6 +1008,9 @@ def test_overrides_replaces_breaking_only(config, flag, expected):
         ({"operations": ["=x"]}, "--operation"),
         ({"operations": ["x="]}, "--operation"),
         ({"fields": ["=x"]}, "--field"),
+        ({"receivers": ["missing-equals"]}, "--receiver"),
+        ({"receivers": ["=x"]}, "--receiver"),
+        ({"receivers": ["x="]}, "--receiver"),
         ({"command": ""}, "--check"),
         ({"command": "   "}, "--check"),
         ({"build": ""}, "--build"),

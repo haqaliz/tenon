@@ -313,6 +313,81 @@ def test_go_bundle_with_a_bad_package_is_an_error(tmp_path):
     assert "package_name" in str(error.value)
 
 
+# Spec AC3: locate.receivers loads for the Rust and Go configs.
+@pytest.mark.parametrize(
+    ("language", "sdk_package", "expected_type"),
+    [
+        ("rust", "stripe", RustLocateConfig),
+        ("go", "github.com/stripe/stripe-go/v76", GoLocateConfig),
+    ],
+)
+def test_receiver_mapping_loads_for_rust_and_go(
+    tmp_path, language, sdk_package, expected_type
+):
+    path = a_bundle(
+        tmp_path,
+        language=language,
+        locate={
+            "sdk_package": sdk_package,
+            "receivers": {"stripe.NewClient": "Client"},
+        },
+    )
+
+    bundle = load_bundle(path)
+
+    assert isinstance(bundle.locate, expected_type)
+    assert dict(bundle.locate.receivers) == {"stripe.NewClient": "Client"}
+
+
+# Spec AC3: locate.receivers is an object of strings.
+@pytest.mark.parametrize("language", ["rust", "go"])
+@pytest.mark.parametrize("receivers", [["a"], "a", {"a": 1}, 1])
+def test_bad_receivers_is_a_named_error(tmp_path, language, receivers):
+    package = (
+        "stripe" if language == "rust" else "github.com/stripe/stripe-go/v76"
+    )
+    path = a_bundle(
+        tmp_path,
+        language=language,
+        locate={"sdk_package": package, "receivers": receivers},
+    )
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "receivers" in str(error.value)
+
+
+# Spec AC3: a whitespace receiver key is a named bundle error.
+def test_a_bad_receiver_entry_is_a_named_bundle_error(tmp_path):
+    path = a_bundle(
+        tmp_path,
+        language="rust",
+        locate={"sdk_package": "stripe", "receivers": {"a b": "Client"}},
+    )
+
+    with pytest.raises(ValueError) as error:
+        load_bundle(path)
+
+    assert str(path) in str(error.value)
+    assert "receivers" in str(error.value)
+
+
+# Spec AC3: another language ignores locate.receivers.
+@pytest.mark.parametrize("receivers", [{"a": "B"}, ["a"], {"a": 1}])
+def test_other_languages_ignore_the_receiver_mapping(tmp_path, receivers):
+    path = a_bundle(
+        tmp_path,
+        locate={"sdk_package": "stripe", "receivers": receivers},
+    )
+
+    bundle = load_bundle(path)
+
+    assert isinstance(bundle.locate, LocateConfig)
+    assert not hasattr(bundle.locate, "receivers")
+
+
 # Spec AC4: a C# bundle loads CSharpLocateConfig and keeps the shared mappings.
 def test_csharp_bundle_keeps_the_mappings(tmp_path):
     path = a_bundle(

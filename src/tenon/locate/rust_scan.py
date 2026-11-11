@@ -4,7 +4,7 @@ The scan reports evidence only: every hit carries ``rooted``. Whether a hit is
 certain is decided elsewhere.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -234,6 +234,15 @@ def _fields(struct_expression: Node) -> tuple[Node, ...]:
     return tuple(found)
 
 
+@dataclass(frozen=True, slots=True)
+class _Binding:
+    """A name bound to a rooted type, its literal fields and how it was bound."""
+
+    chain: tuple[str, ...]
+    fields: tuple[Node, ...] = ()
+    literal: bool = False
+
+
 class _Visitor:
     """Emit rooted calls, struct fields and field accesses."""
 
@@ -242,11 +251,15 @@ class _Visitor:
         source: _Source,
         crate: str,
         roots: dict[str, tuple[str, ...]],
+        receivers: Mapping[str, str],
     ) -> None:
         self._source = source
         self._crate = crate
         self._roots = roots
-        self._bindings: dict[str, tuple[tuple[str, ...], tuple[Node, ...]]] = {}
+        self._receivers = {
+            key.replace("::", "."): value for key, value in receivers.items()
+        }
+        self._bindings: dict[str, _Binding] = {}
         self.rooted = False
         self.hits: list[Hit] = []
 
@@ -258,6 +271,8 @@ class _Visitor:
         chain: tuple[str, ...],
         rooted: bool,
     ) -> None:
+        if rooted:
+            self.rooted = True
         line = self._source.lines[node.start_point.row]
         self.hits.append(
             Hit(
@@ -276,21 +291,72 @@ class _Visitor:
         for child in node.children:
             self.visit(child)
 
-    def _bind(self, name: str, value: Node | None) -> None:
+    def _bind(
+        self, name: str, value: Node | None, annotation: Node | None = None
+    ) -> None:
+        binding = self._evidence(value, annotation)
+        if binding is None:
+            self._bindings.pop(name, None)
+        else:
+            self._bindings[name] = binding
+
+    def _evidence(
+        self, value: Node | None, annotation: Node | None
+    ) -> _Binding | None:
+        """The rooted type a let binds, from its annotation, literal or factory."""
+        if annotation is not None:
+            ref = _type_ref(annotation, self._roots, self._crate)
+            if ref is None or not ref[1]:
+                return None
+            return _Binding(ref[0])
         literal = _unwrap(value)
-        if literal is None or literal.type != "struct_expression":
-            self._bindings.pop(name, None)
-            return
-        ref = _type_ref(literal.child_by_field_name("name"), self._roots, self._crate)
-        if ref is None or not ref[1]:
-            self._bindings.pop(name, None)
-            return
-        self._bindings[name] = (ref[0], _fields(literal))
+        if literal is None:
+            return None
+        if literal.type == "struct_expression":
+            ref = _type_ref(
+                literal.child_by_field_name("name"), self._roots, self._crate
+            )
+            if ref is None or not ref[1]:
+                return None
+            return _Binding(ref[0], _fields(literal), True)
+        if literal.type == "call_expression":
+            return self._call_evidence(literal)
+        return None
+
+    def _call_evidence(self, call: Node) -> _Binding | None:
+        function = call.child_by_field_name("function")
+        ref = _callee_ref(function, self._roots, self._crate)
+        if (
+            ref is not None
+            and ref[1]
+            and len(ref[0]) > 1
+            and ref[0][-1] in {"new", "default"}
+        ):
+            return _Binding(ref[0][:-1])
+        candidates = []
+        if ref is not None:
+            candidates.append(".".join(ref[0]))
+        if function is not None:
+            candidates.append(".".join(_text(function).split("::")))
+        for candidate in candidates:
+            mapped = self._receivers.get(candidate)
+            if mapped is None:
+                continue
+            chain = tuple(
+                part for part in mapped.replace("::", ".").split(".") if part
+            )
+            if chain:
+                return _Binding(chain)
+        return None
 
     def _let(self, node: Node) -> None:
         pattern = node.child_by_field_name("pattern")
         if pattern is not None and pattern.type == "identifier":
-            self._bind(_text(pattern), node.child_by_field_name("value"))
+            self._bind(
+                _text(pattern),
+                node.child_by_field_name("value"),
+                node.child_by_field_name("type"),
+            )
         self._visit_children(node)
 
     def _assign(self, node: Node) -> None:
@@ -309,14 +375,51 @@ class _Visitor:
                     self._emit(field, SiteShape.KEYWORD, _text(field), chain, True)
         self._visit_children(node)
 
+    def _receiver(self, node: Node | None) -> tuple[str, ...] | None:
+        """The type chain a bound receiver expression stands for."""
+        node = _unwrap(node)
+        if node is None:
+            return None
+        if node.type == "identifier":
+            binding = self._bindings.get(_text(node))
+            return binding.chain if binding is not None else None
+        if node.type == "field_expression":
+            value = node.child_by_field_name("value")
+            field = node.child_by_field_name("field")
+        elif node.type == "call_expression":
+            function = node.child_by_field_name("function")
+            if function is None or function.type != "field_expression":
+                return None
+            value = function.child_by_field_name("value")
+            field = function.child_by_field_name("field")
+        else:
+            return None
+        chain = self._receiver(value)
+        if chain is None or field is None:
+            return None
+        return chain + (_text(field),)
+
     def _field(self, node: Node) -> None:
         value = _unwrap(node.child_by_field_name("value"))
         field = node.child_by_field_name("field")
-        if value is not None and value.type == "identifier" and field is not None:
-            binding = self._bindings.get(_text(value))
-            if binding is not None:
-                chain, _ = binding
-                self._emit(field, SiteShape.ATTRIBUTE, _text(field), chain, True)
+        if value is not None and field is not None:
+            binding = (
+                self._bindings.get(_text(value))
+                if value.type == "identifier"
+                else None
+            )
+            if binding is not None and binding.literal:
+                self._emit(field, SiteShape.ATTRIBUTE, _text(field), binding.chain, True)
+            else:
+                chain = self._receiver(value)
+                if chain is not None:
+                    self._emit(
+                        field,
+                        SiteShape.ATTRIBUTE,
+                        _text(field),
+                        chain + (_text(field),),
+                        True,
+                    )
         self._visit_children(node)
 
     def _argument(self, argument: Node, call_chain: tuple[str, ...]) -> None:
@@ -331,8 +434,7 @@ class _Visitor:
         elif node.type == "identifier":
             binding = self._bindings.get(_text(node))
             if binding is not None:
-                _, fields = binding
-                for field in fields:
+                for field in binding.fields:
                     self._emit(field, SiteShape.KEYWORD, _text(field), call_chain, True)
         elif node.type == "field_expression":
             value = _unwrap(node.child_by_field_name("value"))
@@ -347,17 +449,27 @@ class _Visitor:
 
     def _call(self, node: Node) -> None:
         function = node.child_by_field_name("function")
-        ref = _callee_ref(function, self._roots, self._crate)
         call_chain: tuple[str, ...] | None = None
-        if ref is not None:
-            chain, rooted = ref
-            if rooted:
-                self.rooted = True
-                call_chain = chain
-                if chain:
-                    self._emit(function, SiteShape.CALL, chain[-1], chain, True)
-            elif function is not None and function.type == "scoped_identifier":
-                self._emit(function, SiteShape.CALL, chain[-1], chain, False)
+        if function is not None and function.type == "field_expression":
+            method = function.child_by_field_name("field")
+            receiver = self._receiver(function.child_by_field_name("value"))
+            if receiver is not None and method is not None:
+                call_chain = receiver + (_text(method),)
+                self._emit(function, SiteShape.CALL, _text(method), call_chain, True)
+                value = function.child_by_field_name("value")
+                if value is not None:
+                    self.visit(value)
+        else:
+            ref = _callee_ref(function, self._roots, self._crate)
+            if ref is not None:
+                chain, rooted = ref
+                if rooted:
+                    self.rooted = True
+                    call_chain = chain
+                    if chain:
+                        self._emit(function, SiteShape.CALL, chain[-1], chain, True)
+                elif function is not None and function.type == "scoped_identifier":
+                    self._emit(function, SiteShape.CALL, chain[-1], chain, False)
         arguments = node.child_by_field_name("arguments")
         if arguments is not None:
             if call_chain is not None:
@@ -388,13 +500,15 @@ class _Visitor:
             self._visit_children(node)
 
 
-def scan_rust(root: str | Path, sdk_package: str) -> ScanResult:
+def scan_rust(
+    root: str | Path, sdk_package: str, receivers: Mapping[str, str] | None = None
+) -> ScanResult:
     """Parse ``root`` read-only and report SDK-rooted Rust evidence."""
     modules: list[str] = []
     hits: list[Hit] = []
     for module in _read(Path(root)):
         roots, crate_used = _bindings(module.tree, sdk_package)
-        visitor = _Visitor(module.source, sdk_package, roots)
+        visitor = _Visitor(module.source, sdk_package, roots, receivers or {})
         visitor.visit(module.tree.root_node)
         if crate_used or visitor.rooted:
             modules.append(module.rel)

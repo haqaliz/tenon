@@ -83,6 +83,12 @@ def a_locate(
     sdk_package = a_text(locate, "sdk_package", path)
     operations = a_mapping(locate, "operations", path)
     fields = a_mapping(locate, "fields", path)
+    # Spec AC3: the receiver mapping is Rust/Go-only, like the Go package name.
+    receivers = (
+        a_mapping(locate, "receivers", path)
+        if language in ("rust", "go")
+        else {}
+    )
     try:
         if source == "mcp":
             return McpLocateConfig(client_package=sdk_package)
@@ -91,6 +97,8 @@ def a_locate(
             "operations": operations,
             "fields": fields,
         }
+        if language in ("rust", "go"):
+            options["receivers"] = receivers
         # Spec AC4: the Go root import's package clause is an optional override.
         if language == "go":
             options["package_name"] = locate.get("package_name")
