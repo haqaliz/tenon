@@ -351,17 +351,46 @@ class _Visitor:
                 self._emit(key, SiteShape.KEYWORD, _text(key), chain, True)
         self._visit_children(node)
 
+    def _receiver(self, node: Node | None) -> tuple[str, ...] | None:
+        """The type chain a bound receiver expression stands for."""
+        node = _unwrap(node)
+        if node is None:
+            return None
+        if node.type == "identifier":
+            binding = self._bindings.get(_text(node))
+            return binding.chain if binding is not None else None
+        if node.type == "selector_expression":
+            operand = node.child_by_field_name("operand")
+            field = node.child_by_field_name("field")
+        elif node.type == "call_expression":
+            function = node.child_by_field_name("function")
+            if function is None or function.type != "selector_expression":
+                return None
+            operand = function.child_by_field_name("operand")
+            field = function.child_by_field_name("field")
+        else:
+            return None
+        chain = self._receiver(operand)
+        if chain is None or field is None:
+            return None
+        return chain + (_text(field),)
+
     def _selector(self, node: Node) -> None:
         operand = node.child_by_field_name("operand")
         field = node.child_by_field_name("field")
-        if (
-            operand is not None
-            and operand.type == "identifier"
-            and field is not None
-            and _text(operand) in self._bindings
-        ):
-            binding = self._bindings[_text(operand)]
-            self._emit(field, SiteShape.ATTRIBUTE, _text(field), binding.chain, True)
+        receiver = self._receiver(operand)
+        if field is not None and receiver is not None:
+            binding = (
+                self._bindings.get(_text(operand))
+                if operand is not None and operand.type == "identifier"
+                else None
+            )
+            chain = (
+                binding.chain
+                if binding is not None and binding.literal
+                else receiver + (_text(field),)
+            )
+            self._emit(field, SiteShape.ATTRIBUTE, _text(field), chain, True)
         self._visit_children(node)
 
     def _argument(self, argument: Node, call_chain: tuple[str, ...]) -> None:
@@ -395,16 +424,25 @@ class _Visitor:
         function = node.child_by_field_name("function")
         call_chain: tuple[str, ...] | None = None
         if function is not None and function.type == "selector_expression":
-            segments = _selector_segments(function)
-            if segments is not None:
-                base, tail = segments
-                prefix = self._roots.get(base)
-                rooted = prefix is not None
-                chain = prefix + tail if rooted else tail
-                if tail:
-                    self._emit(function, SiteShape.CALL, tail[-1], chain, rooted)
-                if rooted:
-                    call_chain = chain
+            field = function.child_by_field_name("field")
+            receiver = self._receiver(function.child_by_field_name("operand"))
+            if field is not None and receiver is not None:
+                call_chain = receiver + (_text(field),)
+                self._emit(function, SiteShape.CALL, _text(field), call_chain, True)
+                operand = function.child_by_field_name("operand")
+                if operand is not None:
+                    self.visit(operand)
+            else:
+                segments = _selector_segments(function)
+                if segments is not None:
+                    base, tail = segments
+                    prefix = self._roots.get(base)
+                    rooted = prefix is not None
+                    chain = prefix + tail if rooted else tail
+                    if tail:
+                        self._emit(function, SiteShape.CALL, tail[-1], chain, rooted)
+                    if rooted:
+                        call_chain = chain
         arguments = node.child_by_field_name("arguments")
         if arguments is not None:
             if call_chain is not None:
