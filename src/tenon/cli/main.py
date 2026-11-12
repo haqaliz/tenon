@@ -298,6 +298,20 @@ def _parser() -> argparse.ArgumentParser:
         help="queue poll seconds (default: 1.0)",
     )
     serve_command.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="parallel workers (1..16, default: 1)",
+    )
+    serve_command.add_argument(
+        "--retries",
+        type=int,
+        default=0,
+        metavar="N",
+        help="retries for a run with no report (0..10, default: 0)",
+    )
+    serve_command.add_argument(
         "--dry-run", action="store_true", help="migrate without opening PRs"
     )
     serve_command.add_argument("--app-id", default=None, help="GitHub App id")
@@ -771,24 +785,29 @@ def _serve_command(args: argparse.Namespace, bundle: Path) -> list[str]:
     return command
 
 
-# Spec AC4: the worker maps a queued record to its confined bundle path.
-def _serve_execute(runner: CommandRunner, bundles: Path):
+# Spec AC2/AC4: the worker maps a queued record to its confined bundle path.
+def _serve_execute(runner: CommandRunner, bundles: Path, cancel=None):
     def execute(run) -> RunOutcome:
         bundle = resolve_bundle(bundles, run.bundle)
         if bundle is None:
             return RunOutcome(
                 None, None, f"bundle is not available: {run.bundle}"
             )
-        return runner.run(bundle)
+        predicate = None if cancel is None else lambda: cancel(run.id)
+        return runner.run(bundle, cancel=predicate)
 
     return execute
 
 
-# Spec AC1/AC2/AC4: validate the config, then serve one worker and the API.
+# Spec AC1/AC2/AC4: validate the config, then serve N workers and the API.
 def _serve(args: argparse.Namespace) -> int:
     token = args.api_token or os.environ.get("TENON_API_TOKEN")
     if not token:
         raise _Usage("--api-token or TENON_API_TOKEN is required")
+    if not 1 <= args.workers <= 16:
+        raise _Usage(f"--workers must be 1..16: {args.workers}")
+    if not 0 <= args.retries <= 10:
+        raise _Usage(f"--retries must be 0..10: {args.retries}")
     bundles = Path(args.bundles)
     if not bundles.is_dir():
         raise _Usage(
@@ -798,6 +817,8 @@ def _serve(args: argparse.Namespace) -> int:
         store = RunStore(args.db)
     except StoreError as error:
         raise _Usage(str(error)) from None
+    # Spec AC5: a restart re-queues (or cancels) the stranded running rows.
+    store.recover()
 
     secret = (
         args.webhook_secret or os.environ.get("TENON_WEBHOOK_SECRET") or None
@@ -805,8 +826,18 @@ def _serve(args: argparse.Namespace) -> int:
     runner = CommandRunner(
         lambda bundle: _serve_command(args, bundle), timeout=args.run_timeout
     )
-    worker = Worker(store, _serve_execute(runner, bundles), poll=args.poll)
-    api = Api(store, bundles, token, webhook_secret=secret)
+    workers = [
+        Worker(
+            store,
+            _serve_execute(runner, bundles, store.cancel_requested),
+            poll=args.poll,
+            retries=args.retries,
+        )
+        for _ in range(args.workers)
+    ]
+    api = Api(
+        store, bundles, token, webhook_secret=secret, workers=args.workers
+    )
     try:
         server = serve(api, args.host, args.port)
     except OSError as error:
@@ -819,13 +850,15 @@ def _serve(args: argparse.Namespace) -> int:
         f"tenon: provider serve: listening on http://{args.host}:{args.port}",
         file=sys.stderr,
     )
-    worker.start()
+    for worker in workers:
+        worker.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        worker.stop()
+        for worker in workers:
+            worker.stop()
         server.server_close()
         store.close()
     return 0
