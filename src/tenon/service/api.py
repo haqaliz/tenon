@@ -111,6 +111,13 @@ class Api:
             if method != "GET":
                 return _method_not_allowed()
             return _response(200, {"status": "ok"})
+        # Spec AC2: readiness is public and reflects the store, not auth.
+        if route == "/ready":
+            if method != "GET":
+                return _method_not_allowed()
+            if self._store.ping():
+                return _response(200, {"status": "ready"})
+            return _response(503, {"status": "unavailable"})
         if route == "/webhooks/github":
             if method != "POST":
                 return _method_not_allowed()

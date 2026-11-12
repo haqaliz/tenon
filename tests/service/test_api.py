@@ -80,6 +80,30 @@ def test_health_is_200_without_auth(tmp_path):
     assert response.headers["Content-Type"] == "application/json"
 
 
+# Spec AC2: a usable store is ready without auth and in canonical JSON.
+def test_ready_is_200_without_auth(tmp_path):
+    api, _store, _root = an_api(tmp_path)
+
+    response = api.handle("GET", "/ready", {}, b"")
+
+    assert response.status == 200
+    assert response.body == b'{"status":"ready"}\n'
+    assert response.body == a_response({"status": "ready"}, 200).body
+    assert response.headers["Content-Type"] == "application/json"
+
+
+# Spec AC2: a closed store is unavailable, not an error.
+def test_ready_is_503_on_a_closed_store(tmp_path):
+    api, store, _root = an_api(tmp_path)
+    store.close()
+
+    response = api.handle("GET", "/ready", {}, b"")
+
+    assert response.status == 503
+    assert response.body == b'{"status":"unavailable"}\n'
+    assert response.headers["Content-Type"] == "application/json"
+
+
 # Spec AC2: an unknown path is a canonical 404 error.
 def test_an_unknown_path_is_404(tmp_path):
     api, _store, _root = an_api(tmp_path)
@@ -97,6 +121,7 @@ def test_an_unknown_path_is_404(tmp_path):
         ("DELETE", "/runs"),
         ("POST", "/runs/abc"),
         ("POST", "/health"),
+        ("POST", "/ready"),
         ("GET", "/webhooks/github"),
     ],
 )
