@@ -50,6 +50,8 @@ deployable service behind Caddy) and T13b (workers/retries/cancel/metrics/SQLite
 2026-11-12. The self-hosted service is containerized and resilient; return-type/interprocedural
 receiver inference and webhook-triggered runs are not started.
 
+**v0.1.0 released 2026-11-13** — the first tagged release; see `CHANGELOG.md` and `docs/RELEASE.md`.
+
 ---
 
 ## Risk register

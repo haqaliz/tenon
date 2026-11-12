@@ -1,0 +1,13 @@
+{
+  "provider": "acme",
+  "migration": "amount-cents",
+  "source": "openapi",
+  "language": "python",
+  "old": "old.yaml",
+  "new": "new.yaml",
+  "locate": {
+    "sdk_package": "acme.client"
+  },
+  "require": "TESTS_PASSED",
+  "check": ["python3", "-c", "import acme.billing"]
+}
