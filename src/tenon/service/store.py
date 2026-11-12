@@ -151,6 +151,11 @@ class RunStore:
         try:
             connection = sqlite3.connect(str(path), check_same_thread=False)
             connection.row_factory = sqlite3.Row
+            # Spec AC6: :memory: keeps its own journal mode; the rest apply.
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA busy_timeout = 5000")
+            connection.execute("PRAGMA synchronous = NORMAL")
+            connection.execute("PRAGMA foreign_keys = ON")
             connection.executescript(_SCHEMA)
             with connection:
                 _ensure_run_columns(connection)
@@ -240,7 +245,7 @@ class RunStore:
         report: dict | None,
         error: str | None = None,
     ) -> Run:
-        if status not in ("succeeded", "failed"):
+        if status not in ("succeeded", "failed", "cancelled"):
             raise ValueError(f"invalid finish status: {status}")
         with self._lock:
             row = self._get_row(run_id)
@@ -262,6 +267,62 @@ class RunStore:
                     ),
                 )
             return _row_to_run(self._get_row(run_id))
+
+    # Spec AC3: queued runs cancel now; running runs get a flag for the worker.
+    def request_cancel(self, run_id: str) -> Run | None:
+        with self._lock:
+            row = self._get_row(run_id)
+            if row is None:
+                return None
+            if row["status"] == "queued":
+                with self._connection:
+                    self._connection.execute(
+                        "UPDATE runs SET status = 'cancelled', finished_at = ?"
+                        " WHERE id = ? AND status = 'queued'",
+                        (self._now().isoformat(), run_id),
+                    )
+            elif row["status"] == "running":
+                with self._connection:
+                    self._connection.execute(
+                        "UPDATE runs SET cancel_requested = 1"
+                        " WHERE id = ? AND status = 'running'",
+                        (run_id,),
+                    )
+            return _row_to_run(self._get_row(run_id))
+
+    def cancel_requested(self, run_id: str) -> bool:
+        with self._lock:
+            row = self._get_row(run_id)
+        return row is not None and bool(row["cancel_requested"])
+
+    # Spec AC4: restart recovery; a requested cancel wins over a requeue.
+    def recover(self) -> int:
+        with self._lock:
+            finished_at = self._now().isoformat()
+            with self._connection:
+                cancelled = self._connection.execute(
+                    "UPDATE runs SET status = 'cancelled', finished_at = ?"
+                    " WHERE status = 'running' AND cancel_requested = 1",
+                    (finished_at,),
+                ).rowcount
+                requeued = self._connection.execute(
+                    "UPDATE runs SET status = 'queued', started_at = NULL"
+                    " WHERE status = 'running' AND cancel_requested = 0"
+                ).rowcount
+        return cancelled + requeued
+
+    # Spec AC5: every status is reported, including the zero counts.
+    def counts(self) -> dict[str, int]:
+        counts = dict.fromkeys(
+            ("queued", "running", "succeeded", "failed", "cancelled"), 0
+        )
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT status, COUNT(*) FROM runs GROUP BY status"
+            ).fetchall()
+        for status, total in rows:
+            counts[status] = total
+        return counts
 
     def get(self, run_id: str) -> Run | None:
         with self._lock:

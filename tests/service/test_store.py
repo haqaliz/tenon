@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 from dataclasses import FrozenInstanceError
 from datetime import datetime, timezone
 from itertools import count
@@ -271,6 +272,30 @@ def test_an_old_schema_database_migrates_additively(tmp_path):
     assert columns[-2:] == ["attempts", "cancel_requested"]
 
 
+# Spec AC6: opening the store sets the hardening pragmas.
+def test_open_sets_the_sqlite_pragmas(tmp_path):
+    store = a_store(tmp_path)
+    connection = store._connection
+
+    assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    assert connection.execute("PRAGMA synchronous").fetchone()[0] == 1
+    assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    store.close()
+
+
+# Spec AC6: :memory: keeps working with the pragmas.
+def test_an_in_memory_store_sets_the_supported_pragmas():
+    store = RunStore(":memory:")
+    connection = store._connection
+
+    assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "memory"
+    assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    assert connection.execute("PRAGMA synchronous").fetchone()[0] == 1
+    assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    store.close()
+
+
 # Spec edge case: :memory: works through the single connection.
 def test_an_in_memory_store_works():
     store = RunStore(":memory:")
@@ -334,6 +359,29 @@ def test_a_claim_increments_attempts_exactly_once(tmp_path):
     assert claimed.to_dict()["attempts"] == 1
     assert store.claim_next() is None
     assert store.get(created.id).attempts == 1
+
+
+# Spec AC7: the lock lets parallel claimers take each run exactly once.
+def test_parallel_claims_take_each_run_exactly_once(tmp_path):
+    store = a_store(tmp_path)
+    created = {store.create_run(f"acme/{number}").id for number in range(20)}
+    claimed = []
+    claimed_lock = threading.Lock()
+
+    def claim_all():
+        while (run := store.claim_next()) is not None:
+            with claimed_lock:
+                claimed.append(run)
+
+    threads = [threading.Thread(target=claim_all) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert {run.id for run in claimed} == created
+    assert len(claimed) == len(created)
+    assert {run.attempts for run in claimed} == {1}
 
 
 # Spec AC2: a requeue returns a running run to the queue and keeps attempts.
@@ -444,8 +492,26 @@ def test_finish_failed_records_the_exit_and_error(tmp_path):
     assert finished.finished_at == STAMP
 
 
-# Spec AC4: finish status is only succeeded or failed.
-@pytest.mark.parametrize("status", ["queued", "running", "done", ""])
+# Spec AC3: cancelled is a terminal status accepted by finish.
+def test_finish_accepts_cancelled(tmp_path):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+    store.claim_next()
+
+    finished = store.finish(
+        created.id, status="cancelled", exit=143, report=None
+    )
+
+    assert finished.status == "cancelled"
+    assert finished.exit == 143
+    assert finished.attempts == 1
+    assert finished.finished_at == STAMP
+
+
+# Spec AC4: finish status is only succeeded, failed or cancelled.
+@pytest.mark.parametrize(
+    "status", ["queued", "running", "cancelling", "done", ""]
+)
 def test_finish_rejects_an_invalid_status(tmp_path, status):
     store = a_store(tmp_path)
     created = store.create_run("acme/api")
@@ -503,6 +569,143 @@ def test_finish_stores_the_report_as_canonical_json(tmp_path):
         ).fetchone()[0]
 
     assert stored == '{"a":{"one":1,"two":2},"z":1}'
+
+
+# Spec AC3: cancelling a queued run is terminal immediately.
+def test_request_cancel_cancels_a_queued_run(tmp_path):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+
+    cancelled = store.request_cancel(created.id)
+
+    assert cancelled.status == "cancelled"
+    assert cancelled.finished_at == STAMP
+    assert cancelled.started_at is None
+    assert cancelled.cancel_requested is False
+    assert store.get(created.id) == cancelled
+    assert store.claim_next() is None
+    assert store.request_cancel(created.id) == cancelled
+
+
+# Spec AC3: cancelling a running run only sets the flag.
+def test_request_cancel_flags_a_running_run(tmp_path):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+    claimed = store.claim_next()
+
+    cancelling = store.request_cancel(created.id)
+
+    assert cancelling.status == "running"
+    assert cancelling.cancel_requested is True
+    assert cancelling.to_dict()["cancel_requested"] is True
+    assert cancelling.started_at == claimed.started_at
+    assert cancelling.finished_at is None
+    assert store.cancel_requested(created.id) is True
+    assert store.get(created.id) == cancelling
+
+
+# Spec AC3: a terminal run is returned unchanged.
+def test_request_cancel_returns_a_terminal_run_unchanged(tmp_path):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+    store.claim_next()
+    finished = store.finish(created.id, status="succeeded", exit=0, report=None)
+
+    assert store.request_cancel(created.id) == finished
+
+
+# Spec AC3: unknown cancels are None and the flag is false.
+def test_request_cancel_and_the_flag_handle_unknown_runs(tmp_path):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+
+    assert store.request_cancel("f" * 32) is None
+    assert store.cancel_requested("f" * 32) is False
+    assert store.cancel_requested(created.id) is False
+
+
+# Spec AC4: recover re-queues a stranded run and keeps its attempt count.
+def test_recover_requeues_a_stranded_run(tmp_path):
+    store = a_store(tmp_path)
+    running = store.create_run("acme/api")
+    waiting = store.create_run("acme/web")
+    store.claim_next()
+
+    assert store.recover() == 1
+
+    recovered = store.get(running.id)
+    assert recovered.status == "queued"
+    assert recovered.started_at is None
+    assert recovered.attempts == 1
+    assert store.get(waiting.id) == waiting
+    assert store.recover() == 0
+
+
+# Spec AC4: recover cancels a stranded run whose cancel was requested.
+def test_recover_cancels_a_run_with_a_cancel_request(tmp_path):
+    store = a_store(tmp_path)
+    created = store.create_run("acme/api")
+    store.claim_next()
+    store.request_cancel(created.id)
+
+    assert store.recover() == 1
+
+    recovered = store.get(created.id)
+    assert recovered.status == "cancelled"
+    assert recovered.finished_at == STAMP
+    assert recovered.cancel_requested is True
+
+
+# Spec AC4: recover counts both branches and leaves terminal runs alone.
+def test_recover_counts_both_branches_and_leaves_terminal_runs(tmp_path):
+    store = a_store(tmp_path)
+    requeued = store.create_run("acme/requeued")
+    cancelled = store.create_run("acme/cancelled")
+    done = store.create_run("acme/done")
+    store.claim_next()
+    store.claim_next()
+    store.request_cancel(cancelled.id)
+    store.claim_next()
+    finished = store.finish(done.id, status="failed", exit=1, report=None)
+
+    assert store.recover() == 2
+
+    assert store.get(requeued.id).status == "queued"
+    assert store.get(cancelled.id).status == "cancelled"
+    assert store.get(done.id) == finished
+
+
+# Spec AC5: counts lists all five statuses and follows the transitions.
+def test_counts_lists_all_five_statuses_and_follows_transitions(tmp_path):
+    store = a_store(tmp_path)
+    assert store.counts() == {
+        "queued": 0,
+        "running": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "cancelled": 0,
+    }
+    store.create_run("acme/running")
+    succeeded = store.create_run("acme/succeeded")
+    failed = store.create_run("acme/failed")
+    cancelled = store.create_run("acme/cancelled")
+    store.create_run("acme/queued")
+    assert store.counts()["queued"] == 5
+
+    assert store.claim_next().status == "running"
+    assert store.claim_next().id == succeeded.id
+    store.finish(succeeded.id, status="succeeded", exit=0, report=None)
+    assert store.claim_next().id == failed.id
+    store.finish(failed.id, status="failed", exit=1, report=None)
+    store.request_cancel(cancelled.id)
+
+    assert store.counts() == {
+        "queued": 1,
+        "running": 1,
+        "succeeded": 1,
+        "failed": 1,
+        "cancelled": 1,
+    }
 
 
 # Spec AC5: list returns newest-first.
