@@ -250,10 +250,12 @@ def test_rooted_calls_and_keywords_are_reported():
 
     assert result.hits == (
         hit(SDK_BASIC, "acme/billing.py", 3, 10, SiteShape.CALL, "Stripe", ("Stripe",), True),
-        hit(SDK_BASIC, "acme/billing.py", 5, 16, SiteShape.CALL, "create", ("charges", "create"), True),
-        hit(SDK_BASIC, "acme/billing.py", 5, 23, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
-        hit(SDK_BASIC, "acme/billing.py", 5, 38, SiteShape.KEYWORD, "currency", ("charges", "create"), True),
-        hit(SDK_BASIC, "acme/billing.py", 6, 16, SiteShape.CALL, "delete", ("charges", "delete"), True),
+        hit(SDK_BASIC, "acme/billing.py", 5, 8, SiteShape.ATTRIBUTE, "charges", ("Stripe", "charges"), True),
+        hit(SDK_BASIC, "acme/billing.py", 5, 16, SiteShape.CALL, "create", ("Stripe", "charges", "create"), True),
+        hit(SDK_BASIC, "acme/billing.py", 5, 23, SiteShape.KEYWORD, "amount", ("Stripe", "charges", "create"), True),
+        hit(SDK_BASIC, "acme/billing.py", 5, 38, SiteShape.KEYWORD, "currency", ("Stripe", "charges", "create"), True),
+        hit(SDK_BASIC, "acme/billing.py", 6, 8, SiteShape.ATTRIBUTE, "charges", ("Stripe", "charges"), True),
+        hit(SDK_BASIC, "acme/billing.py", 6, 16, SiteShape.CALL, "delete", ("Stripe", "charges", "delete"), True),
         hit(SDK_BASIC, "acme/reporting.py", 3, 16, SiteShape.CALL, "list", ("charges", "list"), False),
         hit(SDK_BASIC, "acme/reporting.py", 3, 21, SiteShape.KEYWORD, "limit", (), False),
     )
@@ -266,8 +268,9 @@ def test_decoy_keyword_is_unrooted_and_never_rooted():
     assert result.hits == (
         hit(SDK_DECOY, "acme/mixed.py", 3, 10, SiteShape.CALL, "Stripe", ("Stripe",), True),
         hit(SDK_DECOY, "acme/mixed.py", 10, 8, SiteShape.KEYWORD, "amount", (), False),
-        hit(SDK_DECOY, "acme/mixed.py", 11, 16, SiteShape.CALL, "create", ("charges", "create"), True),
-        hit(SDK_DECOY, "acme/mixed.py", 11, 23, SiteShape.KEYWORD, "amount", ("charges", "create"), True),
+        hit(SDK_DECOY, "acme/mixed.py", 11, 8, SiteShape.ATTRIBUTE, "charges", ("Stripe", "charges"), True),
+        hit(SDK_DECOY, "acme/mixed.py", 11, 16, SiteShape.CALL, "create", ("Stripe", "charges", "create"), True),
+        hit(SDK_DECOY, "acme/mixed.py", 11, 23, SiteShape.KEYWORD, "amount", ("Stripe", "charges", "create"), True),
     )
     assert [(h.line, h.rooted) for h in result.hits if h.symbol == "amount"] == [
         (10, False),
@@ -324,12 +327,14 @@ def test_dict_keys_and_unrooted_attributes_are_reported():
 
     assert result.hits == (
         hit(SDK_DYNAMIC, "acme/flows.py", 3, 17, SiteShape.CALL, "Stripe", ("Stripe",), True),
-        hit(SDK_DYNAMIC, "acme/flows.py", 7, 27, SiteShape.CALL, "create", ("charges", "create"), True),
+        hit(SDK_DYNAMIC, "acme/flows.py", 7, 19, SiteShape.ATTRIBUTE, "charges", ("Stripe", "charges"), True),
+        hit(SDK_DYNAMIC, "acme/flows.py", 7, 27, SiteShape.CALL, "create", ("Stripe", "charges", "create"), True),
         hit(SDK_DYNAMIC, "acme/flows.py", 15, 11, SiteShape.CALL, "delete", ("charges", "delete"), True),
         hit(SDK_DYNAMIC, "acme/flows.py", 18, 11, SiteShape.CALL, "delete", ("charges", "delete"), False),
-        hit(SDK_DYNAMIC, "acme/flows.py", 20, 16, SiteShape.CALL, "create", ("charges", "create"), True),
-        hit(SDK_DYNAMIC, "acme/flows.py", 20, 24, SiteShape.DICT_KEY, "amount", ("charges", "create"), True),
-        hit(SDK_DYNAMIC, "acme/flows.py", 20, 37, SiteShape.DICT_KEY, "currency", ("charges", "create"), True),
+        hit(SDK_DYNAMIC, "acme/flows.py", 20, 8, SiteShape.ATTRIBUTE, "charges", ("Stripe", "charges"), True),
+        hit(SDK_DYNAMIC, "acme/flows.py", 20, 16, SiteShape.CALL, "create", ("Stripe", "charges", "create"), True),
+        hit(SDK_DYNAMIC, "acme/flows.py", 20, 24, SiteShape.DICT_KEY, "amount", ("Stripe", "charges", "create"), True),
+        hit(SDK_DYNAMIC, "acme/flows.py", 20, 37, SiteShape.DICT_KEY, "currency", ("Stripe", "charges", "create"), True),
         hit(SDK_DYNAMIC, "acme/flows.py", 22, 6, SiteShape.ATTRIBUTE, "amount", (), False),
     )
 
@@ -353,8 +358,8 @@ def test_star_arguments_getattr_and_alias_chains_are_dynamics():
     result = scan(SDK_DYNAMIC, "stripe")
 
     assert result.dynamics == (
-        Dynamic("acme/flows.py", 7, 34, DynamicKind.STAR_KWARGS, chain=("charges", "create")),
-        Dynamic("acme/flows.py", 11, 12, DynamicKind.GETATTR, "delete", ("charges",)),
+        Dynamic("acme/flows.py", 7, 34, DynamicKind.STAR_KWARGS, chain=("Stripe", "charges", "create")),
+        Dynamic("acme/flows.py", 11, 12, DynamicKind.GETATTR, "delete", ("Stripe", "charges")),
         Dynamic("acme/flows.py", 11, 46, DynamicKind.STAR_ARGS),
         Dynamic("acme/flows.py", 17, 1, DynamicKind.ALIAS_CHAIN, "d"),
     )
@@ -373,8 +378,8 @@ def test_star_kwargs_carry_the_enclosing_call_chain(tmp_path):
     result = scan(tmp_path, "stripe")
 
     assert [(dynamic.kind, dynamic.chain) for dynamic in result.dynamics] == [
-        (DynamicKind.STAR_KWARGS, ("charges", "create")),
-        (DynamicKind.STAR_KWARGS, ("customers", "list")),
+        (DynamicKind.STAR_KWARGS, ("Stripe", "charges", "create")),
+        (DynamicKind.STAR_KWARGS, ("Stripe", "customers", "list")),
     ]
 
 
@@ -384,7 +389,8 @@ def test_src_layout_is_scanned():
     assert result.modules == ("src/acme/app.py",)
     assert result.hits == (
         hit(SDK_SRC_LAYOUT, "src/acme/app.py", 3, 5, SiteShape.CALL, "Stripe", ("Stripe",), True),
-        hit(SDK_SRC_LAYOUT, "src/acme/app.py", 4, 11, SiteShape.CALL, "delete", ("charges", "delete"), True),
+        hit(SDK_SRC_LAYOUT, "src/acme/app.py", 4, 3, SiteShape.ATTRIBUTE, "charges", ("Stripe", "charges"), True),
+        hit(SDK_SRC_LAYOUT, "src/acme/app.py", 4, 11, SiteShape.CALL, "delete", ("Stripe", "charges", "delete"), True),
     )
 
 
@@ -393,8 +399,10 @@ def test_multiple_sdk_methods_are_reported():
 
     assert result.hits == (
         hit(SDK_MULTIPLE, "acme/clients.py", 3, 10, SiteShape.CALL, "Stripe", ("Stripe",), True),
-        hit(SDK_MULTIPLE, "acme/clients.py", 5, 18, SiteShape.CALL, "get", ("customers", "get"), True),
-        hit(SDK_MULTIPLE, "acme/clients.py", 6, 18, SiteShape.CALL, "retrieve", ("customers", "retrieve"), True),
+        hit(SDK_MULTIPLE, "acme/clients.py", 5, 8, SiteShape.ATTRIBUTE, "customers", ("Stripe", "customers"), True),
+        hit(SDK_MULTIPLE, "acme/clients.py", 5, 18, SiteShape.CALL, "get", ("Stripe", "customers", "get"), True),
+        hit(SDK_MULTIPLE, "acme/clients.py", 6, 8, SiteShape.ATTRIBUTE, "customers", ("Stripe", "customers"), True),
+        hit(SDK_MULTIPLE, "acme/clients.py", 6, 18, SiteShape.CALL, "retrieve", ("Stripe", "customers", "retrieve"), True),
     )
 
 
@@ -419,7 +427,7 @@ def test_attribute_on_an_sdk_class_and_its_instance_is_rooted():
     assert visitor.hits == [
         Hit("m.py", 2, 10, SiteShape.CALL, "Stripe", ("Stripe",), True, "client = Stripe()"),
         Hit("m.py", 3, 8, SiteShape.ATTRIBUTE, "amount", ("Stripe", "amount"), True, "Stripe.amount"),
-        Hit("m.py", 4, 8, SiteShape.ATTRIBUTE, "amount", ("amount",), True, "client.amount"),
+        Hit("m.py", 4, 8, SiteShape.ATTRIBUTE, "amount", ("Stripe", "amount"), True, "client.amount"),
     ]
 
 
@@ -450,7 +458,9 @@ def test_getattr_with_a_non_literal_name_has_no_symbol():
 
     visitor.visit(tree)
 
-    assert visitor.dynamics == [Dynamic("m.py", 3, 1, DynamicKind.GETATTR, None)]
+    assert visitor.dynamics == [
+        Dynamic("m.py", 3, 1, DynamicKind.GETATTR, None, ("Client",))
+    ]
 
 
 def test_star_arguments_in_an_unrooted_call_are_ignored():
@@ -479,12 +489,13 @@ def test_columns_are_characters_not_utf8_bytes():
 
     assert result.hits == (
         hit(SDK_UNICODE, "acme/unicode_demo.py", 3, 10, SiteShape.CALL, "Stripe", ("Stripe",), True),
-        hit(SDK_UNICODE, "acme/unicode_demo.py", 4, 31, SiteShape.CALL, "delete", ("charges", "delete"), True),
+        hit(SDK_UNICODE, "acme/unicode_demo.py", 4, 23, SiteShape.ATTRIBUTE, "charges", ("Stripe", "charges"), True),
+        hit(SDK_UNICODE, "acme/unicode_demo.py", 4, 31, SiteShape.CALL, "delete", ("Stripe", "charges", "delete"), True),
     )
     line = (SDK_UNICODE / "acme/unicode_demo.py").read_text(encoding="utf-8").split(
         "\n"
     )[3]
-    delete = result.hits[1]
+    delete = result.hits[2]
     character_column = line.index("delete") + 1
     byte_column = len(line[: line.index("delete")].encode("utf-8")) + 1
     assert delete.column == character_column
@@ -582,3 +593,184 @@ def test_a_function_local_binding_does_not_leak():
     )
 
     assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC2: a tracked call chain emits its full and intermediate chains, and
+# its keyword arguments carry the same chain.
+def test_a_receiver_call_chain_is_rooted(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        'import stripe\n\nclient = stripe.Client("key")\n'
+        'client.charges.create(amount=1, currency="usd")\n',
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(repo, "app.py", 3, 17, SiteShape.CALL, "Client", ("Client",), True),
+        hit(
+            repo,
+            "app.py",
+            4,
+            8,
+            SiteShape.ATTRIBUTE,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+        hit(
+            repo,
+            "app.py",
+            4,
+            16,
+            SiteShape.CALL,
+            "create",
+            ("Client", "charges", "create"),
+            True,
+        ),
+        hit(
+            repo,
+            "app.py",
+            4,
+            23,
+            SiteShape.KEYWORD,
+            "amount",
+            ("Client", "charges", "create"),
+            True,
+        ),
+        hit(
+            repo,
+            "app.py",
+            4,
+            33,
+            SiteShape.KEYWORD,
+            "currency",
+            ("Client", "charges", "create"),
+            True,
+        ),
+    )
+
+
+# Spec AC2: a bare attribute on a tracked receiver emits the prefix.
+def test_a_receiver_attribute_emits_the_prefix(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        'import stripe\n\nclient = stripe.Client("key")\nclient.charges\n',
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(repo, "app.py", 3, 17, SiteShape.CALL, "Client", ("Client",), True),
+        hit(
+            repo,
+            "app.py",
+            4,
+            8,
+            SiteShape.ATTRIBUTE,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC2: a one-segment call has no intermediate attribute to emit.
+def test_a_single_member_receiver_call_has_no_intermediate(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        'import stripe\n\nclient = stripe.Client("key")\n'
+        "client.create(amount=1)\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(repo, "app.py", 3, 17, SiteShape.CALL, "Client", ("Client",), True),
+        hit(
+            repo,
+            "app.py",
+            4,
+            8,
+            SiteShape.CALL,
+            "create",
+            ("Client", "create"),
+            True,
+        ),
+        hit(
+            repo,
+            "app.py",
+            4,
+            15,
+            SiteShape.KEYWORD,
+            "amount",
+            ("Client", "create"),
+            True,
+        ),
+    )
+
+
+# Spec AC2: a chain on an untracked receiver keeps the unrooted behavior.
+def test_an_untracked_receiver_chain_is_unchanged(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "import stripe\n\nclient = build()\n"
+        "client.charges.create(amount=1)\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(
+            repo,
+            "app.py",
+            4,
+            16,
+            SiteShape.CALL,
+            "create",
+            ("charges", "create"),
+            False,
+        ),
+        hit(repo, "app.py", 4, 23, SiteShape.KEYWORD, "amount", (), False),
+    )
+
+
+# Spec AC1/AC2: evidence is per function: a parameter shadows, a local rebind
+# stays local, and the module receiver is restored afterwards.
+def test_receiver_chains_respect_function_scopes(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "import stripe\n"
+        "\n"
+        'client = stripe.Client("a")\n'
+        "\n"
+        "\n"
+        "def shadow(client):\n"
+        "    client.charges\n"
+        "\n"
+        "\n"
+        "def rebuild():\n"
+        "    client = build()\n"
+        "    client.charges\n"
+        "\n"
+        "\n"
+        "client.charges\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(repo, "app.py", 3, 17, SiteShape.CALL, "Client", ("Client",), True),
+        hit(repo, "app.py", 7, 12, SiteShape.ATTRIBUTE, "charges", (), False),
+        hit(repo, "app.py", 12, 12, SiteShape.ATTRIBUTE, "charges", (), False),
+        hit(
+            repo,
+            "app.py",
+            15,
+            8,
+            SiteShape.ATTRIBUTE,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+    )

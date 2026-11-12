@@ -26,6 +26,13 @@ SDK_BASIC = FIXTURES / "sdk-basic"
 SDK_DECOY = FIXTURES / "sdk-decoy"
 SDK_DYNAMIC = FIXTURES / "sdk-dynamic"
 STRIPE = LocateConfig(sdk_package="stripe")
+STRIPE_MAPPED = LocateConfig(
+    sdk_package="stripe",
+    operations={
+        "POST /v1/charges": "Stripe.charges.create",
+        "DELETE /v1/charges/{id}": "Stripe.charges.delete",
+    },
+)
 CHARGE_PROPERTIES = "#/components/schemas/Charge/properties"
 CHARGES_BODY = (
     "#/paths/~1v1~1charges/post/requestBody/content/application~1json/schema/properties"
@@ -108,7 +115,7 @@ def test_a_decoy_only_change_has_no_certain_sites(tmp_path):
 
 def test_dynamic_kwargs_are_skipped_and_the_dict_key_is_edited():
     change = an_operation_rename()
-    located = locate(change, SDK_DYNAMIC, STRIPE)
+    located = locate(change, SDK_DYNAMIC, STRIPE_MAPPED)
 
     proposal = propose(change, located, SDK_DYNAMIC)
 
@@ -134,7 +141,7 @@ def test_a_certain_call_site_is_shape_not_editable():
             pointer="#/paths", method="delete", path="/v1/charges/{id}"
         ),
     )
-    located = locate(change, SDK_BASIC, STRIPE)
+    located = locate(change, SDK_BASIC, STRIPE_MAPPED)
     assert [(site.line, site.column, site.shape) for site in located.certain] == [
         (6, 16, SiteShape.CALL)
     ]

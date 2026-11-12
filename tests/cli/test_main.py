@@ -145,8 +145,15 @@ def test_sdk_package_flag_overrides_config(a_repo, a_specs, capsys):
     assert payload["results"][0]["reason"] == "NO_SDK_IMPORT"
 
 
-# Spec AC7: an operation mapping overrides the inferred call.
+# Spec AC7: an operation flag overrides the configured mapping.
 def test_operation_flag_overrides_config(a_repo, a_endpoint_specs, capsys):
+    config = (a_repo / "tenon.toml").read_text(encoding="utf-8")
+    (a_repo / "tenon.toml").write_text(
+        config
+        + '\n[locate.operations]\n"POST /v1/charges" = "StripeClient.charges.create"\n',
+        encoding="utf-8",
+    )
+
     assert a_check(a_repo, a_endpoint_specs) == 1
     assert "acme/billing.py:7:27" in capsys.readouterr().out
 

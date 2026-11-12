@@ -482,6 +482,8 @@ class _Visitor(ast.NodeVisitor):
     def _ref(
         self, root: str | None, tail: tuple[str, ...]
     ) -> tuple[tuple[str, ...], bool]:
+        if root is not None and root in self._bindings:
+            return (*self._bindings[root], *tail), True
         full = _full(root, tail, self._roots, self._sdk_parts)
         if full is None:
             return tail, False
@@ -498,10 +500,12 @@ class _Visitor(ast.NodeVisitor):
     def _factory(self, callee: ast.expr) -> tuple[str, ...] | None:
         """The type chain a configured factory call binds, if its key matches."""
         root, tail = _parts(callee)
-        candidates = [".".join((root, *tail))] if root is not None else []
+        candidates = []
         full = _full(root, tail, self._roots, self._sdk_parts)
         if full is not None:
             candidates.append(".".join(full))
+        if root is not None:
+            candidates.append(".".join((root, *tail)))
         for candidate in candidates:
             mapped = self._receivers.get(candidate)
             if mapped is None:
@@ -605,7 +609,8 @@ class _Visitor(ast.NodeVisitor):
 
     def _rooted_expr(self, node: ast.expr) -> bool:
         root, tail = _parts(node)
-        return _full(root, tail, self._roots, self._sdk_parts) is not None
+        _, rooted = self._ref(root, tail)
+        return rooted
 
     def visit_Call(self, node: ast.Call) -> None:
         root, tail = _parts(node.func)
@@ -621,6 +626,22 @@ class _Visitor(ast.NodeVisitor):
                 rooted,
                 leaf=callee_is_attribute,
             )
+        if root is not None and root in self._bindings and callee_is_attribute:
+            receiver = node.func.value
+            if isinstance(receiver, ast.Attribute):
+                receiver_root, receiver_tail = _parts(receiver)
+                receiver_chain, receiver_rooted = self._ref(
+                    receiver_root, receiver_tail
+                )
+                if receiver_rooted and receiver_chain:
+                    self._emit(
+                        receiver,
+                        SiteShape.ATTRIBUTE,
+                        receiver_tail[-1],
+                        receiver_chain,
+                        True,
+                        leaf=True,
+                    )
         if self._is_getattr(node) and self._rooted_expr(node.args[0]):
             name = node.args[1]
             symbol = (
@@ -691,7 +712,7 @@ class _Visitor(ast.NodeVisitor):
         if self._callee == 0:
             root, tail = _parts(node)
             chain, rooted = self._ref(root, tail)
-            rooted = rooted and root in self._classes
+            rooted = rooted and (root in self._classes or root in self._bindings)
             self._emit(
                 node,
                 SiteShape.ATTRIBUTE,

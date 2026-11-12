@@ -22,8 +22,14 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "repos"
 SDK_BASIC = FIXTURES / "sdk-basic"
 SDK_DECOY = FIXTURES / "sdk-decoy"
 SDK_DYNAMIC = FIXTURES / "sdk-dynamic"
-SDK_MULTIPLE = FIXTURES / "sdk-multiple"
 STRIPE = LocateConfig(sdk_package="stripe")
+STRIPE_MAPPED = LocateConfig(
+    sdk_package="stripe",
+    operations={
+        "POST /v1/charges": "Stripe.charges.create",
+        "DELETE /v1/charges/{id}": "Stripe.charges.delete",
+    },
+)
 
 CHARGE_PROPERTIES = "#/components/schemas/Charge/properties"
 CHARGES_BODY = (
@@ -87,7 +93,7 @@ def test_an_operation_rename_finds_the_argument():
         path="/v1/charges",
     )
 
-    result = locate(change, SDK_BASIC, STRIPE)
+    result = locate(change, SDK_BASIC, STRIPE_MAPPED)
 
     assert [(site.path, site.line, site.column) for site in result.certain] == [
         ("acme/billing.py", 5, 23)
@@ -130,7 +136,7 @@ def test_star_kwargs_yields_a_dynamic_group_without_certainty(tmp_path):
             path="/v1/charges",
         ),
         repo,
-        STRIPE,
+        STRIPE_MAPPED,
     )
 
     assert result.certain == ()
@@ -153,7 +159,7 @@ def test_getattr_is_dynamic_and_never_certain(tmp_path):
     )
     config = LocateConfig(
         sdk_package="stripe",
-        operations={"DELETE /v1/charges/{id}": "charges.delete"},
+        operations={"DELETE /v1/charges/{id}": "Stripe.charges.delete"},
     )
 
     result = locate(
@@ -194,7 +200,7 @@ def test_a_getattr_companion_is_reported_alongside_a_resolved_call(tmp_path):
             path="/v1/charges/{id}",
         ),
         repo,
-        STRIPE,
+        STRIPE_MAPPED,
     )
 
     assert [(site.path, site.line, site.column, site.shape) for site in result.certain] == [
@@ -230,7 +236,13 @@ def test_an_unrooted_cross_file_call_is_reported_not_dropped():
 
 
 # Spec AC5: both inferred candidates resolve, so both sites are kept.
-def test_two_resolving_candidates_are_one_group():
+def test_two_resolving_candidates_are_one_group(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "import stripe\n\n"
+        "stripe.customers.get(cid)\n"
+        "stripe.customers.retrieve(cid)\n",
+    )
     change = a_change(
         ChangeKind.ENDPOINT_REMOVED,
         before="/v1/customers/{id}",
@@ -238,17 +250,18 @@ def test_two_resolving_candidates_are_one_group():
         path="/v1/customers/{id}",
     )
 
-    result = locate(change, SDK_MULTIPLE, STRIPE)
+    result = locate(change, repo, STRIPE)
 
     assert result.certain == ()
     assert len(result.ambiguous) == 1
     group = result.ambiguous[0]
     assert group.reason is AmbiguityReason.MULTIPLE_CANDIDATES
     assert [
-        (site.path, site.line, site.symbol) for site in group.candidates
+        (site.path, site.line, site.column, site.symbol)
+        for site in group.candidates
     ] == [
-        ("acme/clients.py", 5, "get"),
-        ("acme/clients.py", 6, "retrieve"),
+        ("app.py", 3, 18, "get"),
+        ("app.py", 4, 18, "retrieve"),
     ]
 
 
@@ -262,7 +275,7 @@ def test_a_required_parameter_returns_the_resolved_calls_as_certain():
         path="/v1/charges",
     )
 
-    result = locate(change, SDK_BASIC, STRIPE)
+    result = locate(change, SDK_BASIC, STRIPE_MAPPED)
 
     assert [(site.path, site.line, site.column) for site in result.certain] == [
         ("acme/billing.py", 5, 16)
@@ -468,3 +481,59 @@ def test_locate_never_modifies_the_scanned_tree():
     )
 
     assert snapshot() == before
+
+
+# Spec AC3: a mapped receiver chain resolves the operation.
+def test_a_mapped_receiver_chain_resolves_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        'import stripe\n\nclient = stripe.Client("key")\n'
+        'client.charges.create(amount=100, currency="usd")\n',
+    )
+    config = LocateConfig(
+        sdk_package="stripe",
+        operations={"POST /v1/charges": "Client.charges.create"},
+    )
+
+    result = locate(
+        a_change(
+            ChangeKind.RENAMED,
+            before="amount",
+            pointer=CHARGES_BODY,
+            method="post",
+            path="/v1/charges",
+        ),
+        repo,
+        config,
+    )
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("app.py", 4, 23, SiteShape.KEYWORD, "amount")]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+# Spec AC3: locate passes the receiver mapping through to the scanner.
+def test_a_configured_factory_resolves_a_component(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "import stripe\n\nclient = make_client()\nclient.amount\n",
+    )
+    change = a_change(ChangeKind.RENAMED, before="amount", pointer=CHARGE_PROPERTIES)
+
+    configured = locate(
+        change,
+        repo,
+        LocateConfig(sdk_package="stripe", receivers={"make_client": "Client"}),
+    )
+    unconfigured = locate(change, repo, LocateConfig(sdk_package="stripe"))
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in configured.certain
+    ] == [("app.py", 4, 8, SiteShape.ATTRIBUTE, "amount")]
+    assert configured.ambiguous == ()
+    assert configured.reason is None
+    assert unconfigured.certain == ()
