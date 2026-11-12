@@ -22,13 +22,12 @@ TS_ALIAS = FIXTURES / "ts-alias"
 TS_DECOY = FIXTURES / "ts-decoy"
 TS_DYNAMIC = FIXTURES / "ts-dynamic"
 TS_DYNAMIC_IMPORT = FIXTURES / "ts-dynamic-import"
-TS_MULTIPLE = FIXTURES / "ts-multiple"
 TS_NO_SDK = FIXTURES / "ts-no-sdk"
 
 STRIPE = TsLocateConfig(sdk_package="stripe")
 STRIPE_OPERATIONS = TsLocateConfig(
     sdk_package="stripe",
-    operations={"POST /v1/charges": "charges.create"},
+    operations={"POST /v1/charges": "Stripe.charges.create"},
 )
 CHARGE_PROPERTIES = "#/components/schemas/Charge/properties"
 
@@ -130,6 +129,11 @@ def a_change(old, new):
 def a_removed_endpoint(old):
     [change] = diff(parse(old, "old"), parse(EMPTY_SPEC, "new")).changes
     return change
+
+
+def a_repo(tmp_path, source):
+    (tmp_path / "app.ts").write_text(source, encoding="utf-8")
+    return tmp_path
 
 
 # Spec AC2: the component rename is certain exactly at the argument key.
@@ -239,8 +243,15 @@ def test_an_unmapped_operation_has_no_mapping():
 
 
 # Spec AC4: two resolving candidates are one group with the candidate calls.
-def test_two_resolving_candidates_are_one_group():
-    result = locate_ts(a_removed_endpoint(MULTIPLE_OLD), TS_MULTIPLE, STRIPE)
+def test_two_resolving_candidates_are_one_group(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        'import * as stripe from "stripe";\n'
+        "\n"
+        'stripe.charges.get("ch_1");\n'
+        'stripe.charges.list({ limit: 10 });\n',
+    )
+    result = locate_ts(a_removed_endpoint(MULTIPLE_OLD), repo, STRIPE)
 
     assert result.certain == ()
     assert result.reason is None
@@ -252,8 +263,8 @@ def test_two_resolving_candidates_are_one_group():
         (site.path, site.line, site.column, site.shape, site.symbol)
         for site in group.candidates
     ] == [
-        ("src/clients.ts", 5, 16, SiteShape.CALL, "get"),
-        ("src/clients.ts", 6, 16, SiteShape.CALL, "list"),
+        ("app.ts", 3, 16, SiteShape.CALL, "get"),
+        ("app.ts", 4, 16, SiteShape.CALL, "list"),
     ]
 
 
@@ -279,7 +290,9 @@ def test_the_decoy_is_never_certain():
 
 # Spec AC5: an object variable/spread on a resolved call is DYNAMIC_KWARGS.
 def test_dynamic_kwargs_keep_the_resolved_call_sites_as_candidates():
-    result = locate_ts(a_change(OPERATION_OLD, OPERATION_NEW), TS_DYNAMIC, STRIPE)
+    result = locate_ts(
+        a_change(OPERATION_OLD, OPERATION_NEW), TS_DYNAMIC, STRIPE_OPERATIONS
+    )
 
     assert [(site.path, site.line, site.column, site.shape) for site in result.certain] == [
         ("src/flows.ts", 9, 25, SiteShape.KEYWORD)
@@ -393,6 +406,59 @@ def test_an_unmapped_symbol_group_keeps_the_repository_spelling():
         (site.path, site.line, site.column, site.shape, site.symbol)
         for site in group.candidates
     ] == [("src/billing.ts", 5, 25, SiteShape.KEYWORD, "amount")]
+
+
+# Spec AC3: a mapped receiver chain resolves the operation.
+def test_a_mapped_receiver_chain_resolves_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        'import { Client } from "stripe";\n'
+        "\n"
+        'const client = new Client("key");\n'
+        'client.charges.create({ amount: 100, currency: "usd" });\n',
+    )
+    config = TsLocateConfig(
+        sdk_package="stripe",
+        operations={"POST /v1/charges": "Client.charges.create"},
+    )
+
+    result = locate_ts(a_change(OPERATION_OLD, OPERATION_NEW), repo, config)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("app.ts", 4, 25, SiteShape.KEYWORD, "amount")]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+# Spec AC3: a configured factory resolves a component through locate_ts.
+def test_a_configured_factory_resolves_a_component(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        'import Stripe from "stripe";\n'
+        "\n"
+        "const client = makeClient();\n"
+        "client.amount;\n",
+    )
+    change = a_change(COMPONENT_OLD, COMPONENT_NEW)
+
+    configured = locate_ts(
+        change,
+        repo,
+        TsLocateConfig(
+            sdk_package="stripe", receivers={"makeClient": "Client"}
+        ),
+    )
+    unconfigured = locate_ts(change, repo, TsLocateConfig(sdk_package="stripe"))
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in configured.certain
+    ] == [("app.ts", 4, 8, SiteShape.ATTRIBUTE, "amount")]
+    assert configured.ambiguous == ()
+    assert configured.reason is None
+    assert unconfigured.certain == ()
 
 
 # Spec AC7: same inputs, byte-identical JSON.

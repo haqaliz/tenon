@@ -718,6 +718,8 @@ class _Visitor:
     def _ref(
         self, root: str | None, tail: tuple[str, ...]
     ) -> tuple[tuple[str, ...], bool]:
+        if root is not None and root in self._bindings:
+            return (*self._bindings[root], *tail), True
         full = _full(root, tail, self._roots, self._sdk_parts)
         if full is None:
             return tail, False
@@ -796,6 +798,22 @@ class _Visitor:
             symbol = tail[-1] if tail else (root or "")
             if leaf is not None:
                 self._emit(leaf, SiteShape.CALL, symbol, chain, rooted)
+        if is_member and root is not None and root in self._bindings:
+            receiver = function.child_by_field_name("object")
+            if receiver is not None and receiver.type == "member_expression":
+                receiver_root, receiver_tail = _parts(receiver)
+                receiver_chain, receiver_rooted = self._ref(
+                    receiver_root, receiver_tail
+                )
+                field = receiver.child_by_field_name("property")
+                if receiver_rooted and receiver_chain and field is not None:
+                    self._emit(
+                        field,
+                        SiteShape.ATTRIBUTE,
+                        receiver_tail[-1],
+                        receiver_chain,
+                        True,
+                    )
         arguments = node.child_by_field_name("arguments")
         args = arguments.named_children if arguments is not None else ()
         for argument in args:
@@ -868,7 +886,7 @@ class _Visitor:
         if self._callee == 0:
             root, tail = _parts(node)
             chain, rooted = self._ref(root, tail)
-            rooted = rooted and root in self._classes
+            rooted = rooted and (root in self._classes or root in self._bindings)
             property_node = node.child_by_field_name("property")
             if property_node is not None:
                 self._emit(
