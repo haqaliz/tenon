@@ -107,3 +107,34 @@ def test_a_report_free_failure_retries_end_to_end(tmp_path):
     assert payload["status"] == "succeeded"
     assert payload["attempts"] == 2
     assert payload["report"] == {}
+
+
+# Spec AC2: an API cancel during the run finishes it cancelled end to end.
+def test_a_cancel_during_the_run_finishes_cancelled(tmp_path):
+    root = tmp_path / "bundles"
+    root.mkdir()
+    (root / "bundle.json").write_text("{}", encoding="utf-8")
+    store = RunStore(tmp_path / "runs.db")
+    api = Api(store, root, TOKEN)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    answered = []
+
+    def execute(run):
+        response = api.handle(
+            "POST", f"/runs/{run.id}/cancel", auth, b""
+        )
+        answered.append(response.status)
+        return Outcome(None, None, "run cancelled", True)
+
+    worker = Worker(store, execute)
+
+    queued = api.handle("POST", "/runs", auth, b'{"bundle":"bundle.json"}')
+    run_id = json.loads(queued.body)["id"]
+    assert worker.run_once() is True
+
+    payload = json.loads(a_fetch(api, auth, run_id).body)
+
+    assert answered == [202]
+    assert payload["status"] == "cancelled"
+    assert payload["cancel_requested"] is True
+    assert payload["error"] == "run cancelled"
