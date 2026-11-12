@@ -23,6 +23,6 @@ def locate_csharp(
     return resolve(
         change,
         query,
-        scan_csharp(root, config.sdk_package),
+        scan_csharp(root, config.sdk_package, config.receivers),
         config,
     )

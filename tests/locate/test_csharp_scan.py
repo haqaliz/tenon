@@ -1435,3 +1435,159 @@ def test_a_rebinding_without_evidence_clears_the_receiver(tmp_path):
     result = scan_csharp(repo, ROOT)
 
     assert result.hits == ()
+
+
+# Spec AC2: a receiver call chain is rooted, with its intermediate property.
+def test_a_receiver_call_chain_is_rooted(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = new ChargeClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeClient", "Charges", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            16,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("ChargeClient", "Charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC2: a receiver property access is a rooted attribute.
+def test_a_receiver_property_is_an_attribute(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = new ChargeClient();\n"
+            "        var charges = client.Charges;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            30,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("ChargeClient",),
+            True,
+        ),
+    )
+
+
+# Spec AC2: an untracked receiver chain keeps the unrooted behavior.
+def test_an_untracked_receiver_chain_is_unchanged(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = Build();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("Charges", "Create"),
+            False,
+        ),
+    )
+
+
+# Spec AC2: a local receiver wins over a same-name type.
+def test_a_local_receiver_wins_over_a_same_name_type(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var ChargeService = new CustomerClient();\n"
+            "        ChargeService.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("CustomerClient", "Charges", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            23,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("CustomerClient", "Charges"),
+            True,
+        ),
+    )

@@ -312,13 +312,30 @@ class _Visitor:
             )
         self._visit_children(node)
 
+    def _receiver(self, node: Node | None) -> tuple[str, ...] | None:
+        """The type chain a bound receiver expression stands for."""
+        node = _unwrap(node)
+        if node is None:
+            return None
+        if node.type == "identifier":
+            binding = self._bindings.get(_text(node))
+            return binding[0] if binding is not None else None
+        if node.type != "member_access_expression":
+            return None
+        expression = node.child_by_field_name("expression")
+        name = node.child_by_field_name("name")
+        chain = self._receiver(expression)
+        if chain is None or name is None:
+            return None
+        return (*chain, _text(name))
+
     def _call_chain(
         self, base: str, tail: tuple[str, ...]
     ) -> tuple[tuple[str, ...], bool]:
         binding = self._bindings.get(base)
-        if binding is not None and len(tail) == 1:
+        if binding is not None:
             if binding[0] is not None:
-                return (*binding[0], tail[-1]), True
+                return (*binding[0], *tail), True
             return tail, False
         if len(tail) == 1:
             chain = self._roots.type_path((base,))
@@ -384,6 +401,21 @@ class _Visitor:
                 self._emit(function, SiteShape.CALL, tail[-1], chain, rooted)
                 if rooted:
                     call_chain = chain
+                    expression = function.child_by_field_name("expression")
+                    if (
+                        expression is not None
+                        and expression.type == "member_access_expression"
+                    ):
+                        field = expression.child_by_field_name("name")
+                        receiver = self._receiver(expression)
+                        if field is not None and receiver is not None:
+                            self._emit(
+                                field,
+                                SiteShape.ATTRIBUTE,
+                                _text(field),
+                                receiver,
+                                True,
+                            )
         arguments = node.child_by_field_name("arguments")
         if arguments is not None:
             if call_chain is not None:
