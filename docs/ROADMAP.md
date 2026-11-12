@@ -45,8 +45,10 @@ T10d (installed provider fan-out) and T10e (hosted service MVP) shipped 2026-11-
 locator), T11b (Go locator) and T11c (C# locator) shipped 2026-11-11; T12a (Rust/Go receiver
 tracking) and T12b (C#/Python/TS receiver tracking) shipped 2026-11-12**
 (`src/tenon/pr/{app,api,github_app,installed}.py`, `src/tenon/provider/`, `src/tenon/service/`,
-`src/tenon/locate/`, CLI; 2,453 tests). The self-hosted service is local-only (no TLS/deployment);
-a hardened hosted deployment and return-type/interprocedural receiver inference are not started.
+`src/tenon/locate/`, `Dockerfile`/`docker-compose.yml`/`Caddyfile`, CLI; 2,473 tests). T13a (a
+deployable service behind Caddy) shipped 2026-11-12. The self-hosted service is now containerized;
+T13b (parallel workers/retries/cancel/metrics/SQLite hardening) and return-type/interprocedural
+receiver inference are not started.
 
 ---
 

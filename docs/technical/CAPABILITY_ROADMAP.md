@@ -16,6 +16,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Shipped 2026-11-11 (MVP)** — GitHub App remote, provider bundle, local/installed fan-out and a self-hosted service; a hardened cloud deployment is later |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Shipped 2026-11-11** — Rust, Go and C# locators |
 | **T12** | **Receiver tracking.** Method/fluent chains through an explicitly typed client. | T11 | Explicit evidence only | **Shipped 2026-11-12** — Rust, Go, C#, Python and TypeScript |
+| **T13** | **Hardened deployment.** Container, TLS proxy, backups, resilience. | T10e | Operator-owned secrets | **Partial 2026-11-12** — deployable Compose + Caddy + readiness shipped; resilience (T13b) not started |
 
 ### T1 as shipped (2026-10-26)
 
@@ -337,6 +338,20 @@ not annotated/constructed is not evidence; computed access/`getattr`/`dynamic`, 
 reflection and return-type/interprocedural inference are not followed (no site, not a guess); a local
 type sharing a rooted/mapped name is a documented false positive. Operation inference from a URL no
 longer matches a type-prefixed receiver chain; map the operation to the full chain.
+
+### T13a as built (2026-11-12)
+
+`Dockerfile` (multi-stage `uv` build, `--extra app`, git/CA, non-root `tenon` uid 10001, owned
+`/data`, stdlib healthcheck), `docker-compose.yml` (the service plus Caddy, a named DB volume,
+read-only bundles/secrets, tmpfs `/tmp`, read-only root, dropped caps, no service host port),
+`Caddyfile` (automatic HTTPS via `TENON_DOMAIN`), `.env.example`, the bundle/secret layout and
+`docs/technical/DEPLOYMENT.md` (secrets, key permissions, TLS/local CA, backups/restore, rotation,
+upgrades, security checklist). `GET /ready` (with `RunStore.ping`) is the readiness signal; `/health`
+stays liveness. 2,473 tests, offline (static artifact checks; no Docker daemon in pytest).
+
+Known limits: the image/stack are not exercised by tests (the first operator run is the integration
+test); the service is only safe behind Caddy TLS; host secrets/backups/permissions are the operator's
+responsibility; one worker, no retries/cancel/metrics and no WAL until T13b.
 
 ### T10e as built (2026-11-11)
 

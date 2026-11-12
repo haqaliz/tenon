@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T13 Hardened deployment** — the operational follow-up to the T10e service MVP
 - **Milestone:** next phase after T12; the original roadmap ends at T11
+- **State:** T13a (deployable service) shipped 2026-11-12 (`Dockerfile`, `docker-compose.yml`, `Caddyfile`, `/ready`; 2,473 tests); T13b (resilience) not started
 - **Branch:** `feat/service-deploy/aliz`
 - **Worktree:** `.claude/worktrees/feat-service-deploy`
 

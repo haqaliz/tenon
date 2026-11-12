@@ -3,7 +3,7 @@
 - **Slug:** `service-deploy`
 - **Capability:** **T13 Hardened deployment** — **first slice: a deployable service**
 - **Milestone:** next phase after T12; T13b (resilience) follows
-- **Status:** draft for review
+- **Status:** implemented 2026-11-12 (`Dockerfile`, `docker-compose.yml`, `Caddyfile`, `/ready`; 2,473 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

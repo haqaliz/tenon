@@ -3,7 +3,7 @@
 **Keeps your code fitted to the APIs it depends on.** Detects breaking API changes, patches the
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
-[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20provider%20service%20%2B%20Rust%20%2B%20Go%20%2B%20C%23%20%2B%20receivers%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
+[![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20provider%20service%20%2B%20Rust%20%2B%20Go%20%2B%20C%23%20%2B%20receivers%20%2B%20deploy%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
@@ -18,8 +18,9 @@ tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark c
 App remote), T10b (provider migration bundle), T10c (local provider fan-out), T10d (installed
 provider fan-out), T10e (hosted provider service), T11a (Rust call-site location), T11b (Go call-site
 location), T11c (C# call-site location), T12a (Rust/Go receiver tracking), T12b (C#/Python/TS
-receiver tracking) and the `tenon check` / `tenon fix` / `tenon provider migrate` /
-`tenon provider serve` / `tenon probe` / `tenon corpus` CLI are shipped.**
+receiver tracking), T13a (deployable service) and the `tenon check` / `tenon fix` /
+`tenon provider migrate` / `tenon provider serve` / `tenon probe` / `tenon corpus` CLI are
+shipped.**
 `src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed
 `Change` records; `src/tenon/locate/` turns one of those records into call sites with file, line and
 column, and keeps anything it cannot prove in a separate ambiguity list — Python via `ast`,
@@ -175,7 +176,8 @@ The inputs are flags or environment variables; a flag wins:
 
 The private key is read from a path; key content is never read from the environment. `--remote`
 requires `--open-pr`, and `--remote gh` (the default) keeps the existing `gh` path. The app remote is
-self-hosted: a deployment is deferred, while `--installed` uses the same app identity for discovery
+self-hosted: the service ships with a Docker Compose + Caddy deployment (`docs/technical/DEPLOYMENT.md`),
+while `--installed` uses the same app identity for discovery
 and cloning and `tenon provider serve` exposes the installed fan-out as a local service. `--api-url`
 also targets a self-hosted GitHub Enterprise endpoint.
 
@@ -369,7 +371,8 @@ Languages: Python, TypeScript/JavaScript, Rust, Go and C# shipped. Change source
 and MCP tools/list diffs, with the Python MCP tool-call locator; SDK metadata later. Consumer side
 first; the provider bundle (T10b) packages that run for one repo, local fan-out over a repos file
 (T10c) and installed fan-out through the app (T10d) run it across checkouts, and the local
-`tenon provider serve` (T10e) queues the installed run; a deployment/TLS service is later.
+`tenon provider serve` (T10e) queues the installed run, and a Docker Compose + Caddy deployment
+(T13a) runs it behind TLS; resilience (T13b) is later.
 
 ## Docs
 
