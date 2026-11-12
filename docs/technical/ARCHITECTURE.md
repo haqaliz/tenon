@@ -66,9 +66,12 @@ tests/        offline; fixture repos and specs; no network, no model calls
   reports package-qualified calls, composite-literal fields and field access through a tracked
   binding; `package_name` overrides the root import's inferred package clause. The C# scan roots
   names through namespace usings and aliases, and reports static and tracked-`new` instance calls,
-  object-initializer properties and property access through a tracked binding. Method chains,
-  macros, re-exported crates, Go dot imports, C# fluent chains/`using static`/`dynamic`, reflection
-  and multi-hop data flow are not followed and produce no site, never a guess.
+  object-initializer properties and property access through a tracked binding. T12 receiver tracking
+  roots a client built from explicit evidence (`new`/constructor, annotation or configured factory)
+  in all five languages, so `client.resource.method` is reported as `Type.resource.method`; a method
+  chain on an untracked receiver, macros, re-exported crates, Go dot imports, C# `using
+  static`/`dynamic`, reflection and multi-hop data flow are not followed and produce no site, never
+  a guess.
 - **Proof is a ladder, chosen by the user.** `--require
   TESTS_PASSED|CHARACTERIZED|REPLAYED|TYPES_BUILD_ONLY|UNVERIFIED`. The runner configures up to four
   stage commands (`build`, `characterize`, `replay`, `tests`), runs every baseline, applies the patch
@@ -229,12 +232,14 @@ is just a user command.
 namespace usings and aliases, static and tracked-`new` instance calls, object-initializer properties
 and property access through a tracked binding. `sdk_package` is a dotted namespace root (for example
 `Stripe`); a blank, path or `::` root is a named `sdk_package` error. The canonical chain keeps only
-the simple type name (`Stripe.Services.ChargeService` -> `ChargeService`). The limits are fluent
-chains (`client.Charges.Create(...)`), `using static`, `dynamic`, reflection, multi-hop initializer
-flow and same-name local types; each yields no site rather than a guess. `source=mcp` remains
-Python-only. A mapping that changes the spelling locates the site, but the shipped proposer only
-edits when the located spelling equals the spec's old name; otherwise it reports `NO_EDITABLE_SITES`.
-No .NET toolchain or proof preset ships; `--check "dotnet test"` is just a user command.
+the simple type name (`Stripe.Services.ChargeService` -> `ChargeService`). T12b roots a receiver from
+`new`, an explicit declared type or a configured factory, so `client.Charges.Create(...)` locates as
+`StripeClient.Charges.Create`. The limits are method chains on an untracked receiver, `using static`,
+`dynamic`, reflection, multi-hop initializer flow and same-name local types; each yields no site
+rather than a guess. `source=mcp` remains Python-only. A mapping that changes the spelling locates
+the site, but the shipped proposer only edits when the located spelling equals the spec's old name;
+otherwise it reports `NO_EDITABLE_SITES`. No .NET toolchain or proof preset ships; `--check "dotnet
+test"` is just a user command.
 
 ## Open questions
 
@@ -255,5 +260,6 @@ No .NET toolchain or proof preset ships; `--check "dotnet test"` is just a user 
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
 - Phase 3: T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider
   fan-out), T10d (installed provider fan-out), T10e (hosted provider service), T11a (Rust locator),
-  T11b (Go locator) and T11c (C# locator) shipped; T12a (Rust/Go receiver tracking) shipped. A
-  hosted deployment and T12b (C#/Python/TS receiver tracking) are not started.
+  T11b (Go locator) and T11c (C# locator) shipped; T12a (Rust/Go receiver tracking) and T12b
+  (C#/Python/TS receiver tracking) shipped. A hosted deployment and return-type/interprocedural
+  receiver inference are not started.

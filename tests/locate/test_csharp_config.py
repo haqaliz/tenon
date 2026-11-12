@@ -16,6 +16,7 @@ def test_a_valid_namespace_loads():
     assert config.sdk_package == "Stripe"
     assert config.operations == {}
     assert config.fields == {}
+    assert config.receivers == {}
 
 
 # Spec AC1: a dotted root and underscore segments are namespaces too.
@@ -74,3 +75,36 @@ def test_the_config_is_frozen_and_slotted():
     with pytest.raises((AttributeError, TypeError)):
         config.sdk_package = "Other"
     assert not hasattr(config, "__dict__")
+
+
+# Spec AC1: a receiver mapping loads as a read-only copy.
+def test_a_receiver_mapping_loads_read_only():
+    receivers = {"stripe.NewClient": "Client"}
+    config = a_config(sdk_package="Stripe", receivers=receivers)
+
+    receivers["stripe.NewOther"] = "Other"
+
+    assert dict(config.receivers) == {"stripe.NewClient": "Client"}
+    with pytest.raises(TypeError):
+        config.receivers["x"] = "y"
+
+
+# Spec AC1: a blank or split receiver key or value is a named ValueError.
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("", "Client"),
+        ("stripe NewClient", "Client"),
+        (" Client", "Client"),
+        ("Client ", "Client"),
+        ("stripe.NewClient", ""),
+        ("stripe.NewClient", "Client Chain"),
+        ("stripe.NewClient", " Client"),
+        ("stripe.NewClient", "Client "),
+        (1, "Client"),
+        ("stripe.NewClient", 1),
+    ],
+)
+def test_a_bad_receiver_entry_is_a_named_value_error(key, value):
+    with pytest.raises(ValueError, match="receivers"):
+        a_config(sdk_package="Stripe", receivers={key: value})

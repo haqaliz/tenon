@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from .result import SiteShape
 
@@ -125,7 +125,11 @@ class _Module:
     source: _Source
 
 
-def scan(root: str | Path, sdk_package: str) -> ScanResult:
+def scan(
+    root: str | Path,
+    sdk_package: str,
+    receivers: Mapping[str, str] | None = None,
+) -> ScanResult:
     """Parse ``root`` read-only and report SDK-rooted evidence."""
     modules = _read(Path(root))
     reachable = _reachable(modules, sdk_package)
@@ -141,6 +145,7 @@ def scan(root: str | Path, sdk_package: str) -> ScanResult:
             sdk_package,
             {**roots, **alias_roots},
             classes | class_aliases,
+            receivers or {},
         )
         visitor.visit(module.tree)
         hits.extend(visitor.hits)
@@ -462,11 +467,14 @@ class _Visitor(ast.NodeVisitor):
         sdk_package: str,
         roots: dict[str, tuple[str, ...]],
         classes: set[str],
+        receivers: Mapping[str, str] | None = None,
     ) -> None:
         self._source = source
         self._sdk_parts = tuple(sdk_package.split("."))
         self._roots = roots
         self._classes = classes
+        self._receivers = receivers or {}
+        self._bindings: dict[str, tuple[str, ...]] = {}
         self._callee = 0
         self.hits: list[Hit] = []
         self.dynamics: list[Dynamic] = []
@@ -474,10 +482,94 @@ class _Visitor(ast.NodeVisitor):
     def _ref(
         self, root: str | None, tail: tuple[str, ...]
     ) -> tuple[tuple[str, ...], bool]:
+        if root is not None and root in self._bindings:
+            return (*self._bindings[root], *tail), True
         full = _full(root, tail, self._roots, self._sdk_parts)
         if full is None:
             return tail, False
         return full[len(self._sdk_parts) :], True
+
+    def _canonical(self, node: ast.expr) -> tuple[str, ...] | None:
+        """The SDK-rooted chain of a dotted expression, canonical spelling."""
+        root, tail = _parts(node)
+        full = _full(root, tail, self._roots, self._sdk_parts)
+        if full is None:
+            return None
+        return full[len(self._sdk_parts) :]
+
+    def _factory(self, callee: ast.expr) -> tuple[str, ...] | None:
+        """The type chain a configured factory call binds, if its key matches."""
+        root, tail = _parts(callee)
+        candidates = []
+        full = _full(root, tail, self._roots, self._sdk_parts)
+        if full is not None:
+            candidates.append(".".join(full))
+        if root is not None:
+            candidates.append(".".join((root, *tail)))
+        for candidate in candidates:
+            mapped = self._receivers.get(candidate)
+            if mapped is None:
+                continue
+            chain = tuple(part for part in mapped.split(".") if part)
+            if chain:
+                return chain
+        return None
+
+    def _evidence(self, value: ast.expr | None) -> tuple[str, ...] | None:
+        """The type chain an assigned value binds, from a factory or constructor."""
+        if not isinstance(value, ast.Call):
+            return None
+        mapped = self._factory(value.func)
+        if mapped is not None:
+            return mapped
+        return self._canonical(value.func)
+
+    def _bind_receiver(self, name: str, chain: tuple[str, ...] | None) -> None:
+        if chain:
+            self._bindings[name] = chain
+        else:
+            self._bindings.pop(name, None)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            self._bind_receiver(node.targets[0].id, self._evidence(node.value))
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        # The annotation is a type position, not a value site.
+        if isinstance(node.target, ast.Name):
+            chain = self._canonical(node.annotation)
+            if chain is None:
+                chain = self._evidence(node.value)
+            self._bind_receiver(node.target.id, chain)
+        if node.value is not None:
+            self.visit(node.value)
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        saved = self._bindings
+        arguments = node.args
+        parameters = {
+            argument.arg
+            for argument in (
+                *arguments.posonlyargs,
+                *arguments.args,
+                *arguments.kwonlyargs,
+            )
+        }
+        for extra in (arguments.vararg, arguments.kwarg):
+            if extra is not None:
+                parameters.add(extra.arg)
+        self._bindings = {
+            name: chain for name, chain in saved.items() if name not in parameters
+        }
+        self.generic_visit(node)
+        self._bindings = saved
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function(node)
 
     def _emit(
         self,
@@ -517,7 +609,8 @@ class _Visitor(ast.NodeVisitor):
 
     def _rooted_expr(self, node: ast.expr) -> bool:
         root, tail = _parts(node)
-        return _full(root, tail, self._roots, self._sdk_parts) is not None
+        _, rooted = self._ref(root, tail)
+        return rooted
 
     def visit_Call(self, node: ast.Call) -> None:
         root, tail = _parts(node.func)
@@ -533,6 +626,22 @@ class _Visitor(ast.NodeVisitor):
                 rooted,
                 leaf=callee_is_attribute,
             )
+        if root is not None and root in self._bindings and callee_is_attribute:
+            receiver = node.func.value
+            if isinstance(receiver, ast.Attribute):
+                receiver_root, receiver_tail = _parts(receiver)
+                receiver_chain, receiver_rooted = self._ref(
+                    receiver_root, receiver_tail
+                )
+                if receiver_rooted and receiver_chain:
+                    self._emit(
+                        receiver,
+                        SiteShape.ATTRIBUTE,
+                        receiver_tail[-1],
+                        receiver_chain,
+                        True,
+                        leaf=True,
+                    )
         if self._is_getattr(node) and self._rooted_expr(node.args[0]):
             name = node.args[1]
             symbol = (
@@ -603,7 +712,7 @@ class _Visitor(ast.NodeVisitor):
         if self._callee == 0:
             root, tail = _parts(node)
             chain, rooted = self._ref(root, tail)
-            rooted = rooted and root in self._classes
+            rooted = rooted and (root in self._classes or root in self._bindings)
             self._emit(
                 node,
                 SiteShape.ATTRIBUTE,

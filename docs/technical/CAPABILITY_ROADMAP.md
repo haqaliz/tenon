@@ -15,7 +15,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Shipped 2026-11-11 (MVP)** — GitHub App remote, provider bundle, local/installed fan-out and a self-hosted service; a hardened cloud deployment is later |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Shipped 2026-11-11** — Rust, Go and C# locators |
-| **T12** | **Receiver tracking.** Method/fluent chains through an explicitly typed client. | T11 | Explicit evidence only | **Partial 2026-11-12** — Rust and Go shipped; C#/Python/TS (T12b) not started |
+| **T12** | **Receiver tracking.** Method/fluent chains through an explicitly typed client. | T11 | Explicit evidence only | **Shipped 2026-11-12** — Rust, Go, C#, Python and TypeScript |
 
 ### T1 as shipped (2026-10-26)
 
@@ -299,10 +299,11 @@ applying the shipped `derive`/`resolve` policy unchanged. `--language csharp`, `
 provider bundles accept `csharp`; MCP stays Python-only; no .NET toolchain or proof preset. 2,099
 tests, offline. T11 is complete.
 
-Known limits: fluent/property chains on untracked values, `using static`, `dynamic`, reflection,
+Known limits: method chains on an untracked receiver, `using static`, `dynamic`, reflection,
 generics inference, `csproj` parsing and multi-hop initializer flow are not followed (no site, not a
 guess); a local type sharing an SDK simple name is a documented false positive; a mapped spelling
-locates but is not auto-edited unless it equals the spec's old name.
+locates but is not auto-edited unless it equals the spec's old name. T12b adds explicit receiver
+tracking (`new`, an annotation or a `receivers` factory).
 
 ### T12a as built (2026-11-12)
 
@@ -319,6 +320,23 @@ unchanged. 2,338 tests, offline.
 Known limits: a factory not in `receivers` and not annotated is not evidence; a local type named like
 a mapped/rooted type is a documented false positive; rebinding clears; no return-type or
 interprocedural inference. T12b covers C#, Python and TypeScript.
+
+### T12b as built (2026-11-12)
+
+`LocateConfig`/`TsLocateConfig`/`CSharpLocateConfig` gain the same read-only `receivers` mapping, and
+`[locate.receivers]`, a bundle `locate.receivers` and `--receiver KEY=VALUE` now serve every
+language. The C# scanner binds a receiver from `new`, an explicit declared type or a configured
+factory and emits `client.Charges.Create(...)` as `StripeClient.Charges.Create`; Python from a rooted
+constructor call (`client = stripe.Client(...)`), an annotation or a configured factory, emitting
+`Client.charges.create`; TypeScript from `new`, an annotation or a configured factory, emitting
+`StripeClient.charges.create`. The shared `derive`/`resolve` policy is unchanged; an untracked
+receiver keeps the old no-site/unrooted behavior. 2,453 tests, offline. T12 is complete.
+
+Known limits: a dynamic/Python reassignment is not branch-sensitive; a factory not in `receivers` and
+not annotated/constructed is not evidence; computed access/`getattr`/`dynamic`, `using static`,
+reflection and return-type/interprocedural inference are not followed (no site, not a guess); a local
+type sharing a rooted/mapped name is a documented false positive. Operation inference from a URL no
+longer matches a type-prefixed receiver chain; map the operation to the full chain.
 
 ### T10e as built (2026-11-11)
 

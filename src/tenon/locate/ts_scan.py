@@ -7,7 +7,7 @@ decided elsewhere.
 
 import posixpath
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
@@ -34,6 +34,16 @@ _SKIP_DIRECTORIES = frozenset(
     }
 )
 _JAVASCRIPT_EXTENSIONS = frozenset({".js", ".jsx", ".mjs", ".cjs"})
+_FUNCTION_SCOPES = frozenset(
+    {
+        "function_declaration",
+        "function_expression",
+        "arrow_function",
+        "method_definition",
+        "generator_function",
+        "generator_function_declaration",
+    }
+)
 # A literal cannot hide a key, so `retrieve("ch_1")` stays certain.
 _PRIMITIVE_ARGUMENTS = frozenset(
     {
@@ -583,18 +593,133 @@ class _Visitor:
         sdk_package: str,
         roots: dict[str, tuple[str, ...]],
         classes: set[str],
+        receivers: Mapping[str, str] | None = None,
     ) -> None:
         self._source = source
         self._sdk_parts = tuple(sdk_package.split("/"))
         self._roots = roots
         self._classes = classes
+        self._receivers = receivers or {}
+        self._bindings: dict[str, tuple[str, ...]] = {}
         self._callee = 0
         self.hits: list[Hit] = []
         self.dynamics: list[Dynamic] = []
 
+    def _canonical(self, node: Node | None) -> tuple[str, ...] | None:
+        """The SDK-rooted chain of a dotted expression, canonical spelling."""
+        root, tail = _parts(node)
+        full = _full(root, tail, self._roots, self._sdk_parts)
+        if full is None:
+            return None
+        return full[len(self._sdk_parts) :]
+
+    def _annotation(self, annotation: Node | None) -> tuple[str, ...] | None:
+        """The canonical chain of a rooted type annotation, else ``None``."""
+        node = (
+            annotation.named_children[0]
+            if annotation is not None
+            and annotation.type == "type_annotation"
+            and annotation.named_children
+            else annotation
+        )
+        if node is None or node.type not in {
+            "type_identifier",
+            "nested_type_identifier",
+        }:
+            return None
+        segments = tuple(_text(node).split("."))
+        full = _full(segments[0], segments[1:], self._roots, self._sdk_parts)
+        if full is None:
+            return None
+        return full[len(self._sdk_parts) :]
+
+    def _factory(self, callee: Node | None) -> tuple[str, ...] | None:
+        """The type chain a configured factory call binds, if its key matches."""
+        root, tail = _parts(callee)
+        candidates = []
+        if root is not None:
+            candidates.append(".".join((root, *tail)))
+        full = _full(root, tail, self._roots, self._sdk_parts)
+        if full is not None:
+            candidates.append(".".join(full))
+        for candidate in candidates:
+            mapped = self._receivers.get(candidate)
+            if mapped is None:
+                continue
+            chain = tuple(part for part in mapped.split(".") if part)
+            if chain:
+                return chain
+        return None
+
+    def _evidence(self, value: Node | None) -> tuple[str, ...] | None:
+        """The type chain an assigned value binds, from a `new` or a factory."""
+        node = _unwrap(value)
+        if node is None:
+            return None
+        if node.type == "new_expression":
+            return self._canonical(node.child_by_field_name("constructor"))
+        if node.type == "call_expression":
+            return self._factory(node.child_by_field_name("function"))
+        return None
+
+    def _bind_receiver(self, name: str, chain: tuple[str, ...] | None) -> None:
+        if chain:
+            self._bindings[name] = chain
+        else:
+            self._bindings.pop(name, None)
+
+    def _visit_children(self, node: Node) -> None:
+        for child in node.children:
+            self.visit(child)
+
+    def _declaration(self, node: Node) -> None:
+        name = node.child_by_field_name("name")
+        if name is not None and name.type == "identifier":
+            chain = self._annotation(node.child_by_field_name("type"))
+            if chain is None:
+                chain = self._evidence(node.child_by_field_name("value"))
+            self._bind_receiver(_text(name), chain)
+        self._visit_children(node)
+
+    def _assignment(self, node: Node) -> None:
+        left = node.child_by_field_name("left")
+        if left is not None and left.type == "identifier":
+            self._bind_receiver(
+                _text(left), self._evidence(node.child_by_field_name("right"))
+            )
+        self._visit_children(node)
+
+    def _parameters(self, node: Node) -> set[str]:
+        parameters = node.child_by_field_name("parameters")
+        if parameters is None:
+            return set()
+        if parameters.type == "identifier":
+            return {_text(parameters)}
+        names: set[str] = set()
+        for child in parameters.named_children:
+            if child.type == "identifier":
+                names.add(_text(child))
+                continue
+            pattern = child.child_by_field_name("pattern")
+            if pattern is not None:
+                for binding in _pattern_names(pattern):
+                    names.add(_text(binding))
+        return names
+
+    def _function(self, node: Node) -> None:
+        saved = self._bindings
+        parameters = self._parameters(node)
+        self._bindings = {
+            name: chain for name, chain in saved.items() if name not in parameters
+        }
+        self._visit_children(node)
+        self._bindings = saved
+
     def _ref(
         self, root: str | None, tail: tuple[str, ...]
     ) -> tuple[tuple[str, ...], bool]:
+        if root is not None and root in self._bindings:
+            return (*self._bindings[root], *tail), True
         full = _full(root, tail, self._roots, self._sdk_parts)
         if full is None:
             return tail, False
@@ -673,6 +798,22 @@ class _Visitor:
             symbol = tail[-1] if tail else (root or "")
             if leaf is not None:
                 self._emit(leaf, SiteShape.CALL, symbol, chain, rooted)
+        if is_member and root is not None and root in self._bindings:
+            receiver = function.child_by_field_name("object")
+            if receiver is not None and receiver.type == "member_expression":
+                receiver_root, receiver_tail = _parts(receiver)
+                receiver_chain, receiver_rooted = self._ref(
+                    receiver_root, receiver_tail
+                )
+                field = receiver.child_by_field_name("property")
+                if receiver_rooted and receiver_chain and field is not None:
+                    self._emit(
+                        field,
+                        SiteShape.ATTRIBUTE,
+                        receiver_tail[-1],
+                        receiver_chain,
+                        True,
+                    )
         arguments = node.child_by_field_name("arguments")
         args = arguments.named_children if arguments is not None else ()
         for argument in args:
@@ -745,7 +886,7 @@ class _Visitor:
         if self._callee == 0:
             root, tail = _parts(node)
             chain, rooted = self._ref(root, tail)
-            rooted = rooted and root in self._classes
+            rooted = rooted and (root in self._classes or root in self._bindings)
             property_node = node.child_by_field_name("property")
             if property_node is not None:
                 self._emit(
@@ -760,7 +901,13 @@ class _Visitor:
     def visit(self, node: Node | None) -> None:
         if node is None:
             return
-        if node.type == "call_expression":
+        if node.type in _FUNCTION_SCOPES:
+            self._function(node)
+        elif node.type == "variable_declarator":
+            self._declaration(node)
+        elif node.type == "assignment_expression":
+            self._assignment(node)
+        elif node.type == "call_expression":
             self._call(node)
         elif node.type == "new_expression":
             self._new(node)
@@ -769,11 +916,14 @@ class _Visitor:
         elif node.type == "subscript_expression":
             self._subscript(node)
         else:
-            for child in node.children:
-                self.visit(child)
+            self._visit_children(node)
 
 
-def scan_ts(root: str | Path, sdk_package: str) -> ScanResult:
+def scan_ts(
+    root: str | Path,
+    sdk_package: str,
+    receivers: Mapping[str, str] | None = None,
+) -> ScanResult:
     """Parse ``root`` read-only and report SDK-rooted TS/JS evidence."""
     modules = _read(Path(root))
     reachable = _reachable(modules, sdk_package)
@@ -789,6 +939,7 @@ def scan_ts(root: str | Path, sdk_package: str) -> ScanResult:
             sdk_package,
             {**roots, **alias_roots},
             classes | class_aliases,
+            receivers or {},
         )
         visitor.visit(module.tree.root_node)
         hits.extend(visitor.hits)

@@ -34,7 +34,9 @@ def locate(change: Change, root: str | Path, config: LocateConfig) -> LocateResu
     query = derive(change, config)
     if query.reason is not None:
         return _build(change, reason=query.reason)
-    return resolve(change, query, scan(root, config.sdk_package), config)
+    return resolve(
+        change, query, scan(root, config.sdk_package, config.receivers), config
+    )
 
 
 def resolve(

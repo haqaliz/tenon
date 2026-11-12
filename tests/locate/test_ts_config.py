@@ -48,7 +48,10 @@ def a_change(
     ],
 )
 def test_a_valid_npm_package_name_constructs(name):
-    assert TsLocateConfig(sdk_package=name).sdk_package == name
+    config = TsLocateConfig(sdk_package=name)
+
+    assert config.sdk_package == name
+    assert config.receivers == {}
 
 
 # Spec AC1: empty, whitespace, path-like and malformed scopes are rejected.
@@ -99,6 +102,39 @@ def test_the_config_is_frozen():
 
     with pytest.raises(AttributeError):
         config.sdk_package = "other"
+
+
+# Spec AC1: a receiver mapping loads as a read-only copy.
+def test_a_receiver_mapping_loads_read_only():
+    receivers = {"stripe.NewClient": "Client"}
+    config = TsLocateConfig(sdk_package="stripe", receivers=receivers)
+
+    receivers["stripe.NewOther"] = "Other"
+
+    assert dict(config.receivers) == {"stripe.NewClient": "Client"}
+    with pytest.raises(TypeError):
+        config.receivers["x"] = "y"
+
+
+# Spec AC1: a blank or split receiver key or value is a named ValueError.
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("", "Client"),
+        ("stripe NewClient", "Client"),
+        (" Client", "Client"),
+        ("Client ", "Client"),
+        ("stripe.NewClient", ""),
+        ("stripe.NewClient", "Client Chain"),
+        ("stripe.NewClient", " Client"),
+        ("stripe.NewClient", "Client "),
+        (1, "Client"),
+        ("stripe.NewClient", 1),
+    ],
+)
+def test_a_bad_receiver_entry_is_a_named_value_error(key, value):
+    with pytest.raises(ValueError, match="receivers"):
+        TsLocateConfig(sdk_package="stripe", receivers={key: value})
 
 
 # Spec AC2/M2: derive sees the same Query through either config.

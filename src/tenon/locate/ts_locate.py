@@ -20,4 +20,6 @@ def locate_ts(
         return LocateResult(
             change=change, certain=(), ambiguous=(), reason=query.reason
         )
-    return resolve(change, query, scan_ts(root, config.sdk_package), config)
+    return resolve(
+        change, query, scan_ts(root, config.sdk_package, config.receivers), config
+    )

@@ -151,7 +151,7 @@ def _common(parser: argparse.ArgumentParser) -> None:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="map a Rust/Go factory expression to a type chain",
+        help="map a factory expression to a type chain",
     )
     parser.add_argument(
         "--breaking-only",

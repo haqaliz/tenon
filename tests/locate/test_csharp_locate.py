@@ -336,6 +336,69 @@ def test_a_repository_without_the_root_using_has_no_sdk_import(tmp_path):
     assert result.ambiguous == ()
 
 
+# Spec AC3: a mapped receiver chain resolves the operation.
+def test_a_mapped_receiver_chain_resolves_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = new ChargeClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+    config = CSharpLocateConfig(
+        sdk_package=ROOT,
+        operations={"POST /v1/charges": "ChargeClient.Charges.Create"},
+    )
+
+    result = locate_csharp(a_removed_endpoint(), repo, config)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.cs", 8, 9, SiteShape.CALL, "Create")]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+# Spec AC3: a mapped receiver property is certain on a component change.
+def test_a_mapped_receiver_property_is_certain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            '        var client = StripeClient.Create("key");\n'
+            "        var amount = client.Amount;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+    config = CSharpLocateConfig(
+        sdk_package=ROOT, receivers={"StripeClient.Create": "Client"}
+    )
+
+    result = locate_csharp(a_component_rename(), repo, config)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.cs", 8, 29, SiteShape.ATTRIBUTE, "Amount")]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
 # Spec AC1/M3: the C# config and wrapper are part of the public surface.
 def test_the_csharp_api_is_exported():
     import tenon.locate as locate

@@ -145,8 +145,15 @@ def test_sdk_package_flag_overrides_config(a_repo, a_specs, capsys):
     assert payload["results"][0]["reason"] == "NO_SDK_IMPORT"
 
 
-# Spec AC7: an operation mapping overrides the inferred call.
+# Spec AC7: an operation flag overrides the configured mapping.
 def test_operation_flag_overrides_config(a_repo, a_endpoint_specs, capsys):
+    config = (a_repo / "tenon.toml").read_text(encoding="utf-8")
+    (a_repo / "tenon.toml").write_text(
+        config
+        + '\n[locate.operations]\n"POST /v1/charges" = "StripeClient.charges.create"\n',
+        encoding="utf-8",
+    )
+
     assert a_check(a_repo, a_endpoint_specs) == 1
     assert "acme/billing.py:7:27" in capsys.readouterr().out
 
@@ -463,8 +470,11 @@ def test_receiver_flag_reaches_the_rust_config(tmp_path):
 @pytest.mark.parametrize(
     ("language", "sdk_package", "expected_type"),
     [
+        ("python", "stripe", LocateConfig),
+        ("ts", "stripe", TsLocateConfig),
         ("rust", "stripe", RustLocateConfig),
         ("go", "github.com/stripe/stripe-go/v76", GoLocateConfig),
+        ("csharp", "Stripe", CSharpLocateConfig),
     ],
 )
 def test_missing_config_fallback_builds_the_receivers(
@@ -493,33 +503,52 @@ def test_missing_config_fallback_builds_the_receivers(
     assert dict(config.locate.receivers) == {"stripe.NewClient": "Client"}
 
 
-# Spec AC4: the receiver flag is ignored for a Python config.
-def test_receiver_flag_is_ignored_for_python(a_repo):
+# Spec AC4: --receiver reaches Python, TS and C# and wins over the file.
+@pytest.mark.parametrize(
+    ("language", "sdk_package", "expected_type"),
+    [
+        ("python", "stripe", LocateConfig),
+        ("ts", "stripe", TsLocateConfig),
+        ("csharp", "Stripe", CSharpLocateConfig),
+    ],
+)
+def test_receiver_flag_reaches_every_language(
+    tmp_path, language, sdk_package, expected_type
+):
+    (tmp_path / "tenon.toml").write_text(
+        f'[locate]\nlanguage = "{language}"\nsdk_package = "{sdk_package}"\n'
+        '\n[locate.receivers]\n"stripe.NewClient" = "FileClient"\n'
+    )
     args = cli_main._parser().parse_args(
         [
             "check",
-            str(a_repo),
+            str(tmp_path),
             "--old",
             "old.yaml",
             "--new",
             "new.yaml",
             "--receiver",
-            "a=b",
+            "stripe.NewClient=FlagClient",
+            "--receiver",
+            "stripe.NewOther=Other",
         ]
     )
 
     config = cli_main._config(args)
 
-    assert isinstance(config.locate, LocateConfig)
-    assert not hasattr(config.locate, "receivers")
+    assert isinstance(config.locate, expected_type)
+    assert dict(config.locate.receivers) == {
+        "stripe.NewClient": "FlagClient",
+        "stripe.NewOther": "Other",
+    }
 
 
 # Spec AC4: a malformed --receiver is one named config error.
-def test_receiver_flag_rejects_a_malformed_pair(a_rust_repo, capsys):
+def test_receiver_flag_rejects_a_malformed_pair(a_repo, a_specs, capsys):
     assert (
         a_check(
-            a_rust_repo.repo,
-            a_rust_repo.specs,
+            a_repo,
+            a_specs,
             "--receiver",
             "missing-equals",
         )
