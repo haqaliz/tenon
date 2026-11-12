@@ -17,9 +17,9 @@ T5 (PR writer), T6 (TypeScript/JavaScript call-site location), T7 (proof ladder)
 tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark corpus), T10a (GitHub
 App remote), T10b (provider migration bundle), T10c (local provider fan-out), T10d (installed
 provider fan-out), T10e (hosted provider service), T11a (Rust call-site location), T11b (Go call-site
-location), T11c (C# call-site location), T12a (Rust/Go receiver tracking) and the `tenon check` /
-`tenon fix` / `tenon provider migrate` / `tenon provider serve` / `tenon probe` / `tenon corpus` CLI
-are shipped.**
+location), T11c (C# call-site location), T12a (Rust/Go receiver tracking), T12b (C#/Python/TS
+receiver tracking) and the `tenon check` / `tenon fix` / `tenon provider migrate` /
+`tenon provider serve` / `tenon probe` / `tenon corpus` CLI are shipped.**
 `src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed
 `Change` records; `src/tenon/locate/` turns one of those records into call sites with file, line and
 column, and keeps anything it cannot prove in a separate ambiguity list — Python via `ast`,
@@ -49,6 +49,8 @@ uv run tenon check path/to/go-repo --old v1.yaml --new v2.yaml --language go \
     --sdk-package github.com/stripe/stripe-go/v76 --package-name stripe
 uv run tenon check path/to/csharp-repo --old v1.yaml --new v2.yaml \
     --language csharp --sdk-package Stripe
+uv run tenon check path/to/ts-repo --old v1.yaml --new v2.yaml --language ts \
+    --receiver "StripeClient.create=Client"
 uv run tenon fix path/to/repo --old v1.yaml --new v2.yaml \
     --check "python -m pytest -q"
 uv run tenon fix path/to/no-test-repo --old v1.yaml --new v2.yaml \
@@ -121,12 +123,23 @@ subnamespace (`Stripe.Services.ChargeService` -> `ChargeService`). Supported sha
 aliases (`using Charge = Stripe.Charge;`), static calls (`ChargeService.Create(...)`) and calls on a
 tracked `new` binding (`var service = new ChargeService(); service.Create(options)`), object
 initializers (`new ChargeCreateOptions { AmountCents = 100 }`) and property access through a tracked
-binding (`options.AmountCents`). The shared `[locate.operations]`/`[locate.fields]` tables map the
-spec to C# chains, e.g. `"POST /v1/charges" = "ChargeService.Create"` and
-`"ChargeCreateOptions.AmountCents" = "AmountCents"`. Limits: fluent chains
-(`client.Charges.Create(...)`), `using static`, `dynamic`, reflection, multi-hop initializer flow and
-same-name local types are not followed; they report no site rather than a guessed one. `fix` follows
-the same proposer rule as Rust, and MCP stays Python-only.
+binding (`options.AmountCents`). **Receiver tracking** (T12b) roots a client built with `new`, an
+explicit declared type or a `[locate.receivers]` entry (`"StripeClient.Create" = "Client"`), so
+`client.Charges.Create(...)` locates as `StripeClient.Charges.Create`; `--receiver` does the same
+from the CLI. The shared `[locate.operations]`/`[locate.fields]` tables map the spec to C# chains,
+e.g. `"POST /v1/charges" = "ChargeService.Create"` and
+`"ChargeCreateOptions.AmountCents" = "AmountCents"`. Limits: method chains on an untracked receiver,
+`using static`, `dynamic`, reflection, multi-hop initializer flow and same-name local types are not
+followed; they report no site rather than a guessed one. `fix` follows the same proposer rule as
+Rust, and MCP stays Python-only.
+
+**Receiver tracking (T12) is uniform across the five languages.** A client built with a visible
+construction (`Client::new`, `new Client()`, `Client(...)`), a type annotation, or a
+`[locate.receivers]`/`--receiver` factory entry roots its chain as `Type.resource.method`, e.g.
+Python `client = stripe.Client(...); client.charges.create(...)` -> `Client.charges.create`, and
+TypeScript `const client = new StripeClient(...); client.charges.create(...)` ->
+`StripeClient.charges.create`. A receiver without explicit evidence stays unrooted; see each
+language's limits above.
 
 ```python
 from tenon.detect import diff, load

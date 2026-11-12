@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T12 Receiver tracking** — second slice: **C#, Python and TypeScript** (T12b)
 - **Milestone:** next phase after Phase 3; T12a (Rust/Go) shipped
+- **State:** shipped 2026-11-12 (`src/tenon/locate/{scan,ts_scan,csharp_scan}.py`, `--receiver`; 2,453 tests)
 - **Branch:** `feat/receivers-rest/aliz`
 - **Worktree:** `.claude/worktrees/feat-receivers-rest`
 

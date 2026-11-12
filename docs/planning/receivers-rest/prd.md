@@ -3,7 +3,7 @@
 - **Slug:** `receivers-rest`
 - **Capability:** **T12 Receiver tracking** — **second slice: C#, Python and TypeScript**
 - **Milestone:** next phase after Phase 3; T12a (Rust/Go) shipped 2026-11-12
-- **Status:** draft for review
+- **Status:** implemented 2026-11-12 (`src/tenon/locate/{scan,ts_scan,csharp_scan}.py`, `--receiver`; 2,453 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement
