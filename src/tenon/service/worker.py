@@ -18,11 +18,13 @@ class Worker:
         execute: Callable[[Run], Outcome],
         *,
         poll: float = 1.0,
+        retries: int = 0,
         clock: Callable[[float], object] | None = None,
     ) -> None:
         self._store = store
         self._execute = execute
         self._poll = poll
+        self._retries = retries
         self._stop = threading.Event()
         self._wait = clock or self._stop.wait
         self._thread: threading.Thread | None = None
@@ -36,18 +38,39 @@ class Worker:
             outcome = self._execute(run)
         except Exception as error:  # noqa: BLE001 - a runner crash is a failed run
             outcome = Outcome(None, None, tail(str(error)))
-        status = (
-            "succeeded"
-            if outcome.exit == 0 and outcome.error is None
-            else "failed"
-        )
-        self._store.finish(
-            run.id,
-            status=status,
-            exit=outcome.exit,
-            report=outcome.report,
-            error=outcome.error,
-        )
+        # Spec AC1/AC2: cancel is terminal; a report is terminal; only a
+        # report-free failure retries, within the configured budget.
+        if outcome.cancelled or self._store.cancel_requested(run.id):
+            self._store.finish(
+                run.id,
+                status="cancelled",
+                exit=outcome.exit,
+                report=outcome.report,
+                error=outcome.error,
+            )
+        elif outcome.report is not None:
+            status = (
+                "succeeded"
+                if outcome.exit == 0 and outcome.error is None
+                else "failed"
+            )
+            self._store.finish(
+                run.id,
+                status=status,
+                exit=outcome.exit,
+                report=outcome.report,
+                error=outcome.error,
+            )
+        elif run.attempts <= self._retries:
+            self._store.requeue(run.id)
+        else:
+            self._store.finish(
+                run.id,
+                status="failed",
+                exit=outcome.exit,
+                report=None,
+                error=outcome.error,
+            )
         return True
 
     def start(self) -> None:

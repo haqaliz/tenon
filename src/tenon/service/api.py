@@ -82,12 +82,14 @@ class Api:
         *,
         webhook_secret: str | None = None,
         max_body: int = 65536,
+        workers: int = 1,
     ) -> None:
         self._store = store
         self._bundles = Path(bundles)
         self._token = token
         self._webhook_secret = webhook_secret
         self._max_body = max_body
+        self._workers = workers
 
     @property
     def max_body(self) -> int:
@@ -123,6 +125,14 @@ class Api:
                 return _method_not_allowed()
             return self._webhook(values, body)
 
+        # Spec AC4: metrics is bearer-guarded like the run routes.
+        if route == "/metrics":
+            if not self._authorized(values):
+                return _unauthorized()
+            if method != "GET":
+                return _method_not_allowed()
+            return self._metrics()
+
         if route == "/runs":
             if not self._authorized(values):
                 return _unauthorized()
@@ -132,12 +142,21 @@ class Api:
                 return self._list_runs(url.query)
             return _method_not_allowed()
 
-        if route.startswith("/runs/") and "/" not in route[len("/runs/"):]:
-            if not self._authorized(values):
-                return _unauthorized()
-            if method != "GET":
-                return _method_not_allowed()
-            return self._get_run(route[len("/runs/"):])
+        # Spec AC2: /runs/{id}/cancel is one route, ahead of the record route.
+        if route.startswith("/runs/"):
+            rest = route[len("/runs/"):]
+            if rest.endswith("/cancel") and "/" not in rest[:-len("/cancel")]:
+                if not self._authorized(values):
+                    return _unauthorized()
+                if method != "POST":
+                    return _method_not_allowed()
+                return self._cancel(rest[: -len("/cancel")])
+            if "/" not in rest:
+                if not self._authorized(values):
+                    return _unauthorized()
+                if method != "GET":
+                    return _method_not_allowed()
+                return self._get_run(rest)
 
         return _not_found()
 
@@ -206,6 +225,46 @@ class Api:
                 return _response(400, {"error": "limit must be 1..200"})
         return _response(
             200, {"runs": [run.to_dict() for run in self._store.list(limit)]}
+        )
+
+    # Spec AC2: queued cancels now, running gets a flag, terminal is 409.
+    def _cancel(self, run_id: str) -> Response:
+        existing = self._store.get(run_id)
+        if existing is None:
+            return _not_found()
+        if existing.status in ("succeeded", "failed", "cancelled"):
+            return self._conflict(existing.status)
+        run = self._store.request_cancel(run_id)
+        if run is None:
+            return _not_found()
+        if run.status == "cancelled":
+            return _response(202, {"id": run.id, "status": "cancelled"})
+        if run.status in ("succeeded", "failed"):
+            return self._conflict(run.status)
+        return _response(202, {"id": run.id, "status": "cancelling"})
+
+    @staticmethod
+    def _conflict(status: str) -> Response:
+        return _response(409, {"error": f"run is {status}", "status": status})
+
+    # Spec AC4: five status gauges plus the configured worker count.
+    def _metrics(self) -> Response:
+        counts = self._store.counts()
+        lines = [
+            f'tenon_runs{{status="{status}"}} {counts[status]}'
+            for status in (
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "cancelled",
+            )
+        ]
+        lines.append(f"tenon_workers {self._workers}")
+        return Response(
+            200,
+            ("\n".join(lines) + "\n").encode("utf-8"),
+            {"Content-Type": "text/plain; version=0.0.4; charset=utf-8"},
         )
 
     # Spec AC5: verify the HMAC before trusting any payload; only record.

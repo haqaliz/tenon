@@ -99,13 +99,14 @@ tests/        offline; fixture repos and specs; no network, no model calls
   remote; a bad path is a per-repo failure, a shared spec refusal aborts, and there is no rollback.
   The bundle never upgrades a proof level and adds no PR branding. Installed fan-out shipped in
   T10d.
-- **The service is a thin host, not a new pipeline.** T10e queues a bundle in SQLite and one worker
-  invokes the shipped `provider migrate --installed` as a subprocess, so detection, proof and PR
-  behavior are unchanged. The API is a pure `Api.handle` behind a stdlib `ThreadingHTTPServer`; a
-  bearer token and constant-time HMAC comparison guard it, bundle names are confined to `--bundles`,
-  and the token/secret never enter the store, a response or the log. It is a local MVP: one worker,
-  one process, no parallel runs or webhook-triggered run; T13a ships the container + Caddy stack
-  (`docs/technical/DEPLOYMENT.md`) and T13b adds resilience.
+- **The service is a thin host, not a new pipeline.** T10e queues a bundle in SQLite and a bounded
+  pool of workers invokes the shipped `provider migrate --installed` as a subprocess, so detection,
+  proof and PR behavior are unchanged. The API is a pure `Api.handle` behind a stdlib
+  `ThreadingHTTPServer`; a bearer token and constant-time HMAC comparison guard it, bundle names are
+  confined to `--bundles`, and the token/secret never enter the store, a response or the log. T13b
+  adds N workers over the atomic claim, retries for report-free failures, cancel (the runner stops
+  the CLI's process group), a Prometheus `/metrics` route and startup recovery of stranded runs.
+  T13a ships the container + Caddy stack (`docs/technical/DEPLOYMENT.md`).
 - **The benchmark is descriptive, not a claim.** T9 records `(change, patch, proof, outcome)` in a
   local JSONL corpus. A merge rate uses only real outcomes (`merged`, `rejected`, `closed`,
   `incident`); `local_only`/`pending` never count as success. The public seed has no merge outcomes,
@@ -176,15 +177,19 @@ child env, never argv/URL) that is removed even on failure; without `--open-pr` 
 (dry run). A clone failure is a per-repo `error` and the others still run; a token/list failure
 exits 2. The report keys are `owner/name`. There is no rollback, parallelism or retry.
 `tenon provider serve --bundles DIR --db PATH --api-token TOKEN [--webhook-secret SECRET]
-[--host 127.0.0.1] [--port 8080] [--run-timeout SEC] [--poll SEC] [--dry-run] [--app-id ID]
-[--app-installation-id ID] [--app-private-key PATH] [--api-url URL]` starts one worker and a
-stdlib HTTP server. `POST /runs` (bearer auth) queues a relative `.json` bundle under `--bundles` and
-returns 201, or the existing run with an `Idempotency-Key` (200); `GET /runs/{id}` and
-`GET /runs?limit=N` return the durable record/report; `GET /health` is public; `POST
+[--host 127.0.0.1] [--port 8080] [--run-timeout SEC] [--poll SEC] [--workers N] [--retries N]
+[--dry-run] [--app-id ID] [--app-installation-id ID] [--app-private-key PATH] [--api-url URL]`
+starts a stdlib HTTP server and N workers (1..16, default 1) after re-queueing runs stranded
+`running` by a restart. `POST /runs` (bearer auth) queues a relative `.json` bundle under `--bundles`
+and returns 201, or the existing run with an `Idempotency-Key` (200); `GET /runs/{id}` and
+`GET /runs?limit=N` return the durable record/report; `POST /runs/{id}/cancel` cancels a queued run
+or flags a running one (202), with 404 unknown and 409 terminal; `GET /metrics` (bearer) returns the
+five `tenon_runs` status gauges and `tenon_workers`; `GET /health` is public; `POST
 /webhooks/github` verifies the HMAC and records a delivery (no auto-run). Auth is
-`hmac.compare_digest`, the token/secret are never stored or logged, and the worker invokes the
-shipped installed fan-out once per run. SQLite is the queue, there is no parallel worker, and the
-service is not internet-hardened: no TLS, proxy or rate limit ships.
+`hmac.compare_digest`, the token/secret are never stored or logged, and each worker invokes the
+shipped installed fan-out once per claimed run. A report-bearing run is terminal; a report-free
+failure retries up to `--retries` times, and a cancel stops the CLI's process group. SQLite is the
+queue, and the service is not internet-hardened: no TLS, proxy or rate limit ships.
 `tenon probe --server-cmd CMD --tasks FILE --agent CMD [--timeout SEC] [--json]` starts an MCP
 server over stdio, lists its tools, runs every task through the agent command and reports what
 worked. Exit 0 when every task passed, 1 when one failed, 2 on usage/connection. The task file and
@@ -256,13 +261,13 @@ test"` is just a user command.
   outcomes yet.
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
-- T10e follow-ups: parallel workers, retries/cancel, metrics and webhook-triggered runs. The shipped
-  service is one process and one worker over SQLite; T13a adds the container/Caddy deployment and a
-  readiness endpoint, and T13b adds the resilience.
+- T10e follow-ups: webhook-triggered runs remain. The shipped service is containerized (T13a) with
+  N workers, bounded retries, cancel, metrics and SQLite WAL/recovery (T13b); rate limiting stays a
+  proxy concern.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
 - Phase 3: T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider
   fan-out), T10d (installed provider fan-out), T10e (hosted provider service), T11a (Rust locator),
   T11b (Go locator) and T11c (C# locator) shipped; T12a (Rust/Go receiver tracking) and T12b
-  (C#/Python/TS receiver tracking) shipped; T13a (deployable service) shipped. T13b (resilience),
-  a hardened cloud deployment beyond Compose and return-type/interprocedural receiver inference are
-  not started.
+  (C#/Python/TS receiver tracking) shipped; T13a (deployable service) and T13b (resilience) shipped.
+  Return-type/interprocedural receiver inference, webhook-triggered runs and a hardened cloud
+  deployment beyond Compose are not started.

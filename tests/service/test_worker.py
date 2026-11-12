@@ -146,6 +146,130 @@ def test_start_and_stop_run_one_daemon_thread(tmp_path):
     assert store.get(run_id).status == "succeeded"
 
 
+# Spec AC1: a report-free failure retries up to --retries, then fails.
+def test_a_report_free_failure_retries_then_fails(tmp_path):
+    store = a_store(tmp_path)
+    run = store.create_run("bundle.json")
+    calls = []
+
+    def execute(claimed):
+        calls.append(claimed.attempts)
+        return Outcome(None, None, "boom")
+
+    worker = Worker(store, execute, retries=1)
+
+    assert worker.run_once() is True
+    retried = store.get(run.id)
+    assert retried.status == "queued"
+    assert retried.attempts == 1
+    assert retried.error is None
+
+    assert worker.run_once() is True
+
+    finished = store.get(run.id)
+    assert calls == [1, 2]
+    assert finished.status == "failed"
+    assert finished.exit is None
+    assert finished.error == "boom"
+    assert finished.attempts == 2
+
+
+# Spec AC1: a report-bearing failure is terminal even with retries configured.
+def test_a_report_bearing_failure_is_never_retried(tmp_path):
+    store = a_store(tmp_path)
+    run = store.create_run("bundle.json")
+    worker = Worker(
+        store, lambda claimed: Outcome(1, a_report(repos=2), None), retries=5
+    )
+
+    assert worker.run_once() is True
+
+    finished = store.get(run.id)
+    assert finished.status == "failed"
+    assert finished.attempts == 1
+    assert finished.report == a_report(repos=2)
+    assert store.claim_next() is None
+
+
+# Spec AC1/AC2: a cancelled outcome is terminal and never retried.
+def test_a_cancelled_outcome_finishes_cancelled(tmp_path):
+    store = a_store(tmp_path)
+    run = store.create_run("bundle.json")
+    worker = Worker(
+        store, lambda claimed: Outcome(None, None, "run cancelled", True),
+        retries=5,
+    )
+
+    assert worker.run_once() is True
+
+    finished = store.get(run.id)
+    assert finished.status == "cancelled"
+    assert finished.attempts == 1
+    assert finished.error == "run cancelled"
+    assert store.claim_next() is None
+
+
+# Spec AC2: a cancel requested while running finishes the run cancelled.
+def test_a_cancel_requested_while_running_finishes_cancelled(tmp_path):
+    store = a_store(tmp_path)
+    run = store.create_run("bundle.json")
+
+    def execute(claimed):
+        store.request_cancel(claimed.id)
+        return Outcome(0, a_report(), None)
+
+    worker = Worker(store, execute)
+
+    assert worker.run_once() is True
+
+    finished = store.get(run.id)
+    assert finished.status == "cancelled"
+    assert finished.report == a_report()
+    assert finished.cancel_requested is True
+
+
+# Spec AC1: an exception follows the report-free retry path.
+def test_an_exception_retries_like_a_report_free_failure(tmp_path):
+    store = a_store(tmp_path)
+    run = store.create_run("bundle.json")
+
+    def explode(_claimed):
+        raise RuntimeError("boom")
+
+    worker = Worker(store, explode, retries=1)
+
+    assert worker.run_once() is True
+    assert store.get(run.id).status == "queued"
+
+    assert worker.run_once() is True
+    assert store.get(run.id).status == "failed"
+
+
+# Spec AC3: N workers drain N runs exactly once each.
+def test_n_workers_process_n_runs_exactly_once(tmp_path):
+    store = a_store(tmp_path)
+    ids = [store.create_run(f"bundle-{number}.json").id for number in range(4)]
+    seen = []
+    lock = threading.Lock()
+
+    def execute(claimed):
+        with lock:
+            seen.append(claimed.id)
+        return Outcome(0, a_report(), None)
+
+    workers = [Worker(store, execute) for _ in range(4)]
+    progress = True
+    while progress:
+        progress = False
+        for worker in workers:
+            if worker.run_once():
+                progress = True
+
+    assert sorted(seen) == sorted(ids)
+    assert len(seen) == len(set(seen)) == 4
+    assert {store.get(run_id).status for run_id in ids} == {"succeeded"}
+
+
 # Spec AC4: the idle wait is the injected clock when one is given.
 def test_start_uses_the_injected_clock_for_the_idle_wait(tmp_path):
     store = a_store(tmp_path)

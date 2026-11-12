@@ -22,11 +22,18 @@ def a_root(tmp_path):
     return root
 
 
-def an_api(tmp_path, *, secret=None, max_body=65536, token=TOKEN):
+def an_api(tmp_path, *, secret=None, max_body=65536, token=TOKEN, workers=1):
     root = a_root(tmp_path)
     store = RunStore(tmp_path / "runs.db")
     return (
-        Api(store, root, token, webhook_secret=secret, max_body=max_body),
+        Api(
+            store,
+            root,
+            token,
+            webhook_secret=secret,
+            max_body=max_body,
+            workers=workers,
+        ),
         store,
         root,
     )
@@ -562,3 +569,166 @@ def test_the_token_and_secret_never_appear_in_errors(tmp_path):
         assert SECRET not in response.body.decode()
         assert TOKEN not in response.headers.values()
         assert SECRET not in response.headers.values()
+
+
+# Spec AC2: cancelling a queued run marks it cancelled now.
+def test_cancel_a_queued_run_is_202_cancelled(tmp_path):
+    api, store, _root = an_api(tmp_path)
+    run = store.create_run("bundle.json")
+
+    response = a_call(api, "POST", f"/runs/{run.id}/cancel")
+
+    assert response.status == 202
+    assert a_json(response) == {"id": run.id, "status": "cancelled"}
+    assert response.body == a_response(
+        {"id": run.id, "status": "cancelled"}, 202
+    ).body
+    finished = store.get(run.id)
+    assert finished.status == "cancelled"
+    assert finished.finished_at is not None
+
+
+# Spec AC2: cancelling a running run flags it and answers cancelling.
+def test_cancel_a_running_run_is_202_cancelling(tmp_path):
+    api, store, _root = an_api(tmp_path)
+    run = store.create_run("bundle.json")
+    store.claim_next()
+
+    response = a_call(api, "POST", f"/runs/{run.id}/cancel")
+
+    assert response.status == 202
+    assert a_json(response) == {"id": run.id, "status": "cancelling"}
+    assert store.cancel_requested(run.id) is True
+    assert store.get(run.id).status == "running"
+
+
+# Spec AC2: a terminal run is 409 with its status.
+@pytest.mark.parametrize("status", ["succeeded", "failed"])
+def test_cancel_a_finished_run_is_409(tmp_path, status):
+    api, store, _root = an_api(tmp_path)
+    run = store.create_run("bundle.json")
+    store.claim_next()
+    store.finish(run.id, status=status, exit=0, report={})
+
+    response = a_call(api, "POST", f"/runs/{run.id}/cancel")
+
+    assert response.status == 409
+    assert a_json(response) == {
+        "error": f"run is {status}",
+        "status": status,
+    }
+
+
+# Spec AC2: an already-cancelled run is 409, the same terminal rule.
+def test_cancel_an_already_cancelled_run_is_409(tmp_path):
+    api, store, _root = an_api(tmp_path)
+    run = store.create_run("bundle.json")
+    store.request_cancel(run.id)
+
+    response = a_call(api, "POST", f"/runs/{run.id}/cancel")
+
+    assert response.status == 409
+    assert a_json(response) == {
+        "error": "run is cancelled",
+        "status": "cancelled",
+    }
+
+
+# Spec AC2: cancelling an unknown run is 404.
+def test_cancel_an_unknown_run_is_404(tmp_path):
+    api, _store, _root = an_api(tmp_path)
+
+    response = a_call(api, "POST", "/runs/" + "f" * 32 + "/cancel")
+
+    assert response.status == 404
+    assert a_json(response) == {"error": "not found"}
+
+
+# Spec AC2: cancel is bearer-guarded.
+def test_cancel_requires_the_bearer_token(tmp_path):
+    api, store, _root = an_api(tmp_path)
+    run = store.create_run("bundle.json")
+
+    response = api.handle("POST", f"/runs/{run.id}/cancel", {}, b"")
+
+    assert response.status == 401
+    assert store.get(run.id).status == "queued"
+
+
+# Spec AC2: a non-POST cancel is 405.
+def test_a_non_post_cancel_is_405(tmp_path):
+    api, store, _root = an_api(tmp_path)
+    run = store.create_run("bundle.json")
+
+    response = a_call(api, "GET", f"/runs/{run.id}/cancel")
+
+    assert response.status == 405
+    assert store.get(run.id).status == "queued"
+
+
+# Spec AC4: metrics reports every status, the worker count and the type.
+def test_metrics_reports_all_statuses_and_workers(tmp_path):
+    api, store, _root = an_api(tmp_path, workers=2)
+    succeeded = store.create_run("succeeded.json")
+    store.claim_next()
+    store.finish(succeeded.id, status="succeeded", exit=0, report={})
+    failed = store.create_run("failed.json")
+    store.claim_next()
+    store.finish(failed.id, status="failed", exit=2, report=None)
+    cancelled = store.create_run("cancelled.json")
+    store.request_cancel(cancelled.id)
+    running = store.create_run("running.json")
+    store.claim_next()
+    store.create_run("queued.json")
+
+    response = a_call(api, "GET", "/metrics")
+
+    assert response.status == 200
+    assert response.headers["Content-Type"] == (
+        "text/plain; version=0.0.4; charset=utf-8"
+    )
+    assert response.body == (
+        b'tenon_runs{status="queued"} 1\n'
+        b'tenon_runs{status="running"} 1\n'
+        b'tenon_runs{status="succeeded"} 1\n'
+        b'tenon_runs{status="failed"} 1\n'
+        b'tenon_runs{status="cancelled"} 1\n'
+        b"tenon_workers 2\n"
+    )
+    assert store.get(running.id).status == "running"
+
+
+# Spec AC4: an empty store still reports every status as zero.
+def test_metrics_reports_zero_counts_and_the_default_worker(tmp_path):
+    api, _store, _root = an_api(tmp_path)
+
+    response = a_call(api, "GET", "/metrics")
+
+    assert response.body == (
+        b'tenon_runs{status="queued"} 0\n'
+        b'tenon_runs{status="running"} 0\n'
+        b'tenon_runs{status="succeeded"} 0\n'
+        b'tenon_runs{status="failed"} 0\n'
+        b'tenon_runs{status="cancelled"} 0\n'
+        b"tenon_workers 1\n"
+    )
+
+
+# Spec AC4: metrics is bearer-guarded.
+def test_metrics_requires_the_bearer_token(tmp_path):
+    api, _store, _root = an_api(tmp_path)
+
+    response = api.handle("GET", "/metrics", {}, b"")
+
+    assert response.status == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+
+
+# Spec AC4: a non-GET metrics request is 405.
+def test_a_non_get_metrics_is_405(tmp_path):
+    api, _store, _root = an_api(tmp_path)
+
+    response = a_call(api, "POST", "/metrics")
+
+    assert response.status == 405
+    assert a_json(response) == {"error": "method not allowed"}

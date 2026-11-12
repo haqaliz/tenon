@@ -4930,6 +4930,30 @@ def a_fake_server(monkeypatch):
     return seen, server
 
 
+def a_fake_workers(monkeypatch):
+    """Patch the module's Worker and record every instance."""
+    instances = []
+
+    class FakeWorker:
+        def __init__(self, store, execute, *, poll=1.0, retries=0):
+            self.store = store
+            self.execute = execute
+            self.poll = poll
+            self.retries = retries
+            self.started = False
+            self.stopped = False
+            instances.append(self)
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(cli_main, "Worker", FakeWorker)
+    return instances
+
+
 # Spec AC1: provider serve --help is a zero and lists every flag.
 def test_provider_serve_help_lists_the_flags(capsys):
     assert main(["provider", "serve", "--help"]) == 0
@@ -4944,6 +4968,8 @@ def test_provider_serve_help_lists_the_flags(capsys):
         "--port",
         "--run-timeout",
         "--poll",
+        "--workers",
+        "--retries",
         "--dry-run",
         "--app-id",
         "--app-installation-id",
@@ -4961,7 +4987,64 @@ def test_provider_serve_defaults(tmp_path):
     assert args.port == 8080
     assert args.run_timeout == 3600
     assert args.poll == 1.0
+    assert args.workers == 1
+    assert args.retries == 0
     assert args.dry_run is False
+
+
+# Spec AC3: a workers or retries value outside its bound is a named usage error.
+@pytest.mark.parametrize(
+    ("flag", "value", "message"),
+    [
+        ("--workers", "0", "--workers must be 1..16"),
+        ("--workers", "17", "--workers must be 1..16"),
+        ("--retries", "-1", "--retries must be 0..10"),
+        ("--retries", "11", "--retries must be 0..10"),
+    ],
+)
+def test_provider_serve_bounds_are_named_usage_errors(
+    tmp_path, monkeypatch, capsys, flag, value, message
+):
+    monkeypatch.delenv("TENON_API_TOKEN", raising=False)
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+
+    assert (
+        main(
+            a_serve_argv(
+                tmp_path, "--api-token", SERVE_TOKEN, flag, value, bundles=bundles
+            )
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert message in captured.err
+    assert "Traceback" not in captured.err
+    assert not (tmp_path / "runs.db").exists()
+
+
+# Spec AC3: a non-integer flag value is an argparse parse error.
+@pytest.mark.parametrize(
+    ("flag", "value"), [("--workers", "abc"), ("--retries", "1.5")]
+)
+def test_provider_serve_flags_must_be_integers(tmp_path, capsys, flag, value):
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+
+    assert (
+        main(
+            a_serve_argv(
+                tmp_path, "--api-token", SERVE_TOKEN, flag, value, bundles=bundles
+            )
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "invalid int value" in captured.err
+    assert "Traceback" not in captured.err
 
 
 # Spec AC1: a missing token is a named usage error, before any store opens.
@@ -5065,7 +5148,7 @@ def test_serve_execute_resolves_the_bundle_name(tmp_path):
     seen = []
 
     class FakeRunner:
-        def run(self, path):
+        def run(self, path, cancel=None):
             seen.append(path)
             return RunOutcome(0, {"command": "provider"}, None)
 
@@ -5081,6 +5164,35 @@ def test_serve_execute_resolves_the_bundle_name(tmp_path):
     assert done.exit == 0
     assert missing.exit is None
     assert "not available" in missing.error
+
+
+# Spec AC2: the service wires the store's cancel flag into the runner.
+def test_serve_execute_passes_the_cancel_predicate(tmp_path):
+    from tenon.service import Run
+    from tenon.service.runner import Outcome as RunOutcome
+
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    (bundles / "demo.json").write_text("{}")
+    requested = {"value": False}
+    seen = {}
+
+    class FakeRunner:
+        def run(self, path, cancel=None):
+            seen["cancel"] = cancel
+            return RunOutcome(0, {}, None)
+
+    execute = cli_main._serve_execute(
+        FakeRunner(), bundles, lambda run_id: requested["value"]
+    )
+    done = execute(
+        Run(id="a", bundle="demo.json", status="running", created_at="t")
+    )
+
+    assert done.exit == 0
+    assert seen["cancel"]() is False
+    requested["value"] = True
+    assert seen["cancel"]() is True
 
 
 # Spec AC1/AC4: the child argv runs the shipped installed fan-out and opens a PR.
@@ -5178,6 +5290,50 @@ def test_provider_serve_starts_the_worker_and_stops_on_interrupt(
     assert seen["api"].handle("GET", "/health", {}, b"").status == 200
     assert server.closed is True
     assert SERVE_TOKEN not in captured.out + captured.err
+
+
+# Spec AC5: serve recovers stranded runs and starts N workers with the flags.
+def test_provider_serve_recovers_and_starts_n_workers(
+    tmp_path, monkeypatch, capsys
+):
+    from tenon.service.store import RunStore
+
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    stranded = RunStore(tmp_path / "runs.db")
+    run = stranded.create_run("bundle.json")
+    stranded.claim_next()
+    stranded.close()
+    instances = a_fake_workers(monkeypatch)
+    seen, server = a_fake_server(monkeypatch)
+
+    assert (
+        main(
+            a_serve_argv(
+                tmp_path,
+                "--api-token",
+                SERVE_TOKEN,
+                "--workers",
+                "3",
+                "--retries",
+                "2",
+                bundles=bundles,
+            )
+        )
+        == 0
+    )
+
+    assert len(instances) == 3
+    assert all(worker.started and worker.stopped for worker in instances)
+    assert {worker.retries for worker in instances} == {2}
+    assert {worker.poll for worker in instances} == {1.0}
+    assert seen["api"]._workers == 3
+    assert server.closed is True
+    recovered = RunStore(tmp_path / "runs.db")
+    try:
+        assert recovered.get(run.id).status == "queued"
+    finally:
+        recovered.close()
 
 
 # Spec AC1/AC5: the webhook secret may come from TENON_WEBHOOK_SECRET.

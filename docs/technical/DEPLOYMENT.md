@@ -2,7 +2,8 @@
 
 `tenon provider serve` ships as a small Docker image behind Caddy: the service talks HTTP on the
 private compose network, Caddy terminates TLS on 80/443, and only the database volume is writable.
-This guide is for a single VM. For the local MVP behavior see the README; T13b adds resilience.
+This guide is for a single VM. For the local MVP behavior see the README; T13b adds parallel
+workers, bounded retries, cancel and Prometheus metrics.
 
 ## Prerequisites
 
@@ -57,6 +58,77 @@ docker compose ps
 
 The service is not published on the host: `expose: 8080` is internal only and the compose has no
 `ports` entry for it. Caddy is the only public container.
+
+## Workers, retries and cancel
+
+The image runs with one worker and no retries. Add `--workers N` (1..16) and `--retries N` (0..10)
+to a compose `command:` (or the image `CMD`) to change that:
+
+```yaml
+services:
+  service:
+    command:
+      - provider
+      - serve
+      - --bundles
+      - /data/bundles
+      - --db
+      - /data/tenon.db
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --workers
+      - "4"
+      - --retries
+      - "2"
+```
+
+Each worker atomically claims the oldest queued run, so N threads share the SQLite queue without
+running a row twice. Raise `--workers` only as far as the GitHub App installation's rate limit
+allows: every run clones and may push and open PRs.
+
+`--retries` covers infrastructure failures only. A run that produced a report (CLI exit 0 or 1) is
+terminal and is never retried, so a retry never duplicates or refuses an already-opened PR. A run
+with no report (timeout, exit 2, exception, invalid report) is re-queued up to N extra times; the
+`attempts` count is visible in `GET /runs/{id}`. Cancel is terminal and never retried.
+
+Cancel a queued or running run:
+
+```sh
+curl -X POST -H "Authorization: Bearer $TENON_API_TOKEN" \
+     https://$TENON_DOMAIN/runs/$RUN_ID/cancel
+```
+
+A queued run returns 202 with `"status":"cancelled"`; a running run returns 202 with
+`"status":"cancelling"`, the worker sees the flag, and the runner stops the CLI's process group
+(SIGTERM, then SIGKILL after five seconds), so its git children stop too. A finished run returns 409
+with its status.
+
+On startup the service re-queues runs left `running` by an unclean restart, or finishes them
+`cancelled` when a cancel had been requested. Run history is durable; no manual cleanup is needed.
+**Caveat:** process groups are POSIX-only and a SIGTERM can skip the child's temp-dir cleanup. The
+store/report is unaffected, and `/tmp` is a tmpfs in the compose, so leftovers are bounded. Windows
+is not a target.
+
+## Metrics
+
+`GET /metrics` is bearer-guarded and returns Prometheus text: `tenon_runs{status=...}` for
+`queued`, `running`, `succeeded`, `failed` and `cancelled`, plus `tenon_workers`. Caddy already
+proxies the route, so an external Prometheus scrapes the public TLS name and sends the API token:
+
+```yaml
+scrape_configs:
+  - job_name: tenon
+    scheme: https
+    authorization:
+      credentials_file: /etc/prometheus/tenon-token
+    static_configs:
+      - targets: ["$TENON_DOMAIN"]
+```
+
+The credentials file holds only the token and must be readable by Prometheus alone. The token is
+compared per request and never stored by the service.
 
 ## DNS and TLS
 
