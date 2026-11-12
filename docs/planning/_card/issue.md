@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T13 Hardened deployment** — second slice: **service resilience** (T13b)
 - **Milestone:** next phase after T12; T13a (deployable service) shipped
+- **State:** T13b shipped 2026-11-12 (`--workers`/`--retries`/cancel/`/metrics`, SQLite hardening; 2,527 tests)
 - **Branch:** `feat/service-resilience/aliz`
 - **Worktree:** `.claude/worktrees/feat-service-resilience`
 

@@ -3,7 +3,7 @@
 - **Slug:** `service-resilience`
 - **Capability:** **T13 Hardened deployment** — **second slice: service resilience**
 - **Milestone:** next phase after T12; T13a (deployable service) shipped 2026-11-12
-- **Status:** draft for review
+- **Status:** implemented 2026-11-12 (`--workers`/`--retries`/cancel/`/metrics`, SQLite hardening; 2,527 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

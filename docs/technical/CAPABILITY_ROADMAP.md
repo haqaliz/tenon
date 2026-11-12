@@ -16,7 +16,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Shipped 2026-11-11 (MVP)** — GitHub App remote, provider bundle, local/installed fan-out and a self-hosted service; a hardened cloud deployment is later |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Shipped 2026-11-11** — Rust, Go and C# locators |
 | **T12** | **Receiver tracking.** Method/fluent chains through an explicitly typed client. | T11 | Explicit evidence only | **Shipped 2026-11-12** — Rust, Go, C#, Python and TypeScript |
-| **T13** | **Hardened deployment.** Container, TLS proxy, backups, resilience. | T10e | Operator-owned secrets | **Partial 2026-11-12** — deployable Compose + Caddy + readiness shipped; resilience (T13b) not started |
+| **T13** | **Hardened deployment.** Container, TLS proxy, backups, resilience. | T10e | Operator-owned secrets | **Shipped 2026-11-12** — deployable Compose + Caddy, workers/retries/cancel/metrics, SQLite hardening |
 
 ### T1 as shipped (2026-10-26)
 
@@ -351,7 +351,23 @@ stays liveness. 2,473 tests, offline (static artifact checks; no Docker daemon i
 
 Known limits: the image/stack are not exercised by tests (the first operator run is the integration
 test); the service is only safe behind Caddy TLS; host secrets/backups/permissions are the operator's
-responsibility; one worker, no retries/cancel/metrics and no WAL until T13b.
+responsibility.
+
+### T13b as built (2026-11-12)
+
+`RunStore` gains `attempts`/`cancel_requested`, the `cancelled` status, an additive schema migration,
+`requeue`/`request_cancel`/`cancel_requested`/`counts`/`recover` and WAL/busy-timeout/synchronous/
+foreign-key pragmas. `--workers N` (1..16) runs N threads over the atomic claim; `--retries N`
+(0..10) re-queues only runs that produced no report, with attempts visible and report-bearing runs
+terminal; `POST /runs/{id}/cancel` cancels a queued run or signals a running one and the runner stops
+the CLI's process group; `GET /metrics` (bearer) exposes run gauges by status and `tenon_workers`;
+startup recovery re-queues stranded running rows (or cancels requested ones). 2,527 tests, offline.
+
+Known limits: retries cover infrastructure failures only (a report-bearing exit 1 is not retried);
+a timed-out run may have opened some PRs, so its retry re-runs and reports per-repo `BRANCH_EXISTS`
+refusals (no force-push/delete); cancel is POSIX process-group termination and may skip temp-dir
+cleanup; N workers share the app token/rate limits; webhook-triggered runs and per-run retries/backoff
+are not shipped.
 
 ### T10e as built (2026-11-11)
 
