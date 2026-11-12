@@ -34,7 +34,7 @@ deterministic PR whose title and body state that level, then clones a clean chec
 exact diff to a new branch and opens the PR through your own `git` and `gh` or a GitHub App
 installation (`--remote app`); `src/tenon/provider/` loads a portable migration bundle and
 `src/tenon/cli/` runs it through the same pipeline; `src/tenon/service/` queues one bundle in SQLite,
-runs the installed fan-out with one worker and serves a bearer-token API; `src/tenon/probe/`
+runs the installed fan-out with a bounded worker pool and serves a bearer-token API; `src/tenon/probe/`
 connects to an MCP server over stdio, runs tasks through a user-supplied agent and reports what
 worked; `src/tenon/corpus/` records `(change, patch, proof, outcome)` runs and reports by
 level/outcome. The analysis and proof run fully offline; only the final push and PR call touch a
@@ -266,13 +266,15 @@ given.
 ### Provider service
 
 `tenon provider serve --bundles DIR --db PATH --api-token TOKEN [--webhook-secret SECRET]
-[--host 127.0.0.1] [--port 8080] [--run-timeout 3600] [--poll 1.0] [--dry-run]
-[--app-id ID] [--app-installation-id ID] [--app-private-key PATH] [--api-url URL]` starts a
-self-hosted HTTP service and one background worker. `--api-token`/`TENON_API_TOKEN` is required and
-non-empty, `--bundles` must be an existing directory, and `--db` is the SQLite store (created and
-migrated on open); a bad value is a named usage error (exit 2). `--webhook-secret`/
-`TENON_WEBHOOK_SECRET` is optional. `--dry-run` runs the installed fan-out with no PR call. The app
-identity is the T10a one; the child receives the private key path, never its contents.
+[--host 127.0.0.1] [--port 8080] [--run-timeout 3600] [--poll 1.0] [--workers N] [--retries N]
+[--dry-run] [--app-id ID] [--app-installation-id ID] [--app-private-key PATH] [--api-url URL]`
+starts a self-hosted HTTP service and N background workers (default 1, max 16).
+`--api-token`/`TENON_API_TOKEN` is required and non-empty, `--bundles` must be an existing directory,
+and `--db` is the SQLite store (created and migrated on open); a bad value or an out-of-bounds
+`--workers` (1..16) or `--retries` (0..10) is a named usage error (exit 2).
+`--webhook-secret`/`TENON_WEBHOOK_SECRET` is optional. `--dry-run` runs the installed fan-out with no
+PR call. The app identity is the T10a one; the child receives the private key path, never its
+contents.
 
 `POST /runs` with `Authorization: Bearer TOKEN` and `{"bundle": "stripe-v2500-v2596.json"}` queues a
 run and returns 201 `{"id","status":"queued","bundle"}`; an `Idempotency-Key` header returns the
@@ -283,6 +285,14 @@ body over 64 KiB is 413. `GET /runs/{id}` returns the durable record including t
 and `GET /health` returns `{"status":"ok"}` without auth. Unknown paths are 404, wrong methods 405,
 and auth failures are 401 with `WWW-Authenticate: Bearer`.
 
+`POST /runs/{id}/cancel` (bearer) answers 202 `{"id","status":"cancelled"}` for a queued run and 202
+`{"id","status":"cancelling"}` for a running one; the runner polls the request and stops the CLI's
+process group (SIGTERM, then SIGKILL after five seconds), so its git children die with it. An unknown
+id is 404; a run that is already succeeded, failed or cancelled is 409 `{"error":"run is
+<status>","status":...}`. `GET /metrics` (bearer) returns Prometheus text with
+`tenon_runs{status="queued|running|succeeded|failed|cancelled"} N` for every status and
+`tenon_workers N`, as `text/plain; version=0.0.4; charset=utf-8`.
+
 `POST /webhooks/github` is exempt from the bearer token but requires `--webhook-secret`; without one
 the route is 404. It verifies `X-Hub-Signature-256: sha256=<hex>` with HMAC-SHA256 in constant time
 (401 on a bad signature), parses a JSON object (400 otherwise), and records
@@ -290,18 +300,22 @@ the route is 404. It verifies `X-Hub-Signature-256: sha256=<hex>` with HMAC-SHA2
 `{"status":"recorded"}`. A duplicate delivery is 202 and leaves one row. Webhooks only record; they
 never start a run.
 
-The worker claims the oldest queued run, invokes the shipped `provider migrate --installed --bundle
+Each worker claims the oldest queued run, invokes the shipped `provider migrate --installed --bundle
 PATH --json` child (`--open-pr --remote app` unless `--dry-run`) once, and stores the fan-out
-report/exit; a nonzero exit, exception or timeout is `failed` with a capped error. All responses are
-canonical JSON (sorted keys, compact separators, one newline). The token and webhook secret are
-compared with `hmac.compare_digest`, never stored or logged, and the child gets only the app private
-key path.
+report/exit. A report-bearing finish (exit 0/1) is terminal and never retried, so an already-opened
+PR is not duplicated; a timeout, exit 2, exception or invalid report has no report and is re-queued up
+to `--retries` times, with `attempts` visible on the run. A cancelled run is terminal too. On startup
+the service reclaims stranded `running` rows: a run whose cancel was requested finishes `cancelled`,
+and the rest are re-queued. All responses are canonical JSON (sorted keys, compact separators, one
+newline). The token and webhook secret are compared with `hmac.compare_digest`, never stored or
+logged, and the child gets only the app private key path.
 
-The service is a single-process, single-worker local MVP: SQLite is the queue and history, runs are
-sequential, and a run can outlive the HTTP request. There is no rate limiting, CORS, authentication
-beyond the bearer token, retry, cancellation, metrics or web UI; expose it behind a TLS-terminating
-reverse proxy with a real token, never directly on the internet. A restart keeps the run history, and
-`--run-timeout` kills a stuck child. The container + Caddy stack and the operator guide are in
+The service is a single process with N worker threads: SQLite is the queue and history, claims are
+atomic, and a run can outlive the HTTP request. There is no rate limiting, CORS, authentication
+beyond the bearer token or web UI; expose it behind a TLS-terminating reverse proxy with a real token,
+never directly on the internet. A restart keeps the run history and recovers stranded runs,
+`--run-timeout` kills a stuck child, and `--retries` only covers report-free infrastructure failures.
+The container + Caddy stack and the operator guide are in
 [`docs/technical/DEPLOYMENT.md`](docs/technical/DEPLOYMENT.md).
 
 `uv run pytest` — no network, no model calls.
