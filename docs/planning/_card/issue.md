@@ -1,39 +1,38 @@
-# Card: feat/service-deploy
+# Card: feat/service-resilience
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T13 Hardened deployment** — the operational follow-up to the T10e service MVP
-- **Milestone:** next phase after T12; the original roadmap ends at T11
-- **State:** T13a (deployable service) shipped 2026-11-12 (`Dockerfile`, `docker-compose.yml`, `Caddyfile`, `/ready`; 2,473 tests); T13b (resilience) not started
-- **Branch:** `feat/service-deploy/aliz`
-- **Worktree:** `.claude/worktrees/feat-service-deploy`
+- **Capability:** **T13 Hardened deployment** — second slice: **service resilience** (T13b)
+- **Milestone:** next phase after T12; T13a (deployable service) shipped
+- **Branch:** `feat/service-resilience/aliz`
+- **Worktree:** `.claude/worktrees/feat-service-resilience`
 
 ## Brief
 
-`tenon provider serve` is a local-first MVP: one process, one worker, SQLite, a bearer token and a
-webhook HMAC, with no TLS, container, readiness, retries/cancel or metrics. A provider cannot deploy
-it as-is.
+The T13a service is deployable but still one worker, one attempt, no cancel and no metrics; SQLite
+runs with the default journal.
 
-T13 makes the service deployable and resilient, in two slices:
-- **T13a — deployable service:** a non-root Docker image, a Compose stack with the service plus a
-  TLS-terminating proxy, volumes for the DB/bundles, env/secret wiring, health/readiness, and a
-  deployment/backup/rotation guide. No secrets baked into the image.
-- **T13b — service resilience:** bounded parallel workers, run retries, a cancel endpoint, a
-  Prometheus `/metrics` endpoint and SQLite WAL/busy-timeout hardening (or Postgres, if chosen).
+T13b adds **service resilience**:
+- bounded **parallel workers** (`--workers N`, default 1) that claim runs atomically;
+- **run retries** (`--retries N`, default 0): a failed/timed-out run is re-queued with an attempt
+  count until the budget is exhausted, then failed;
+- a **cancel endpoint** for a queued or running run (the running CLI subprocess is terminated);
+- a Prometheus **`/metrics`** endpoint (run counts by status, queue depth), bearer-guarded;
+- **SQLite hardening**: WAL, a busy timeout, `synchronous=NORMAL` and `foreign_keys=ON`;
+- the store/API/worker/CLI tests and docs.
 
-The hard rules do not change: the service never merges or pushes the default branch; the app identity
-and T5 gates stay; secrets never appear in images, logs, the DB or responses; no cloud-specific IaC or
-SaaS control plane.
+The hard rules do not change: one code path (the shipped CLI), no merge/default branch, secrets never
+logged/stored, no new proof/locator behavior, no Postgres or cloud-specific infrastructure.
 
 ## Constraints carried in from the repo
 
-- The T10e `RunStore`/`Worker`/`Api`/`http.serve` seams are the base; extend, do not fork the policy.
-- Stdlib only unless a chosen slice needs an optional dependency (e.g. a Postgres driver).
-- Offline tests; Docker/Compose artifacts are deployment files, not run in the test suite.
-- `CLAUDE.md` §1–5: no egress by default, honest levels, no merge/default branch.
+- T10e/T13a's `RunStore`/`Worker`/`Api`/`CommandRunner` and the Compose deployment are the base.
+- Stdlib only (`sqlite3`, `threading`, `subprocess`, `time`); no new dependency.
+- Offline tests; no Docker/network; a cancel test may use a short-lived local subprocess or a fake.
+- `CLAUDE.md` §1–5: execution decides, honest levels, no merge/default branch.
 
 ## Scope fence
 
-Not this card: a SaaS control plane, multi-tenant auth, a web UI, Kubernetes unless chosen, cloud
-IaC, new locators/provider capabilities.
+Not this card: Postgres, Kubernetes/cloud IaC, a web UI, multi-tenant auth, webhook-triggered runs,
+new locators/provider features, rate limiting (the proxy owns it).
