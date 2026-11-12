@@ -1096,3 +1096,342 @@ def test_a_named_argument_is_unwrapped(tmp_path):
             True,
         ),
     )
+
+
+# Spec AC1: a `new` binding is receiver evidence.
+def test_a_new_receiver_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = new ChargeClient();\n"
+            "        var charges = client.Charges;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            30,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("ChargeClient",),
+            True,
+        ),
+    )
+
+
+# Spec AC1: an explicit declared type is receiver evidence.
+def test_an_explicit_type_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        ChargeClient client = Build();\n"
+            "        var charges = client.Charges;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            30,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("ChargeClient",),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a configured factory binds the mapped type.
+def test_a_mapped_factory_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            '        var client = StripeClient.Create("key");\n'
+            "        var charges = client.Charges;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT, receivers={"StripeClient.Create": "Client"})
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            22,
+            SiteShape.CALL,
+            "Create",
+            ("StripeClient", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            30,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("Client",),
+            True,
+        ),
+    )
+
+
+# Spec AC1: the canonical dotted key matches a qualified factory.
+def test_a_canonical_factory_key_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            '        var client = Stripe.Services.StripeClient.Create("key");\n'
+            "        var charges = client.Charges;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(
+        repo, ROOT, receivers={"StripeClient.Create": "Resources.Client"}
+    )
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            5,
+            22,
+            SiteShape.CALL,
+            "Create",
+            ("StripeClient", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            6,
+            30,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("Resources", "Client"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: the source dotted key matches a qualified factory.
+def test_a_source_factory_key_is_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            '        var client = Stripe.Services.StripeClient.Create("key");\n'
+            "        var charges = client.Charges;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(
+        repo,
+        ROOT,
+        receivers={"Stripe.Services.StripeClient.Create": "Client"},
+    )
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            5,
+            22,
+            SiteShape.CALL,
+            "Create",
+            ("StripeClient", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            6,
+            30,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("Client",),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a rooted factory outranks the declared type.
+def test_a_rooted_factory_outranks_the_declared_type(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            '        ChargeClient client = StripeClient.Create("key");\n'
+            "        var charges = client.Charges;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT, receivers={"StripeClient.Create": "Client"})
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            31,
+            SiteShape.CALL,
+            "Create",
+            ("StripeClient", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            30,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("Client",),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a factory with no mapping is not evidence.
+def test_an_unmapped_factory_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            '        var client = StripeClient.Unknown("key");\n'
+            "        var charges = client.Charges;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            22,
+            SiteShape.CALL,
+            "Unknown",
+            ("StripeClient", "Unknown"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a rebinding replaces the receiver type.
+def test_a_rebinding_replaces_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = new ChargeClient();\n"
+            "        client = new CustomerClient();\n"
+            "        var charges = client.Charges;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            30,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("CustomerClient",),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a rebinding without evidence clears the receiver.
+def test_a_rebinding_without_evidence_clears_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = new ChargeClient();\n"
+            "        client = Build();\n"
+            "        var charges = client.Charges;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == ()

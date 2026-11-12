@@ -4,7 +4,7 @@ The scan reports evidence only: every hit carries ``rooted``. Whether a hit is
 certain is decided elsewhere.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
@@ -179,11 +179,16 @@ def _mentions_rooted_type(tree: Tree, roots: _Roots) -> bool:
 
 
 class _Visitor:
-    """Emit rooted calls and track `var` bindings of rooted `new` types."""
+    """Emit rooted calls and track bindings of rooted receiver types."""
 
-    def __init__(self, source: _Source, roots: _Roots) -> None:
+    def __init__(
+        self, source: _Source, roots: _Roots, receivers: Mapping[str, str]
+    ) -> None:
         self._source = source
         self._roots = roots
+        self._receivers = {
+            key.replace("::", "."): value for key, value in receivers.items()
+        }
         self._bindings: dict[str, tuple[tuple[str, ...] | None, tuple[Node, ...]]] = {}
         self.hits: list[Hit] = []
 
@@ -236,13 +241,49 @@ class _Visitor:
                 keys.append(left)
         return tuple(keys)
 
-    def _bind(self, name: str, value: Node | None) -> None:
+    def _factory(self, call: Node) -> tuple[str, ...] | None:
+        """The type chain a configured factory call binds, if its key matches."""
+        function = call.child_by_field_name("function")
+        segments = _segments(function) if function is not None else None
+        if segments is None or len(segments) < 2:
+            return None
+        prefix = self._roots.type_path(segments[:-1])
+        candidates = [".".join(segments)]
+        if prefix is not None:
+            candidates.insert(0, ".".join((*prefix, segments[-1])))
+        for candidate in candidates:
+            mapped = self._receivers.get(candidate)
+            if mapped is None:
+                continue
+            chain = tuple(
+                part for part in mapped.replace("::", ".").split(".") if part
+            )
+            if chain:
+                return chain
+        return None
+
+    def _evidence(
+        self, value: Node | None
+    ) -> tuple[tuple[str, ...] | None, tuple[Node, ...]]:
+        """The type chain a value binds, from a rooted `new` or a mapped factory."""
         node = _unwrap(value)
-        chain = None
-        keys: tuple[Node, ...] = ()
-        if node is not None and node.type == "object_creation_expression":
-            chain = self._type_chain(node.child_by_field_name("type"))
-            keys = self._keys(node.child_by_field_name("initializer"))
+        if node is None:
+            return None, ()
+        if node.type == "object_creation_expression":
+            return (
+                self._type_chain(node.child_by_field_name("type")),
+                self._keys(node.child_by_field_name("initializer")),
+            )
+        if node.type == "invocation_expression":
+            return self._factory(node), ()
+        return None, ()
+
+    def _bind(
+        self, name: str, value: Node | None, declared: Node | None = None
+    ) -> None:
+        chain, keys = self._evidence(value)
+        if chain is None and declared is not None:
+            chain = self._type_chain(declared)
         self._bindings[name] = (chain, keys)
 
     def _assignment(self, node: Node) -> None:
@@ -266,7 +307,9 @@ class _Visitor:
             initializer = (
                 child.named_children[1] if len(child.named_children) > 1 else None
             )
-            self._bind(_text(name_node), initializer if is_var else None)
+            self._bind(
+                _text(name_node), initializer, None if is_var else type_node
+            )
         self._visit_children(node)
 
     def _call_chain(
@@ -370,7 +413,11 @@ class _Visitor:
             self._visit_children(node)
 
 
-def scan_csharp(root: str | Path, sdk_package: str) -> ScanResult:
+def scan_csharp(
+    root: str | Path,
+    sdk_package: str,
+    receivers: Mapping[str, str] | None = None,
+) -> ScanResult:
     """Parse ``root`` read-only and report SDK-rooted C# evidence."""
     modules: list[str] = []
     hits: list[Hit] = []
@@ -383,7 +430,7 @@ def scan_csharp(root: str | Path, sdk_package: str) -> ScanResult:
             or _mentions_rooted_type(module.tree, roots)
         ):
             continue
-        visitor = _Visitor(module.source, roots)
+        visitor = _Visitor(module.source, roots, receivers or {})
         visitor.visit(module.tree.root_node)
         modules.append(module.rel)
         hits.extend(visitor.hits)
