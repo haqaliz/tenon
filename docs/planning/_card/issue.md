@@ -1,39 +1,41 @@
-# Card: feat/service-resilience
+# Card: release/v0.1.0
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
-- **Type:** feat
-- **Capability:** **T13 Hardened deployment** — second slice: **service resilience** (T13b)
-- **Milestone:** next phase after T12; T13a (deployable service) shipped
-- **State:** T13b shipped 2026-11-12 (`--workers`/`--retries`/cancel/`/metrics`, SQLite hardening; 2,527 tests)
-- **Branch:** `feat/service-resilience/aliz`
-- **Worktree:** `.claude/worktrees/feat-service-resilience`
+- **Type:** release
+- **Capability:** **Release/consolidation** — the post-T13 checkpoint
+- **Milestone:** after T13; the original roadmap ends at T11
+- **Branch:** `release/v0.1.0/aliz`
+- **Worktree:** `.claude/worktrees/release-v0.1.0`
 
 ## Brief
 
-The T13a service is deployable but still one worker, one attempt, no cancel and no metrics; SQLite
-runs with the default journal.
+The repo has shipped T1–T13: detection, five locators, proof, PR writer, provider bundles/local and
+installed fan-out, a deployed service, and receiver tracking — 2,527 tests, offline. The package is
+still `0.0.1`, there is no changelog, no runnable example and no packaging check.
 
-T13b adds **service resilience**:
-- bounded **parallel workers** (`--workers N`, default 1) that claim runs atomically;
-- **run retries** (`--retries N`, default 0): a failed/timed-out run is re-queued with an attempt
-  count until the budget is exhausted, then failed;
-- a **cancel endpoint** for a queued or running run (the running CLI subprocess is terminated);
-- a Prometheus **`/metrics`** endpoint (run counts by status, queue depth), bearer-guarded;
-- **SQLite hardening**: WAL, a busy timeout, `synchronous=NORMAL` and `foreign_keys=ON`;
-- the store/API/worker/CLI tests and docs.
+This release slice:
+- bumps the version and exposes `tenon --version`;
+- writes a `CHANGELOG.md` (Keep a Changelog style) covering the shipped capabilities and their known
+  limits;
+- adds a runnable quickstart example (the committed proof-basic fixture + a bundle/spec pair) and an
+  `examples/README.md`;
+- builds the wheel/sdist and installs the wheel into a clean venv, checking the console script and
+  `--version`;
+- adds a release checklist (`docs/RELEASE.md`) and, if chosen, an annotated tag + GitHub release;
+- updates the README/status surfaces to the release.
 
-The hard rules do not change: one code path (the shipped CLI), no merge/default branch, secrets never
-logged/stored, no new proof/locator behavior, no Postgres or cloud-specific infrastructure.
+The hard rules do not change: no new runtime capability, no merge/default-branch behavior, no
+secrets, offline checks only.
 
 ## Constraints carried in from the repo
 
-- T10e/T13a's `RunStore`/`Worker`/`Api`/`CommandRunner` and the Compose deployment are the base.
-- Stdlib only (`sqlite3`, `threading`, `subprocess`, `time`); no new dependency.
-- Offline tests; no Docker/network; a cancel test may use a short-lived local subprocess or a fake.
-- `CLAUDE.md` §1–5: execution decides, honest levels, no merge/default branch.
+- `pyproject.toml` is the version source; `_package_version()` reads the installed distribution.
+- The committed fixtures (`tests/fixtures/repos/proof-basic`, specs) are the example base.
+- `uv build`/a clean venv are local; no PyPI publish in this slice.
+- The existing docs (`README`, `DEPLOYMENT`, `CAPABILITY_ROADMAP`) are the changelog source.
 
 ## Scope fence
 
-Not this card: Postgres, Kubernetes/cloud IaC, a web UI, multi-tenant auth, webhook-triggered runs,
-new locators/provider features, rate limiting (the proxy owns it).
+Not this card: PyPI publish, a hosted docs site, new features, new locators/providers, version 1.0
+semver guarantees unless chosen.
