@@ -17,6 +17,14 @@ build/
 .env.*
 !.env.example
 
+# Deployment inputs and state
+secrets/*
+!secrets/.gitkeep
+bundles/*
+!bundles/README.md
+data/
+*.db*
+
 # OS / editor
 .DS_Store
 *.swp
