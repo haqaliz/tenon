@@ -296,10 +296,11 @@ compared with `hmac.compare_digest`, never stored or logged, and the child gets 
 key path.
 
 The service is a single-process, single-worker local MVP: SQLite is the queue and history, runs are
-sequential, and a run can outlive the HTTP request. There is no deployment, TLS, rate limiting, CORS,
-authentication beyond the bearer token, retry, cancellation, metrics or web UI; expose it behind a
-TLS-terminating reverse proxy with a real token, never directly on the internet. A restart keeps the
-run history, and `--run-timeout` kills a stuck child.
+sequential, and a run can outlive the HTTP request. There is no rate limiting, CORS, authentication
+beyond the bearer token, retry, cancellation, metrics or web UI; expose it behind a TLS-terminating
+reverse proxy with a real token, never directly on the internet. A restart keeps the run history, and
+`--run-timeout` kills a stuck child. The container + Caddy stack and the operator guide are in
+[`docs/technical/DEPLOYMENT.md`](docs/technical/DEPLOYMENT.md).
 
 `uv run pytest` — no network, no model calls.
 

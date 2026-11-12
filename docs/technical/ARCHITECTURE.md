@@ -104,7 +104,8 @@ tests/        offline; fixture repos and specs; no network, no model calls
   behavior are unchanged. The API is a pure `Api.handle` behind a stdlib `ThreadingHTTPServer`; a
   bearer token and constant-time HMAC comparison guard it, bundle names are confined to `--bundles`,
   and the token/secret never enter the store, a response or the log. It is a local MVP: one worker,
-  one process, no deployment, TLS, proxy, parallel runs or webhook-triggered run.
+  one process, no parallel runs or webhook-triggered run; T13a ships the container + Caddy stack
+  (`docs/technical/DEPLOYMENT.md`) and T13b adds resilience.
 - **The benchmark is descriptive, not a claim.** T9 records `(change, patch, proof, outcome)` in a
   local JSONL corpus. A merge rate uses only real outcomes (`merged`, `rejected`, `closed`,
   `incident`); `local_only`/`pending` never count as success. The public seed has no merge outcomes,
