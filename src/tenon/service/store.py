@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS runs (
     exit INTEGER,
     report TEXT,
     error TEXT,
-    idempotency_key TEXT UNIQUE
+    idempotency_key TEXT UNIQUE,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    cancel_requested INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -59,6 +61,8 @@ class Run:
     report: dict | None = None
     error: str | None = None
     idempotency_key: str | None = None
+    attempts: int = 0
+    cancel_requested: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -72,6 +76,8 @@ class Run:
             "report": self.report,
             "error": self.error,
             "idempotency_key": self.idempotency_key,
+            "attempts": self.attempts,
+            "cancel_requested": self.cancel_requested,
         }
 
 
@@ -110,7 +116,22 @@ def _row_to_run(row: sqlite3.Row) -> Run:
         report=None if report is None else json.loads(report),
         error=row["error"],
         idempotency_key=row["idempotency_key"],
+        attempts=row["attempts"],
+        cancel_requested=bool(row["cancel_requested"]),
     )
+
+
+# Spec AC1: T13a databases are upgraded in place, one column at a time.
+def _ensure_run_columns(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(runs)")
+    }
+    for name in ("attempts", "cancel_requested"):
+        if name not in columns:
+            connection.execute(
+                f"ALTER TABLE runs ADD COLUMN {name}"
+                " INTEGER NOT NULL DEFAULT 0"
+            )
 
 
 class RunStore:
@@ -131,6 +152,8 @@ class RunStore:
             connection = sqlite3.connect(str(path), check_same_thread=False)
             connection.row_factory = sqlite3.Row
             connection.executescript(_SCHEMA)
+            with connection:
+                _ensure_run_columns(connection)
         except sqlite3.Error as exc:
             if connection is not None:
                 connection.close()
@@ -180,11 +203,33 @@ class RunStore:
             started_at = self._now().isoformat()
             with self._connection:
                 self._connection.execute(
-                    "UPDATE runs SET status = 'running', started_at = ?"
-                    " WHERE id = ? AND status = 'queued'",
+                    "UPDATE runs SET status = 'running', started_at = ?,"
+                    " attempts = attempts + 1 WHERE id = ? AND status = 'queued'",
                     (started_at, row["id"]),
                 )
-            return replace(_row_to_run(row), status="running", started_at=started_at)
+            return replace(
+                _row_to_run(row),
+                status="running",
+                started_at=started_at,
+                attempts=row["attempts"] + 1,
+            )
+
+    # Spec AC2: a retry re-queues the same row and keeps its attempt count.
+    def requeue(self, run_id: str) -> Run:
+        with self._lock:
+            row = self._get_row(run_id)
+            if row is None:
+                raise ValueError(f"unknown run: {run_id}")
+            if row["status"] != "running":
+                raise ValueError(f"run {run_id} is {row['status']}, not running")
+            with self._connection:
+                self._connection.execute(
+                    "UPDATE runs SET status = 'queued', started_at = NULL,"
+                    " finished_at = NULL, exit = NULL, report = NULL,"
+                    " error = NULL WHERE id = ? AND status = 'running'",
+                    (run_id,),
+                )
+            return _row_to_run(self._get_row(run_id))
 
     def finish(
         self,
