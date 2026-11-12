@@ -276,3 +276,12 @@ class RunStore:
     def close(self) -> None:
         with self._lock:
             self._connection.close()
+
+    # Spec AC1: a cheap liveness read; any database error means not ready.
+    def ping(self) -> bool:
+        with self._lock:
+            try:
+                self._connection.execute("SELECT 1")
+            except sqlite3.Error:
+                return False
+        return True
