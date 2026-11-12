@@ -155,12 +155,11 @@ def load_cli_config(
             "operations": operations,
             "fields": fields,
         }
-        # Spec AC2: the receiver table is Rust/Go-only; other languages ignore it.
-        if chosen in ("rust", "go"):
-            receivers = section.get("receivers", {})
-            if not isinstance(receivers, dict):
-                raise ValueError(f"{path}: [locate] receivers must be a table")
-            options["receivers"] = receivers
+        # Spec AC2: the receiver table applies to every OpenAPI language.
+        receivers = section.get("receivers", {})
+        if not isinstance(receivers, dict):
+            raise ValueError(f"{path}: [locate] receivers must be a table")
+        options["receivers"] = receivers
         # Spec AC3: the root import's package clause is a Go-only override.
         if chosen == "go":
             options["package_name"] = section.get("package_name")
@@ -272,18 +271,15 @@ def overrides(
                     **fields_over,
                 },
             }
-            # Spec AC4: the receiver mapping is Rust/Go-only.
-            if chosen in ("rust", "go"):
-                options["receivers"] = {
-                    **(
-                        config.locate.receivers
-                        if isinstance(
-                            config.locate, (RustLocateConfig, GoLocateConfig)
-                        )
-                        else {}
-                    ),
-                    **receivers_over,
-                }
+            # Spec AC4: a flag receiver wins over a config receiver.
+            options["receivers"] = {
+                **(
+                    config.locate.receivers
+                    if not isinstance(config.locate, McpLocateConfig)
+                    else {}
+                ),
+                **receivers_over,
+            }
             # Spec AC3: --package-name is the Go root import's package clause.
             if chosen == "go":
                 options["package_name"] = (

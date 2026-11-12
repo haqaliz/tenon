@@ -21,6 +21,14 @@ LOCATE_TYPES = {
     "csharp": CSharpLocateConfig,
 }
 
+PACKAGES = {
+    "python": "stripe",
+    "ts": "stripe",
+    "rust": "stripe",
+    "go": "github.com/stripe/stripe-go/v76",
+    "csharp": "Stripe",
+}
+
 
 def a_config(
     *,
@@ -49,14 +57,12 @@ def a_config(
             receivers=receivers or {},
         )
     else:
-        options = {
-            "sdk_package": sdk_package,
-            "operations": operations or {},
-            "fields": fields or {},
-        }
-        if language == "rust":
-            options["receivers"] = receivers or {}
-        locate = LOCATE_TYPES[language](**options)
+        locate = LOCATE_TYPES[language](
+            sdk_package=sdk_package,
+            operations=operations or {},
+            fields=fields or {},
+            receivers=receivers or {},
+        )
     return CliConfig(
         locate=locate,
         command=command,
@@ -222,15 +228,13 @@ def test_file_selects_go_and_keeps_the_receiver_mapping(tmp_path):
     assert dict(config.locate.receivers) == {"stripe.NewClient": "Client"}
 
 
-# Spec AC2: a non-string receiver entry is a named error.
-@pytest.mark.parametrize("language", ["rust", "go"])
+# Spec AC2: a non-string receiver entry is a named error for every language.
+@pytest.mark.parametrize("language", list(LOCATE_TYPES))
 def test_load_cli_config_rejects_a_non_string_receiver(tmp_path, language):
-    package = (
-        "stripe" if language == "rust" else "github.com/stripe/stripe-go/v76"
-    )
     path = a_file(
         tmp_path,
-        f'[locate]\nlanguage = "{language}"\nsdk_package = "{package}"\n'
+        f'[locate]\nlanguage = "{language}"\n'
+        f'sdk_package = "{PACKAGES[language]}"\n'
         '\n[locate.receivers]\n"stripe.NewClient" = 1\n',
     )
 
@@ -238,15 +242,13 @@ def test_load_cli_config_rejects_a_non_string_receiver(tmp_path, language):
         load_cli_config(path)
 
 
-# Spec AC2: receivers is a table, not an array.
-@pytest.mark.parametrize("language", ["rust", "go"])
+# Spec AC2: receivers is a table, not an array, for every language.
+@pytest.mark.parametrize("language", list(LOCATE_TYPES))
 def test_load_cli_config_rejects_a_non_table_receiver_mapping(tmp_path, language):
-    package = (
-        "stripe" if language == "rust" else "github.com/stripe/stripe-go/v76"
-    )
     path = a_file(
         tmp_path,
-        f'[locate]\nlanguage = "{language}"\nsdk_package = "{package}"\n'
+        f'[locate]\nlanguage = "{language}"\n'
+        f'sdk_package = "{PACKAGES[language]}"\n'
         'receivers = ["stripe.NewClient"]\n',
     )
 
@@ -254,23 +256,20 @@ def test_load_cli_config_rejects_a_non_table_receiver_mapping(tmp_path, language
         load_cli_config(path)
 
 
-# Spec AC2: the receiver table is ignored for the other languages.
+# Spec AC2: [locate.receivers] reaches the Python, TS and C# configs too.
 @pytest.mark.parametrize("language", ["python", "ts", "csharp"])
-@pytest.mark.parametrize(
-    "receivers",
-    ['\n[locate.receivers]\n"stripe.NewClient" = "Client"\n', '\nreceivers = ["x"]\n'],
-)
-def test_other_languages_ignore_the_receiver_table(tmp_path, language, receivers):
+def test_file_keeps_the_receiver_mapping_for_every_language(tmp_path, language):
     path = a_file(
         tmp_path,
-        f'[locate]\nlanguage = "{language}"\nsdk_package = "stripe"\n'
-        f"{receivers}",
+        f'[locate]\nlanguage = "{language}"\n'
+        f'sdk_package = "{PACKAGES[language]}"\n'
+        '\n[locate.receivers]\n"stripe.NewClient" = "Client"\n',
     )
 
     config = load_cli_config(path)
 
     assert isinstance(config.locate, LOCATE_TYPES[language])
-    assert not hasattr(config.locate, "receivers")
+    assert dict(config.locate.receivers) == {"stripe.NewClient": "Client"}
 
 
 # Spec AC3: the file selects C# and keeps the shared operation/field tables.
@@ -769,15 +768,26 @@ def test_overrides_changes_the_language_to_rust_with_receivers():
     assert dict(result.locate.receivers) == {"a": "b"}
 
 
-# Spec AC4: the receiver flag is ignored for the other languages.
+# Spec AC4: --receiver merges into every OpenAPI language's config.
 @pytest.mark.parametrize("language", ["python", "ts", "csharp"])
-def test_overrides_ignores_receivers_for_other_languages(language):
-    config = a_config(language=language)
+def test_overrides_merges_receivers_for_every_language(language):
+    config = a_config(language=language, receivers={"a": "One"})
 
-    result = overrides(config, receivers=["a=b"])
+    result = overrides(config, receivers=["b=Two"])
 
     assert isinstance(result.locate, LOCATE_TYPES[language])
-    assert not hasattr(result.locate, "receivers")
+    assert dict(result.locate.receivers) == {"a": "One", "b": "Two"}
+    assert dict(config.locate.receivers) == {"a": "One"}
+
+
+# Spec AC4: a flag receiver wins over a config receiver for every language.
+@pytest.mark.parametrize("language", ["python", "ts", "csharp"])
+def test_overrides_receiver_flags_win_for_every_language(language):
+    config = a_config(language=language, receivers={"a": "File"})
+
+    result = overrides(config, receivers=["a=Flag"])
+
+    assert dict(result.locate.receivers) == {"a": "Flag"}
 
 
 # Spec AC3: a bad --package-name is one named error.
