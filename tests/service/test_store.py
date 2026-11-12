@@ -518,6 +518,32 @@ def test_reopening_preserves_both_tables(tmp_path):
     assert reopened.record_event("delivery-one", "push") is False
 
 
+# Spec AC1: a fresh open store pings true.
+def test_a_fresh_store_pings_true(tmp_path):
+    store = a_store(tmp_path)
+
+    assert store.ping() is True
+
+
+# Spec AC1: a closed store pings false instead of raising.
+def test_a_closed_store_pings_false(tmp_path):
+    store = a_store(tmp_path)
+    store.close()
+
+    assert store.ping() is False
+
+
+# Spec AC1: a broken database pings false instead of raising.
+def test_a_broken_database_pings_false(tmp_path):
+    path = tmp_path / "broken.db"
+    path.write_bytes(b"not a database")
+    store = RunStore(":memory:")
+    store.close()
+    store._connection = sqlite3.connect(path, check_same_thread=False)
+
+    assert store.ping() is False
+
+
 # Spec surface: the package exports the three public values.
 def test_the_service_package_exports_the_store_surface():
     assert ExportedRun is Run

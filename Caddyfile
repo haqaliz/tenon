@@ -1,0 +1,4 @@
+{$TENON_DOMAIN:localhost} {
+	encode zstd gzip
+	reverse_proxy service:8080
+}

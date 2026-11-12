@@ -1,0 +1,56 @@
+services:
+  service:
+    build: .
+    env_file: .env
+    environment:
+      TENON_API_TOKEN: ${TENON_API_TOKEN:?TENON_API_TOKEN is required}
+      TENON_WEBHOOK_SECRET: ${TENON_WEBHOOK_SECRET:-}
+      GIT_AUTHOR_NAME: ${GIT_AUTHOR_NAME:-Tenon Service}
+      GIT_AUTHOR_EMAIL: ${GIT_AUTHOR_EMAIL:-tenon@localhost}
+      GIT_COMMITTER_NAME: ${GIT_COMMITTER_NAME:-Tenon Service}
+      GIT_COMMITTER_EMAIL: ${GIT_COMMITTER_EMAIL:-tenon@localhost}
+    volumes:
+      - tenon-data:/data
+      - ./bundles:/data/bundles:ro
+      - ./secrets:/secrets:ro
+    tmpfs:
+      - /tmp
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=5)"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      TENON_DOMAIN: ${TENON_DOMAIN:-localhost}
+    depends_on:
+      - service
+    restart: unless-stopped
+
+volumes:
+  tenon-data:
+  caddy-data:
+  caddy-config:

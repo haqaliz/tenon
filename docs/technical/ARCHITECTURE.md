@@ -104,7 +104,8 @@ tests/        offline; fixture repos and specs; no network, no model calls
   behavior are unchanged. The API is a pure `Api.handle` behind a stdlib `ThreadingHTTPServer`; a
   bearer token and constant-time HMAC comparison guard it, bundle names are confined to `--bundles`,
   and the token/secret never enter the store, a response or the log. It is a local MVP: one worker,
-  one process, no deployment, TLS, proxy, parallel runs or webhook-triggered run.
+  one process, no parallel runs or webhook-triggered run; T13a ships the container + Caddy stack
+  (`docs/technical/DEPLOYMENT.md`) and T13b adds resilience.
 - **The benchmark is descriptive, not a claim.** T9 records `(change, patch, proof, outcome)` in a
   local JSONL corpus. A merge rate uses only real outcomes (`merged`, `rejected`, `closed`,
   `incident`); `local_only`/`pending` never count as success. The public seed has no merge outcomes,
@@ -255,11 +256,13 @@ test"` is just a user command.
   outcomes yet.
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
-- T10e follow-ups: TLS/reverse-proxy deployment, parallel workers, retries/cancel, metrics and
-  webhook-triggered runs. The shipped service is one process and one worker over SQLite.
+- T10e follow-ups: parallel workers, retries/cancel, metrics and webhook-triggered runs. The shipped
+  service is one process and one worker over SQLite; T13a adds the container/Caddy deployment and a
+  readiness endpoint, and T13b adds the resilience.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
 - Phase 3: T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider
   fan-out), T10d (installed provider fan-out), T10e (hosted provider service), T11a (Rust locator),
   T11b (Go locator) and T11c (C# locator) shipped; T12a (Rust/Go receiver tracking) and T12b
-  (C#/Python/TS receiver tracking) shipped. A hosted deployment and return-type/interprocedural
-  receiver inference are not started.
+  (C#/Python/TS receiver tracking) shipped; T13a (deployable service) shipped. T13b (resilience),
+  a hardened cloud deployment beyond Compose and return-type/interprocedural receiver inference are
+  not started.
