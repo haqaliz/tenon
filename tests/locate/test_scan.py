@@ -41,6 +41,28 @@ def rooted(text):
     return _aliases(tree, roots, class_paths, source(text), "stripe")
 
 
+def a_repo(tmp_path, source):
+    (tmp_path / "app.py").write_text(source, encoding="utf-8")
+    return tmp_path
+
+
+def a_visitor(text, receivers=None):
+    tree = parse(text)
+    roots, classes, class_paths = _bindings(tree, "stripe")
+    alias_roots, class_aliases, _ = _aliases(
+        tree, roots, class_paths, source(text), "stripe"
+    )
+    visitor = _Visitor(
+        source(text),
+        "stripe",
+        {**roots, **alias_roots},
+        classes | class_aliases,
+        receivers,
+    )
+    visitor.visit(tree)
+    return visitor
+
+
 def hit(repo, path, line, column, shape, symbol, chain=(), rooted=False):
     line_text = (repo / path).read_text(encoding="utf-8").split("\n")[line - 1]
     return Hit(path, line, column, shape, symbol, chain, rooted, line_text)
@@ -468,3 +490,95 @@ def test_columns_are_characters_not_utf8_bytes():
     assert delete.column == character_column
     assert delete.column != byte_column
     assert delete.line_text == line
+
+
+# Spec AC1: a rooted constructor call is receiver evidence, in both spellings.
+def test_a_rooted_constructor_is_evidence():
+    visitor = a_visitor(
+        "import stripe\n"
+        "from stripe import Client\n"
+        'client = stripe.Client("a")\n'
+        'other = Client("b")\n'
+    )
+
+    assert visitor._bindings == {"client": ("Client",), "other": ("Client",)}
+
+
+# Spec AC1: a rooted annotation binds, with or without a value.
+def test_a_rooted_annotation_is_evidence():
+    visitor = a_visitor(
+        "import stripe\n"
+        "from stripe import Client\n"
+        "client: stripe.Client\n"
+        "other: Client = build()\n"
+    )
+
+    assert visitor._bindings == {"client": ("Client",), "other": ("Client",)}
+
+
+# Spec AC1: a source-key factory binds the mapped type chain.
+def test_a_source_factory_key_is_evidence():
+    visitor = a_visitor(
+        "from stripe import make_client\nclient = make_client()\n",
+        receivers={"make_client": "Client"},
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC1: a canonical-key factory matches the dotted chain.
+def test_a_canonical_factory_key_is_evidence():
+    visitor = a_visitor(
+        "from stripe import make_client\nclient = make_client()\n",
+        receivers={"stripe.make_client": "Resources.Client"},
+    )
+
+    assert visitor._bindings == {"client": ("Resources", "Client")}
+
+
+# Spec AC1: a fully qualified factory matches its source chain.
+def test_a_qualified_factory_key_is_evidence():
+    visitor = a_visitor(
+        "import stripe\nclient = stripe.make_client()\n",
+        receivers={"stripe.make_client": "Client"},
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC1: an unmapped factory is not evidence.
+def test_an_unmapped_factory_is_not_evidence():
+    visitor = a_visitor(
+        "from stripe import Client\nclient = make_client()\nother = build()\n"
+    )
+
+    assert visitor._bindings == {}
+
+
+# Spec AC1: a rebinding replaces the receiver type.
+def test_a_rebinding_replaces_the_receiver():
+    visitor = a_visitor(
+        'import stripe\nclient = stripe.Client("a")\n'
+        'client = stripe.CustomerClient("b")\n'
+    )
+
+    assert visitor._bindings == {"client": ("CustomerClient",)}
+
+
+# Spec AC1: a rebinding without evidence clears the receiver.
+def test_a_rebinding_without_evidence_clears_the_receiver():
+    visitor = a_visitor(
+        'import stripe\nclient = stripe.Client("a")\nclient = build()\n'
+    )
+
+    assert visitor._bindings == {}
+
+
+# Spec AC1: a function-local binding does not leak into the module.
+def test_a_function_local_binding_does_not_leak():
+    visitor = a_visitor(
+        'import stripe\nclient = stripe.Client("a")\n'
+        'def rebuild():\n    client = stripe.CustomerClient("b")\n'
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
