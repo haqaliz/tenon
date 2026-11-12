@@ -5,6 +5,7 @@ from pathlib import Path
 from tenon.locate import SiteShape
 from tenon.locate.scan import Dynamic, DynamicKind, Hit, _Source
 from tenon.locate.ts_scan import (
+    _Visitor,
     _aliases,
     _bindings,
     _grammar,
@@ -60,6 +61,24 @@ def rooted(text, sdk_package="stripe"):
     roots, classes = _bindings(tree, sdk_package)
     source = _Source("m.ts", tuple(text.split("\n")))
     return _aliases(tree, roots, classes, sdk_package, source)
+
+
+def a_visitor(text, receivers=None, sdk_package="stripe"):
+    tree = parse_ts(text)
+    roots, classes = _bindings(tree, sdk_package)
+    source = _Source("m.ts", tuple(text.split("\n")))
+    alias_roots, class_aliases, _ = _aliases(
+        tree, roots, classes, sdk_package, source
+    )
+    visitor = _Visitor(
+        source,
+        sdk_package,
+        {**roots, **alias_roots},
+        classes | class_aliases,
+        receivers,
+    )
+    visitor.visit(tree.root_node)
+    return visitor
 
 
 # Phase 1: discovery, grammar selection and skipped files.
@@ -875,3 +894,171 @@ def test_alias_fixture_has_the_exact_rooted_and_unrooted_evidence():
         a_dynamic("src/aliases.ts", 16, 7, DynamicKind.ALIAS_CHAIN, "d"),
         a_dynamic("src/aliases.ts", 18, 20, DynamicKind.ALIAS_CHAIN, "id"),
     )
+
+
+# Phase 7: receiver evidence.
+# Spec AC1: a rooted `new` expression binds its canonical type chain.
+def test_a_new_expression_is_evidence():
+    visitor = a_visitor(
+        'import Stripe from "stripe";\n'
+        'import { Client } from "stripe";\n'
+        'const client = new Stripe("a");\n'
+        'const other = new Client("b");\n'
+    )
+
+    assert visitor._bindings == {"client": ("Stripe",), "other": ("Client",)}
+
+
+# Spec AC1: a qualified constructor resolves through the namespace root.
+def test_a_qualified_new_expression_is_evidence():
+    visitor = a_visitor(
+        'import * as stripe from "stripe";\n'
+        'const client = new stripe.Client("a");\n'
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC1: a constructor outside the SDK is not evidence.
+def test_an_unrooted_new_expression_is_not_evidence():
+    visitor = a_visitor(
+        'import Stripe from "stripe";\nconst client = new Date();\n'
+    )
+
+    assert visitor._bindings == {}
+
+
+# Spec AC1: an annotation binds, with or without a value.
+def test_an_annotation_is_evidence():
+    visitor = a_visitor(
+        'import { Client, StripeClient } from "stripe";\n'
+        "const client: Client = build();\n"
+        'const other: StripeClient = new StripeClient("b");\n'
+        "let bare: Client;\n"
+    )
+
+    assert visitor._bindings == {
+        "client": ("Client",),
+        "other": ("StripeClient",),
+        "bare": ("Client",),
+    }
+
+
+# Spec AC1: an annotation resolves an imported type alias.
+def test_a_renamed_annotation_is_evidence():
+    visitor = a_visitor(
+        'import { Client as C } from "stripe";\n'
+        "const client: C = build();\n"
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC1: a qualified annotation resolves through the namespace root.
+def test_a_qualified_annotation_is_evidence():
+    visitor = a_visitor(
+        'import * as stripe from "stripe";\n'
+        "const client: stripe.Client = build();\n"
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC1: the annotation is the evidence when both sides name a type.
+def test_an_annotation_wins_over_the_value():
+    visitor = a_visitor(
+        'import { Client, StripeClient } from "stripe";\n'
+        "const client: Client = new StripeClient();\n"
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC1: a source-key factory binds the mapped type chain.
+def test_a_source_factory_key_is_evidence():
+    visitor = a_visitor(
+        'import { StripeClient } from "stripe";\n'
+        "const client = StripeClient.create({});\n",
+        receivers={"StripeClient.create": "Client"},
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC1: a canonical-key factory matches the SDK-rooted dotted chain.
+def test_a_canonical_factory_key_is_evidence():
+    visitor = a_visitor(
+        'import { StripeClient } from "stripe";\n'
+        "const client = StripeClient.create({});\n",
+        receivers={"stripe.StripeClient.create": "Resources.Client"},
+    )
+
+    assert visitor._bindings == {"client": ("Resources", "Client")}
+
+
+# Spec AC1: a bare factory key matches its source spelling.
+def test_a_bare_factory_key_is_evidence():
+    visitor = a_visitor(
+        'import { makeClient } from "stripe";\n'
+        "const client = makeClient();\n",
+        receivers={"makeClient": "Client"},
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC1: a canonical bare factory key matches the imported chain.
+def test_a_canonical_bare_factory_key_is_evidence():
+    visitor = a_visitor(
+        'import { makeClient } from "stripe";\n'
+        "const client = makeClient();\n",
+        receivers={"stripe.makeClient": "Client"},
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC1: an unmapped factory is not evidence.
+def test_an_unmapped_factory_is_not_evidence():
+    visitor = a_visitor(
+        'import Stripe from "stripe";\n'
+        "const client = makeClient();\n"
+        "const other = build();\n"
+    )
+
+    assert visitor._bindings == {}
+
+
+# Spec AC1: a rebinding replaces the receiver type.
+def test_a_rebinding_replaces_the_receiver():
+    visitor = a_visitor(
+        'import { Client, CustomerClient } from "stripe";\n'
+        'let client = new Client("a");\n'
+        'client = new CustomerClient("b");\n'
+    )
+
+    assert visitor._bindings == {"client": ("CustomerClient",)}
+
+
+# Spec AC1: a rebinding without evidence clears the receiver.
+def test_a_rebinding_without_evidence_clears_the_receiver():
+    visitor = a_visitor(
+        'import Stripe from "stripe";\n'
+        'let client = new Stripe("a");\n'
+        "client = build();\n"
+    )
+
+    assert visitor._bindings == {}
+
+
+# Spec AC1: a function-local binding does not leak into the module.
+def test_a_function_local_binding_does_not_leak():
+    visitor = a_visitor(
+        'import Stripe from "stripe";\n'
+        "const client = new Stripe();\n"
+        "function rebuild() {\n"
+        '  const client = new Stripe("b");\n'
+        "}\n"
+    )
+
+    assert visitor._bindings == {"client": ("Stripe",)}
