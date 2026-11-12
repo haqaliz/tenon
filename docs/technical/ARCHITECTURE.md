@@ -270,4 +270,4 @@ test"` is just a user command.
   T11b (Go locator) and T11c (C# locator) shipped; T12a (Rust/Go receiver tracking) and T12b
   (C#/Python/TS receiver tracking) shipped; T13a (deployable service) and T13b (resilience) shipped.
   Return-type/interprocedural receiver inference, webhook-triggered runs and a hardened cloud
-  deployment beyond Compose are not started.
+  deployment beyond Compose are not started. v0.1.0 is the first tagged release (2026-11-13).

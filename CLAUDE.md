@@ -17,6 +17,7 @@ The name: a *tenon* is the tongue cut on a timber to fit its mortise exactly. Th
 only if the two sides still match. Tenon asks of an integration: *does your side still fit theirs?*
 
 Status: **T1, T2, T3, T4, T5, T6, T7, T8a, T8b, T8c, T9, T10a, T10b, T10c, T10d, T10e, T11a, T11b, T11c, T12a, T12b, T13a, T13b and M1.4 shipped.**
+**v0.1.0 released 2026-11-13** — the first tagged release; see `CHANGELOG.md` and `docs/RELEASE.md`.
 `src/tenon/detect/` turns two OpenAPI 3.x documents — and, for T8a, two MCP `tools/list` documents —
 into typed `Change` records; `src/tenon/locate/` turns a record into call sites with file, line and
 column, keeping anything unprovable in named ambiguity groups — Python via `ast`,

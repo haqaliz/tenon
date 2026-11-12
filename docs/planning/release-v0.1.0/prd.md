@@ -3,7 +3,7 @@
 - **Slug:** `release-v0.1.0`
 - **Capability:** **Release/consolidation** — the post-T13 checkpoint
 - **Milestone:** after T13; the original roadmap ends at T11
-- **Status:** draft for review
+- **Status:** released v0.1.0 on 2026-11-13 (`CHANGELOG.md`, `docs/RELEASE.md`, annotated tag)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

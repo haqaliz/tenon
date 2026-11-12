@@ -5,6 +5,7 @@
 - **Type:** release
 - **Capability:** **Release/consolidation** — the post-T13 checkpoint
 - **Milestone:** after T13; the original roadmap ends at T11
+- **State:** released v0.1.0 on 2026-11-13 (`CHANGELOG.md`, `docs/RELEASE.md`, annotated tag)
 - **Branch:** `release/v0.1.0/aliz`
 - **Worktree:** `.claude/worktrees/release-v0.1.0`
 
