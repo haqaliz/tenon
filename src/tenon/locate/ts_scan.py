@@ -361,6 +361,31 @@ def _full(
     return full if full[: len(sdk_parts)] == sdk_parts else None
 
 
+def _annotation_chain(
+    node: Node | None,
+    roots: dict[str, tuple[str, ...]],
+    sdk_parts: tuple[str, ...],
+) -> tuple[str, ...] | None:
+    """The canonical chain of a rooted type annotation, else ``None``."""
+    node = (
+        node.named_children[0]
+        if node is not None
+        and node.type == "type_annotation"
+        and node.named_children
+        else node
+    )
+    if node is None or node.type not in {
+        "type_identifier",
+        "nested_type_identifier",
+    }:
+        return None
+    segments = tuple(_text(node).split("."))
+    full = _full(segments[0], segments[1:], roots, sdk_parts)
+    if full is None:
+        return None
+    return full[len(sdk_parts) :]
+
+
 def _alias_cycle(pending: dict[str, str], target: str, rhs: str) -> bool:
     if target == rhs:
         return True
@@ -539,6 +564,49 @@ def _aliases(
     return aliases, class_aliases, dynamics
 
 
+def _returns(
+    node: Node,
+    roots: dict[str, tuple[str, ...]],
+    sdk_parts: tuple[str, ...],
+) -> dict[str, tuple[str, ...]]:
+    """Same-file function name -> SDK return chain from its annotation.
+
+    A missing, ``any``, generic or non-SDK return type is no evidence; a later
+    definition of the same name replaces or clears the map.
+    """
+    events: list[tuple[int, str, tuple[str, ...] | None]] = []
+    for child in _walk(node):
+        if child.type in _FUNCTION_SCOPES:
+            name = child.child_by_field_name("name")
+            if name is None or name.type not in {
+                "identifier",
+                "property_identifier",
+            }:
+                continue
+            chain = _annotation_chain(
+                child.child_by_field_name("return_type"), roots, sdk_parts
+            )
+            events.append((child.start_byte, _text(name), chain))
+        elif child.type == "variable_declarator":
+            value = _unwrap(child.child_by_field_name("value"))
+            if value is None or value.type not in _FUNCTION_SCOPES:
+                continue
+            name = child.child_by_field_name("name")
+            if name is None or name.type != "identifier":
+                continue
+            chain = _annotation_chain(
+                value.child_by_field_name("return_type"), roots, sdk_parts
+            )
+            events.append((child.start_byte, _text(name), chain))
+    found: dict[str, tuple[str, ...]] = {}
+    for _, name, chain in sorted(events, key=lambda event: event[0]):
+        if chain is None:
+            found.pop(name, None)
+        else:
+            found[name] = chain
+    return found
+
+
 def _resolve_relative(
     importer: str, specifier: str, files: set[str]
 ) -> str | None:
@@ -601,6 +669,7 @@ class _Visitor:
         self._classes = classes
         self._receivers = receivers or {}
         self._bindings: dict[str, tuple[str, ...]] = {}
+        self._returns: dict[str, tuple[str, ...]] = {}
         self._callee = 0
         self.hits: list[Hit] = []
         self.dynamics: list[Dynamic] = []
@@ -615,23 +684,7 @@ class _Visitor:
 
     def _annotation(self, annotation: Node | None) -> tuple[str, ...] | None:
         """The canonical chain of a rooted type annotation, else ``None``."""
-        node = (
-            annotation.named_children[0]
-            if annotation is not None
-            and annotation.type == "type_annotation"
-            and annotation.named_children
-            else annotation
-        )
-        if node is None or node.type not in {
-            "type_identifier",
-            "nested_type_identifier",
-        }:
-            return None
-        segments = tuple(_text(node).split("."))
-        full = _full(segments[0], segments[1:], self._roots, self._sdk_parts)
-        if full is None:
-            return None
-        return full[len(self._sdk_parts) :]
+        return _annotation_chain(annotation, self._roots, self._sdk_parts)
 
     def _factory(self, callee: Node | None) -> tuple[str, ...] | None:
         """The type chain a configured factory call binds, if its key matches."""
@@ -659,7 +712,14 @@ class _Visitor:
         if node.type == "new_expression":
             return self._canonical(node.child_by_field_name("constructor"))
         if node.type == "call_expression":
-            return self._factory(node.child_by_field_name("function"))
+            function = node.child_by_field_name("function")
+            mapped = self._factory(function)
+            if mapped is not None:
+                return mapped
+            if function is not None and function.type == "identifier":
+                annotated = self._returns.get(_text(function))
+                if annotated is not None:
+                    return annotated
         return None
 
     def _bind_receiver(self, name: str, chain: tuple[str, ...] | None) -> None:
@@ -901,6 +961,9 @@ class _Visitor:
     def visit(self, node: Node | None) -> None:
         if node is None:
             return
+        if node.type == "program":
+            # Spec AC2: the same-file signatures are known before the bindings.
+            self._returns = _returns(node, self._roots, self._sdk_parts)
         if node.type in _FUNCTION_SCOPES:
             self._function(node)
         elif node.type == "variable_declarator":
