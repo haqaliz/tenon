@@ -133,6 +133,41 @@ class _Roots:
         return None
 
 
+def _type_chain(type_node: Node | None, roots: _Roots) -> tuple[str, ...] | None:
+    """The canonical chain of a rooted type, else ``None``."""
+    if type_node is None:
+        return None
+    if type_node.type == "identifier":
+        return roots.type_path((_text(type_node),))
+    if type_node.type == "qualified_name":
+        return roots.type_path(tuple(_text(type_node).split(".")))
+    return None
+
+
+def _returns(tree: Tree, roots: _Roots) -> dict[str, tuple[str, ...]]:
+    """Same-file method/local function name -> SDK return chain.
+
+    A missing, ``void`` or non-SDK return type is no evidence; a later
+    definition of the same name replaces or clears the map.
+    """
+    found: dict[str, tuple[str, ...]] = {}
+    for node in _walk(tree.root_node):
+        if node.type not in {"method_declaration", "local_function_statement"}:
+            continue
+        name = node.child_by_field_name("name")
+        if name is None:
+            continue
+        type_node = node.child_by_field_name("type")
+        if type_node is None:
+            type_node = node.child_by_field_name("returns")
+        chain = _type_chain(type_node, roots)
+        if chain is None:
+            found.pop(_text(name), None)
+        else:
+            found[_text(name)] = chain
+    return found
+
+
 def _usings(tree: Tree, sdk_package: str) -> tuple[_Roots, bool]:
     """The rooted names and whether a `using static` imports the root."""
     sdk_parts = tuple(sdk_package.split("."))
@@ -182,13 +217,18 @@ class _Visitor:
     """Emit rooted calls and track bindings of rooted receiver types."""
 
     def __init__(
-        self, source: _Source, roots: _Roots, receivers: Mapping[str, str]
+        self,
+        source: _Source,
+        roots: _Roots,
+        receivers: Mapping[str, str],
+        returns: Mapping[str, tuple[str, ...]],
     ) -> None:
         self._source = source
         self._roots = roots
         self._receivers = {
             key.replace("::", "."): value for key, value in receivers.items()
         }
+        self._returns = returns
         self._bindings: dict[str, tuple[tuple[str, ...] | None, tuple[Node, ...]]] = {}
         self.hits: list[Hit] = []
 
@@ -220,13 +260,7 @@ class _Visitor:
 
     def _type_chain(self, type_node: Node | None) -> tuple[str, ...] | None:
         """The canonical chain of a rooted type, else ``None``."""
-        if type_node is None:
-            return None
-        if type_node.type == "identifier":
-            return self._roots.type_path((_text(type_node),))
-        if type_node.type == "qualified_name":
-            return self._roots.type_path(tuple(_text(type_node).split(".")))
-        return None
+        return _type_chain(type_node, self._roots)
 
     def _keys(self, initializer: Node | None) -> tuple[Node, ...]:
         """The property identifiers of an object initializer."""
@@ -265,7 +299,7 @@ class _Visitor:
     def _evidence(
         self, value: Node | None
     ) -> tuple[tuple[str, ...] | None, tuple[Node, ...]]:
-        """The type chain a value binds, from a rooted `new` or a mapped factory."""
+        """The type chain a value binds, from `new`, a factory or a typed helper."""
         node = _unwrap(value)
         if node is None:
             return None, ()
@@ -275,7 +309,15 @@ class _Visitor:
                 self._keys(node.child_by_field_name("initializer")),
             )
         if node.type == "invocation_expression":
-            return self._factory(node), ()
+            mapped = self._factory(node)
+            if mapped is not None:
+                return mapped, ()
+            function = node.child_by_field_name("function")
+            if function is not None and function.type == "identifier":
+                annotated = self._returns.get(_text(function))
+                if annotated is not None:
+                    return annotated, ()
+            return None, ()
         return None, ()
 
     def _bind(
@@ -462,7 +504,9 @@ def scan_csharp(
             or _mentions_rooted_type(module.tree, roots)
         ):
             continue
-        visitor = _Visitor(module.source, roots, receivers or {})
+        visitor = _Visitor(
+            module.source, roots, receivers or {}, _returns(module.tree, roots)
+        )
         visitor.visit(module.tree.root_node)
         modules.append(module.rel)
         hits.extend(visitor.hits)
