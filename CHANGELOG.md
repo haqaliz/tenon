@@ -9,6 +9,11 @@ promise: flags, config keys and provider contracts may still change.
 
 ### Added
 
+- **Typed-function receiver inference (T12c):** a same-file function/method with an annotated SDK
+  return type roots the receiver assigned from its call in all five languages
+  (`def make_client() -> stripe.Client`, `fn make_client() -> Client`, `func newClient() *stripe.Client`,
+  `StripeClient MakeClient()`, `function makeClient(): StripeClient`). Only a written annotation is
+  evidence; unannotated, wrong-return and cross-file helpers stay unrooted.
 - **Webhook-triggered runs:** `tenon provider serve --trigger EVENT[.ACTION]=BUNDLE` maps a verified
   GitHub delivery to a registered bundle and queues the normal installed fan-out with the delivery id
   as the idempotency key. A trigger requires the webhook secret; the mapping is operator CLI config,

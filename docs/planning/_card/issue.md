@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T12 Receiver tracking** — deeper slice: **typed-function inference** (T12c)
 - **Milestone:** after v0.1.0/T10f; the receiver follow-up
+- **State:** T12c shipped 2026-11-14 (`src/tenon/locate/*_scan.py`, same-file return annotations; 2,609 tests)
 - **Branch:** `feat/receiver-inference/aliz`
 - **Worktree:** `.claude/worktrees/feat-receiver-inference`
 

@@ -3,7 +3,7 @@
 - **Slug:** `receiver-inference`
 - **Capability:** **T12 Receiver tracking** — deeper slice: **annotated return types**
 - **Milestone:** after v0.1.0/T10f; T12c
-- **Status:** draft for review
+- **Status:** implemented 2026-11-14 (`src/tenon/locate/*_scan.py`, same-file return annotations; 2,609 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

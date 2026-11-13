@@ -15,7 +15,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Shipped 2026-11-11 (MVP)** — GitHub App remote, provider bundle, local/installed fan-out, a self-hosted service and webhook-triggered runs; a hardened cloud deployment is later |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Shipped 2026-11-11** — Rust, Go and C# locators |
-| **T12** | **Receiver tracking.** Method/fluent chains through an explicitly typed client. | T11 | Explicit evidence only | **Shipped 2026-11-12** — Rust, Go, C#, Python and TypeScript |
+| **T12** | **Receiver tracking.** Method/fluent chains through an explicitly typed client. | T11 | Explicit evidence only | **Shipped 2026-11-12** — Rust, Go, C#, Python and TypeScript; T12c annotated return types |
 | **T13** | **Hardened deployment.** Container, TLS proxy, backups, resilience. | T10e | Operator-owned secrets | **Shipped 2026-11-12** — deployable Compose + Caddy, workers/retries/cancel/metrics, SQLite hardening |
 
 ### T1 as shipped (2026-10-26)
@@ -335,9 +335,21 @@ receiver keeps the old no-site/unrooted behavior. 2,453 tests, offline. T12 is c
 
 Known limits: a dynamic/Python reassignment is not branch-sensitive; a factory not in `receivers` and
 not annotated/constructed is not evidence; computed access/`getattr`/`dynamic`, `using static`,
-reflection and return-type/interprocedural inference are not followed (no site, not a guess); a local
-type sharing a rooted/mapped name is a documented false positive. Operation inference from a URL no
-longer matches a type-prefixed receiver chain; map the operation to the full chain.
+reflection and typed-parameter/interprocedural inference are not followed (no site, not a guess); a
+local type sharing a rooted/mapped name is a documented false positive. Operation inference from a URL
+no longer matches a type-prefixed receiver chain; map the operation to the full chain.
+
+### T12c as built (2026-11-14)
+
+A same-file function/method with an annotated SDK return type (`def make_client() -> stripe.Client`,
+`function makeClient(): StripeClient`, `fn make_client() -> Client`, `func newClient() *stripe.Client`,
+`StripeClient MakeClient()`) roots the variable assigned from its call, in all five languages. The
+return type resolves through the existing roots/aliases and the chain stays `Type.member...`; only a
+written annotation is evidence, and the shared policy is unchanged. 2,609 tests, offline.
+
+Known limits: same-file only; typed parameters, cross-file/package indexes, generics/overloads and
+body-return inference are not followed; Python string annotations are not parsed; a name collision
+uses the last same-file definition.
 
 ### T13a as built (2026-11-12)
 

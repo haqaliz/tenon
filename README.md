@@ -19,8 +19,8 @@ tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark c
 App remote), T10b (provider migration bundle), T10c (local provider fan-out), T10d (installed
 provider fan-out), T10e (hosted provider service), T10f (webhook-triggered runs), T11a (Rust
 call-site location), T11b (Go call-site location), T11c (C# call-site location), T12a (Rust/Go
-receiver tracking), T12b (C#/Python/TS receiver tracking), T13a (deployable service), T13b (service
-resilience) and the `tenon check` /
+receiver tracking), T12b (C#/Python/TS receiver tracking), T12c (annotated return-type inference),
+T13a (deployable service), T13b (service resilience) and the `tenon check` /
 `tenon fix` / `tenon provider migrate` / `tenon provider serve` / `tenon probe` / `tenon corpus` CLI
 are shipped.**
 `src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed
@@ -141,8 +141,11 @@ construction (`Client::new`, `new Client()`, `Client(...)`), a type annotation, 
 `[locate.receivers]`/`--receiver` factory entry roots its chain as `Type.resource.method`, e.g.
 Python `client = stripe.Client(...); client.charges.create(...)` -> `Client.charges.create`, and
 TypeScript `const client = new StripeClient(...); client.charges.create(...)` ->
-`StripeClient.charges.create`. A receiver without explicit evidence stays unrooted; see each
-language's limits above.
+`StripeClient.charges.create`. T12c also reads a same-file function/method's annotated return type
+(`def make_client() -> stripe.Client`, `function makeClient(): StripeClient`,
+`fn make_client() -> Client`, `func newClient() *stripe.Client`, `StripeClient MakeClient()`) and
+roots the assigned receiver; an unannotated, wrong-return or cross-file helper stays unrooted. See
+each language's limits above.
 
 ```python
 from tenon.detect import diff, load
