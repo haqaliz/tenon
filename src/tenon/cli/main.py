@@ -60,6 +60,7 @@ from tenon.service.api import Api, resolve_bundle
 from tenon.service.http import serve
 from tenon.service.runner import CommandRunner, Outcome as RunOutcome
 from tenon.service.store import StoreError
+from tenon.service.triggers import parse_triggers
 from tenon.service.worker import Worker
 
 from .config import (
@@ -278,6 +279,13 @@ def _parser() -> argparse.ArgumentParser:
         "--webhook-secret",
         default=None,
         help="GitHub webhook secret (or TENON_WEBHOOK_SECRET)",
+    )
+    serve_command.add_argument(
+        "--trigger",
+        action="append",
+        default=[],
+        metavar="EVENT[.ACTION]=BUNDLE",
+        help="queue a bundle on a webhook event (repeatable)",
     )
     serve_command.add_argument(
         "--host", default="127.0.0.1", help="listen host (default: 127.0.0.1)"
@@ -813,6 +821,15 @@ def _serve(args: argparse.Namespace) -> int:
         raise _Usage(
             f"bundle directory is not a directory: {args.bundles}"
         )
+    secret = (
+        args.webhook_secret or os.environ.get("TENON_WEBHOOK_SECRET") or None
+    )
+    if args.trigger and not secret:
+        raise _Usage("--trigger requires --webhook-secret")
+    try:
+        triggers = parse_triggers(args.trigger, bundles)
+    except ValueError as error:
+        raise _Usage(str(error)) from None
     try:
         store = RunStore(args.db)
     except StoreError as error:
@@ -820,9 +837,6 @@ def _serve(args: argparse.Namespace) -> int:
     # Spec AC5: a restart re-queues (or cancels) the stranded running rows.
     store.recover()
 
-    secret = (
-        args.webhook_secret or os.environ.get("TENON_WEBHOOK_SECRET") or None
-    )
     runner = CommandRunner(
         lambda bundle: _serve_command(args, bundle), timeout=args.run_timeout
     )
@@ -836,7 +850,12 @@ def _serve(args: argparse.Namespace) -> int:
         for _ in range(args.workers)
     ]
     api = Api(
-        store, bundles, token, webhook_secret=secret, workers=args.workers
+        store,
+        bundles,
+        token,
+        webhook_secret=secret,
+        workers=args.workers,
+        triggers=triggers,
     )
     try:
         server = serve(api, args.host, args.port)
