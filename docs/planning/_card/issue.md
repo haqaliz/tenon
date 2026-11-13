@@ -1,37 +1,66 @@
-# Card: feat/webhook-runs
+# Card: feat/receiver-inference
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T10 Provider layer** — follow-up slice: **webhook-triggered runs** (T10f)
-- **Milestone:** after v0.1.0; the last T10e follow-up
-- **Branch:** `feat/webhook-runs/aliz`
-- **Worktree:** `.claude/worktrees/feat-webhook-runs`
+- **Capability:** **T12 Receiver tracking** — deeper slice: **typed-function inference** (T12c)
+- **Milestone:** after v0.1.0/T10f; the receiver follow-up
+- **Branch:** `feat/receiver-inference/aliz`
+- **Worktree:** `.claude/worktrees/feat-receiver-inference`
 
 ## Brief
 
-The T10e service verifies `POST /webhooks/github` with the HMAC and records the delivery, but it
-never queues a run. A provider still posts every migration to `POST /runs` by hand.
+T12a/T12b root a receiver from an explicit construction (`Client::new`, `new Client`, `Client()`), a
+type annotation or a configured factory. A common style hides the construction behind a typed helper:
 
-T10f adds **webhook-triggered runs**:
-- an operator mapping from a GitHub event (and optional action) to a registered bundle, e.g.
-  `--trigger installation_repositories.added=demo.json` or `--trigger push=demo.json`;
-- on a verified, matching delivery, the service queues a normal installed-fan-out run through the
-  existing store/worker, with the delivery id as the run's idempotency key;
-- the webhook response names the queued run; a non-matching event is still recorded only;
-- a trigger requires the webhook secret; bundle names are confined to `--bundles`; the mapping is
-  operator CLI config, not bundle content (a bundle cannot auto-run itself);
-- no new pipeline, proof, PR or merge behavior.
+```python
+def make_client() -> stripe.Client: ...
+client = make_client()
+client.charges.create(...)
+```
+```ts
+function makeClient(): StripeClient { ... }
+const client = makeClient();
+client.charges.create({...})
+```
+```rust
+fn make_client() -> Client { ... }
+let client = make_client();
+client.charges().create(...)
+```
+```go
+func newClient() *stripe.Client { ... }
+client := newClient()
+client.Charges.New(...)
+```
+```csharp
+static StripeClient MakeClient() => new(...);
+var client = MakeClient();
+client.Charges.Create(...);
+```
+
+T12c adds **typed-function inference**: a local function/method with an explicit SDK return
+annotation (or, if chosen, a typed parameter) is evidence for the receiver/parameter's type. A call
+assigned to a local roots the chain; only a written annotation/signature counts, never a bare
+function name.
+
+Parameter-type inference (a function parameter annotated with the SDK type is a rooted receiver
+inside the body) is T12d if sliced.
+
+The hard rules do not change: no unannotated-return guesses, no return-type analysis without a
+signature, no new proof/ambiguity vocabulary, the shared policy decides.
 
 ## Constraints carried in from the repo
 
-- T10e's `Api`/`RunStore`/`Worker` and the HMAC webhook are the base; extend, do not fork.
-- The bundle name validation (`resolve_bundle`) and the store's unique idempotency key are the
-  dedupe/confine seams.
-- Stdlib only; offline tests (a signed body, a temp store, no network).
-- `CLAUDE.md` §1–5: no merge/default branch, secrets never logged/stored.
+- T12a/T12b's receiver bindings and the five scanners are the base; extend, do not fork.
+- The crate/package/namespace/import roots and alias resolution are reused for the return/parameter
+  type.
+- Stdlib/tree-sitter/`ast` only; offline fixtures/tests.
+- `receivers`/`--receiver` remains the escape hatch for SDK factories whose return type is not in the
+  repo.
 
 ## Scope fence
 
-Not this card: per-repo targeting/filters, bundle-level trigger declarations, a trigger UI/API,
-new GitHub event semantics, auto-merge, a web UI, multi-tenant triggers.
+Not this card: unannotated return inference, SDK return types without an annotation/mapping,
+package/repo-wide signature indexes unless chosen, generics, macros, `dynamic`/`getattr`, new proof
+levels.
