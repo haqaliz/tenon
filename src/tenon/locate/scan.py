@@ -458,6 +458,35 @@ def _dict_literals(node: ast.expr) -> tuple[ast.Dict, ...]:
     return ()
 
 
+def _returns(
+    tree: ast.Module,
+    roots: dict[str, tuple[str, ...]],
+    sdk_parts: tuple[str, ...],
+) -> dict[str, tuple[str, ...]]:
+    """Same-file function name -> SDK return chain from its annotation.
+
+    A missing, string, generic or non-SDK ``returns`` annotation is no
+    evidence; a later definition of the same name replaces or clears the map.
+    """
+    found: dict[str, tuple[str, ...]] = {}
+    functions = sorted(
+        (
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ),
+        key=lambda node: (node.lineno, node.col_offset),
+    )
+    for node in functions:
+        root, tail = _parts(node.returns) if node.returns is not None else (None, ())
+        full = _full(root, tail, roots, sdk_parts)
+        if full is None:
+            found.pop(node.name, None)
+        else:
+            found[node.name] = full[len(sdk_parts) :]
+    return found
+
+
 class _Visitor(ast.NodeVisitor):
     """Emit hits for the four shapes and dynamics for the opaque ones."""
 
@@ -475,9 +504,15 @@ class _Visitor(ast.NodeVisitor):
         self._classes = classes
         self._receivers = receivers or {}
         self._bindings: dict[str, tuple[str, ...]] = {}
+        self._returns: dict[str, tuple[str, ...]] = {}
         self._callee = 0
         self.hits: list[Hit] = []
         self.dynamics: list[Dynamic] = []
+
+    def visit_Module(self, node: ast.Module) -> None:
+        # Spec AC1: the same-file signatures are known before the bindings.
+        self._returns = _returns(node, self._roots, self._sdk_parts)
+        self.generic_visit(node)
 
     def _ref(
         self, root: str | None, tail: tuple[str, ...]
@@ -516,12 +551,16 @@ class _Visitor(ast.NodeVisitor):
         return None
 
     def _evidence(self, value: ast.expr | None) -> tuple[str, ...] | None:
-        """The type chain an assigned value binds, from a factory or constructor."""
+        """The type chain an assigned value binds, from a factory, helper or constructor."""
         if not isinstance(value, ast.Call):
             return None
         mapped = self._factory(value.func)
         if mapped is not None:
             return mapped
+        if isinstance(value.func, ast.Name):
+            annotated = self._returns.get(value.func.id)
+            if annotated is not None:
+                return annotated
         return self._canonical(value.func)
 
     def _bind_receiver(self, name: str, chain: tuple[str, ...] | None) -> None:

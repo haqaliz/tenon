@@ -735,6 +735,193 @@ def test_an_untracked_receiver_chain_is_unchanged(tmp_path):
     )
 
 
+# Phase 9: return-type inference.
+# Spec AC1: a same-file helper with an SDK return annotation is evidence.
+def test_a_typed_helper_is_evidence():
+    visitor = a_visitor(
+        "import stripe\n"
+        "def make_client() -> stripe.Client:\n"
+        '    return stripe.Client("key")\n'
+        "client = make_client()\n"
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC1: a method with an SDK return annotation is in the same map.
+def test_a_typed_method_is_evidence():
+    visitor = a_visitor(
+        "from stripe import Client\n"
+        "class Factory:\n"
+        "    def make_client(self) -> Client:\n"
+        "        ...\n"
+        "client = make_client()\n"
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC1: a missing return annotation is not evidence.
+def test_an_unannotated_helper_is_not_evidence():
+    visitor = a_visitor(
+        "import stripe\n"
+        "def make_client():\n"
+        '    return stripe.Client("key")\n'
+        "client = make_client()\n"
+    )
+
+    assert visitor._bindings == {}
+
+
+# Spec AC1: string, generic and non-SDK returns are not evidence.
+def test_a_wrong_return_annotation_is_not_evidence():
+    visitor = a_visitor(
+        "import stripe\n"
+        "from typing import Optional\n"
+        "def forward() -> 'stripe.Client':\n"
+        "    ...\n"
+        "def optional() -> Optional[stripe.Client]:\n"
+        "    ...\n"
+        "def local() -> Local:\n"
+        "    ...\n"
+        "a = forward()\n"
+        "b = optional()\n"
+        "c = local()\n"
+    )
+
+    assert visitor._bindings == {}
+
+
+# Spec AC1: a rebinding through another typed helper replaces the chain.
+def test_a_typed_helper_rebinding_replaces_the_receiver():
+    visitor = a_visitor(
+        "from stripe import Client, CustomerClient\n"
+        "def make_client() -> Client:\n"
+        "    ...\n"
+        "def make_customer() -> CustomerClient:\n"
+        "    ...\n"
+        "client = make_client()\n"
+        "client = make_customer()\n"
+    )
+
+    assert visitor._bindings == {"client": ("CustomerClient",)}
+
+
+# Spec AC1: a rebinding without evidence clears the inferred receiver.
+def test_a_typed_helper_rebinding_without_evidence_clears():
+    visitor = a_visitor(
+        "import stripe\n"
+        "def make_client() -> stripe.Client:\n"
+        "    ...\n"
+        "client = make_client()\n"
+        "client = build()\n"
+    )
+
+    assert visitor._bindings == {}
+
+
+# Spec AC1: the configured receivers mapping still overrides the annotation.
+def test_a_configured_receiver_overrides_the_annotation():
+    visitor = a_visitor(
+        "import stripe\n"
+        "def make_client() -> stripe.Client:\n"
+        "    ...\n"
+        "client = make_client()\n",
+        receivers={"make_client": "CustomerClient"},
+    )
+
+    assert visitor._bindings == {"client": ("CustomerClient",)}
+
+
+# Spec AC1/AC2: a typed helper roots the receiver call chain end-to-end.
+def test_a_typed_helper_roots_the_receiver_chain(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "import stripe\n"
+        "from stripe import Client\n"
+        "\n"
+        "def make_client() -> stripe.Client:\n"
+        '    return Client("key")\n'
+        "\n"
+        "client = make_client()\n"
+        'client.charges.create(amount=1)\n',
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(repo, "app.py", 4, 29, SiteShape.ATTRIBUTE, "Client", (), False),
+        hit(repo, "app.py", 5, 12, SiteShape.CALL, "Client", ("Client",), True),
+        hit(
+            repo,
+            "app.py",
+            8,
+            8,
+            SiteShape.ATTRIBUTE,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+        hit(
+            repo,
+            "app.py",
+            8,
+            16,
+            SiteShape.CALL,
+            "create",
+            ("Client", "charges", "create"),
+            True,
+        ),
+        hit(
+            repo,
+            "app.py",
+            8,
+            23,
+            SiteShape.KEYWORD,
+            "amount",
+            ("Client", "charges", "create"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a helper defined in another file is not evidence.
+def test_a_cross_file_helper_is_not_evidence(tmp_path):
+    (tmp_path / "helpers.py").write_text(
+        "import stripe\n"
+        "\n"
+        "def make_client() -> stripe.Client:\n"
+        '    return stripe.Client("key")\n',
+        encoding="utf-8",
+    )
+    repo = a_repo(
+        tmp_path,
+        "from helpers import make_client\n"
+        "import stripe\n"
+        "\n"
+        "client = make_client()\n"
+        "client.charges.create(amount=1)\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(
+            repo,
+            "app.py",
+            5,
+            16,
+            SiteShape.CALL,
+            "create",
+            ("charges", "create"),
+            False,
+        ),
+        hit(repo, "app.py", 5, 23, SiteShape.KEYWORD, "amount", (), False),
+        hit(repo, "helpers.py", 3, 29, SiteShape.ATTRIBUTE, "Client", (), False),
+        hit(repo, "helpers.py", 4, 19, SiteShape.CALL, "Client", ("Client",), True),
+    )
+
+
 # Spec AC1/AC2: evidence is per function: a parameter shadows, a local rebind
 # stays local, and the module receiver is restored afterwards.
 def test_receiver_chains_respect_function_scopes(tmp_path):
