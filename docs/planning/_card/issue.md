@@ -1,42 +1,37 @@
-# Card: release/v0.1.0
+# Card: feat/webhook-runs
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
-- **Type:** release
-- **Capability:** **Release/consolidation** — the post-T13 checkpoint
-- **Milestone:** after T13; the original roadmap ends at T11
-- **State:** released v0.1.0 on 2026-11-13 (`CHANGELOG.md`, `docs/RELEASE.md`, annotated tag)
-- **Branch:** `release/v0.1.0/aliz`
-- **Worktree:** `.claude/worktrees/release-v0.1.0`
+- **Type:** feat
+- **Capability:** **T10 Provider layer** — follow-up slice: **webhook-triggered runs** (T10f)
+- **Milestone:** after v0.1.0; the last T10e follow-up
+- **Branch:** `feat/webhook-runs/aliz`
+- **Worktree:** `.claude/worktrees/feat-webhook-runs`
 
 ## Brief
 
-The repo has shipped T1–T13: detection, five locators, proof, PR writer, provider bundles/local and
-installed fan-out, a deployed service, and receiver tracking — 2,527 tests, offline. The package is
-still `0.0.1`, there is no changelog, no runnable example and no packaging check.
+The T10e service verifies `POST /webhooks/github` with the HMAC and records the delivery, but it
+never queues a run. A provider still posts every migration to `POST /runs` by hand.
 
-This release slice:
-- bumps the version and exposes `tenon --version`;
-- writes a `CHANGELOG.md` (Keep a Changelog style) covering the shipped capabilities and their known
-  limits;
-- adds a runnable quickstart example (the committed proof-basic fixture + a bundle/spec pair) and an
-  `examples/README.md`;
-- builds the wheel/sdist and installs the wheel into a clean venv, checking the console script and
-  `--version`;
-- adds a release checklist (`docs/RELEASE.md`) and, if chosen, an annotated tag + GitHub release;
-- updates the README/status surfaces to the release.
-
-The hard rules do not change: no new runtime capability, no merge/default-branch behavior, no
-secrets, offline checks only.
+T10f adds **webhook-triggered runs**:
+- an operator mapping from a GitHub event (and optional action) to a registered bundle, e.g.
+  `--trigger installation_repositories.added=demo.json` or `--trigger push=demo.json`;
+- on a verified, matching delivery, the service queues a normal installed-fan-out run through the
+  existing store/worker, with the delivery id as the run's idempotency key;
+- the webhook response names the queued run; a non-matching event is still recorded only;
+- a trigger requires the webhook secret; bundle names are confined to `--bundles`; the mapping is
+  operator CLI config, not bundle content (a bundle cannot auto-run itself);
+- no new pipeline, proof, PR or merge behavior.
 
 ## Constraints carried in from the repo
 
-- `pyproject.toml` is the version source; `_package_version()` reads the installed distribution.
-- The committed fixtures (`tests/fixtures/repos/proof-basic`, specs) are the example base.
-- `uv build`/a clean venv are local; no PyPI publish in this slice.
-- The existing docs (`README`, `DEPLOYMENT`, `CAPABILITY_ROADMAP`) are the changelog source.
+- T10e's `Api`/`RunStore`/`Worker` and the HMAC webhook are the base; extend, do not fork.
+- The bundle name validation (`resolve_bundle`) and the store's unique idempotency key are the
+  dedupe/confine seams.
+- Stdlib only; offline tests (a signed body, a temp store, no network).
+- `CLAUDE.md` §1–5: no merge/default branch, secrets never logged/stored.
 
 ## Scope fence
 
-Not this card: PyPI publish, a hosted docs site, new features, new locators/providers, version 1.0
-semver guarantees unless chosen.
+Not this card: per-repo targeting/filters, bundle-level trigger declarations, a trigger UI/API,
+new GitHub event semantics, auto-merge, a web UI, multi-tenant triggers.

@@ -45,10 +45,11 @@ T10d (installed provider fan-out) and T10e (hosted service MVP) shipped 2026-11-
 locator), T11b (Go locator) and T11c (C# locator) shipped 2026-11-11; T12a (Rust/Go receiver
 tracking) and T12b (C#/Python/TS receiver tracking) shipped 2026-11-12**
 (`src/tenon/pr/{app,api,github_app,installed}.py`, `src/tenon/provider/`, `src/tenon/service/`,
-`src/tenon/locate/`, `Dockerfile`/`docker-compose.yml`/`Caddyfile`, CLI; 2,527 tests). T13a (a
+`src/tenon/locate/`, `Dockerfile`/`docker-compose.yml`/`Caddyfile`, CLI; 2,558 tests). T13a (a
 deployable service behind Caddy) and T13b (workers/retries/cancel/metrics/SQLite hardening) shipped
-2026-11-12. The self-hosted service is containerized and resilient; return-type/interprocedural
-receiver inference and webhook-triggered runs are not started.
+2026-11-12; T10f (webhook-triggered runs) shipped 2026-11-14. The self-hosted service is
+containerized, resilient and event-triggerable; return-type/interprocedural receiver inference is not
+started.
 
 **v0.1.0 released 2026-11-13** — the first tagged release; see `CHANGELOG.md` and `docs/RELEASE.md`.
 

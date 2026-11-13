@@ -13,7 +13,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T7** | **Proof ladder.** Types/build-only, characterization tests, recorded-call replay. | T4 | Weak proof labelled weak | **Shipped 2026-11-06** |
 | **T8** | **MCP diffs and probe mode.** Diff MCP tool schemas; run an agent against an API or server. | T1, T4 | | **Shipped 2026-11-07** |
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
-| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Shipped 2026-11-11 (MVP)** — GitHub App remote, provider bundle, local/installed fan-out and a self-hosted service; a hardened cloud deployment is later |
+| **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Shipped 2026-11-11 (MVP)** — GitHub App remote, provider bundle, local/installed fan-out, a self-hosted service and webhook-triggered runs; a hardened cloud deployment is later |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Shipped 2026-11-11** — Rust, Go and C# locators |
 | **T12** | **Receiver tracking.** Method/fluent chains through an explicitly typed client. | T11 | Explicit evidence only | **Shipped 2026-11-12** — Rust, Go, C#, Python and TypeScript |
 | **T13** | **Hardened deployment.** Container, TLS proxy, backups, resilience. | T10e | Operator-owned secrets | **Shipped 2026-11-12** — deployable Compose + Caddy, workers/retries/cancel/metrics, SQLite hardening |
@@ -366,8 +366,7 @@ startup recovery re-queues stranded running rows (or cancels requested ones). 2,
 Known limits: retries cover infrastructure failures only (a report-bearing exit 1 is not retried);
 a timed-out run may have opened some PRs, so its retry re-runs and reports per-repo `BRANCH_EXISTS`
 refusals (no force-push/delete); cancel is POSIX process-group termination and may skip temp-dir
-cleanup; N workers share the app token/rate limits; webhook-triggered runs and per-run retries/backoff
-are not shipped.
+cleanup; N workers share the app token/rate limits; per-run retries/backoff are not shipped.
 
 ### T10e as built (2026-11-11)
 
@@ -382,6 +381,19 @@ worker and server; `--dry-run` omits `--open-pr`. 2,235 tests, offline.
 Known limits: self-hosted and local-only; no TLS, rate limiting or a reverse proxy (the token and
 webhook secret are the only guards); one sequential worker, no retries/cancel/parallelism; SQLite is
 the store; a run can outlive the HTTP request; a hardened cloud deployment is a later card.
+
+### T10f as built (2026-11-14)
+
+`tenon provider serve --trigger EVENT[.ACTION]=BUNDLE` (repeatable) maps a verified GitHub delivery
+to a registered bundle; the event/action match is exact with an actionless fallback, and a match
+queues the normal installed fan-out with `webhook:<delivery>` as the idempotency key. The 202 names
+the run; a non-match records only; a duplicate delivery returns the same run. The mapping is
+operator CLI config (not bundle content), requires the webhook secret, and the bundle stays confined
+to `--bundles`; a bundle deleted after startup is a failed run, not a webhook error. 2,558 tests,
+offline.
+
+Known limits: no per-repo filter (a triggered run covers the whole installation); a noisy event can
+queue many full runs, so map a specific action; per-run retries/backoff remain out of scope.
 
 
 

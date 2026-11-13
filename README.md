@@ -17,9 +17,10 @@ affected calls, and proves the fix against your own checks before it opens a pul
 T5 (PR writer), T6 (TypeScript/JavaScript call-site location), T7 (proof ladder), T8 (MCP
 tool-schema diffs, Python tool-call location and `tenon probe`), T9 (benchmark corpus), T10a (GitHub
 App remote), T10b (provider migration bundle), T10c (local provider fan-out), T10d (installed
-provider fan-out), T10e (hosted provider service), T11a (Rust call-site location), T11b (Go call-site
-location), T11c (C# call-site location), T12a (Rust/Go receiver tracking), T12b (C#/Python/TS
-receiver tracking), T13a (deployable service), T13b (service resilience) and the `tenon check` /
+provider fan-out), T10e (hosted provider service), T10f (webhook-triggered runs), T11a (Rust
+call-site location), T11b (Go call-site location), T11c (C# call-site location), T12a (Rust/Go
+receiver tracking), T12b (C#/Python/TS receiver tracking), T13a (deployable service), T13b (service
+resilience) and the `tenon check` /
 `tenon fix` / `tenon provider migrate` / `tenon provider serve` / `tenon probe` / `tenon corpus` CLI
 are shipped.**
 `src/tenon/detect/` diffs two OpenAPI 3.x documents — and two MCP `tools/list` documents — into typed
@@ -267,9 +268,10 @@ given.
 ### Provider service
 
 `tenon provider serve --bundles DIR --db PATH --api-token TOKEN [--webhook-secret SECRET]
-[--host 127.0.0.1] [--port 8080] [--run-timeout 3600] [--poll 1.0] [--workers N] [--retries N]
-[--dry-run] [--app-id ID] [--app-installation-id ID] [--app-private-key PATH] [--api-url URL]`
-starts a self-hosted HTTP service and N background workers (default 1, max 16).
+[--trigger EVENT[.ACTION]=BUNDLE ...] [--host 127.0.0.1] [--port 8080] [--run-timeout 3600]
+[--poll 1.0] [--workers N] [--retries N] [--dry-run] [--app-id ID] [--app-installation-id ID]
+[--app-private-key PATH] [--api-url URL]` starts a self-hosted HTTP service and N background workers
+(default 1, max 16).
 `--api-token`/`TENON_API_TOKEN` is required and non-empty, `--bundles` must be an existing directory,
 and `--db` is the SQLite store (created and migrated on open); a bad value or an out-of-bounds
 `--workers` (1..16) or `--retries` (0..10) is a named usage error (exit 2).
@@ -298,8 +300,16 @@ id is 404; a run that is already succeeded, failed or cancelled is 409 `{"error"
 the route is 404. It verifies `X-Hub-Signature-256: sha256=<hex>` with HMAC-SHA256 in constant time
 (401 on a bad signature), parses a JSON object (400 otherwise), and records
 `X-GitHub-Delivery`/`X-GitHub-Event`/`action`/`installation`/`payload` as 202
-`{"status":"recorded"}`. A duplicate delivery is 202 and leaves one row. Webhooks only record; they
-never start a run.
+`{"status":"recorded"}`. A duplicate delivery is 202 and leaves one row.
+
+A verified delivery can also queue a run via `--trigger EVENT[.ACTION]=BUNDLE` (repeatable; requires
+`--webhook-secret`). The event is `X-GitHub-Event`, the action is the payload `action`; an exact
+`event.action` trigger wins over an actionless `event` trigger. On a match the service creates a
+normal installed-fan-out run with `webhook:<delivery>` as its idempotency key and answers 202
+`{"status":"recorded","run":{"id","status","bundle"}}`; a non-match records only, and a duplicate
+delivery returns the same run. The bundle must be a `.json` file confined to `--bundles`; a bundle
+deleted after startup queues a run that fails with the normal missing-bundle error, not a webhook
+error. The mapping is operator config, never bundle content, so a bundle cannot auto-run itself.
 
 Each worker claims the oldest queued run, invokes the shipped `provider migrate --installed --bundle
 PATH --json` child (`--open-pr --remote app` unless `--dry-run`) once, and stores the fan-out

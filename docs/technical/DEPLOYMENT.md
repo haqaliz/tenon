@@ -111,6 +111,43 @@ On startup the service re-queues runs left `running` by an unclean restart, or f
 store/report is unaffected, and `/tmp` is a tmpfs in the compose, so leftovers are bounded. Windows
 is not a target.
 
+## Webhook triggers
+
+Map a verified GitHub event (and optional action) to a registered bundle with `--trigger`; add it to
+the compose `command:` (the webhook secret comes from `TENON_WEBHOOK_SECRET` in `.env`):
+
+```yaml
+services:
+  service:
+    command:
+      - provider
+      - serve
+      - --bundles
+      - /data/bundles
+      - --db
+      - /data/tenon.db
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --trigger
+      - installation_repositories.added=demo.json
+      - --trigger
+      - push=demo.json
+```
+
+The event is `X-GitHub-Event`, the action is the payload `action`; an exact `event.action` wins over
+an actionless `event`. On a match the service queues a normal installed-fan-out run with
+`webhook:<X-GitHub-Delivery>` as its idempotency key and answers 202 with the run id/status/bundle; a
+non-match records the event only. A duplicate delivery returns the same run, so a GitHub retry never
+queues twice. The bundle must be a `.json` file confined to `--bundles`; a trigger without
+`TENON_WEBHOOK_SECRET`/`--webhook-secret` is a usage error, and a bundle deleted after startup
+queues a run that fails with the normal missing-bundle error.
+
+The mapping is operator CLI config, never bundle content: a bundle cannot auto-run itself. There is
+no per-repo filter in this slice; a triggered run covers the whole installation, so map a specific
+action (for example `installation_repositories.added`) rather than a noisy event when that matters.
+
 ## Metrics
 
 `GET /metrics` is bearer-guarded and returns Prometheus text: `tenon_runs{status=...}` for

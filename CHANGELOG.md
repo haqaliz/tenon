@@ -7,6 +7,13 @@ promise: flags, config keys and provider contracts may still change.
 
 ## [Unreleased]
 
+### Added
+
+- **Webhook-triggered runs:** `tenon provider serve --trigger EVENT[.ACTION]=BUNDLE` maps a verified
+  GitHub delivery to a registered bundle and queues the normal installed fan-out with the delivery id
+  as the idempotency key. A trigger requires the webhook secret; the mapping is operator CLI config,
+  not bundle content, so a bundle cannot auto-run itself.
+
 ## [0.1.0] - 2026-11-13
 
 The first tagged release: change detection, five locators, the proof ladder, the PR writer, the

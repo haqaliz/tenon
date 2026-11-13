@@ -4964,6 +4964,7 @@ def test_provider_serve_help_lists_the_flags(capsys):
         "--db",
         "--api-token",
         "--webhook-secret",
+        "--trigger",
         "--host",
         "--port",
         "--run-timeout",
@@ -4979,8 +4980,79 @@ def test_provider_serve_help_lists_the_flags(capsys):
         assert flag in out
 
 
-# Spec AC1: the serve defaults are the documented ones.
-def test_provider_serve_defaults(tmp_path):
+# Spec AC4: a trigger without the webhook secret is a usage error.
+def test_provider_serve_trigger_requires_the_secret(tmp_path, capsys):
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    (bundles / "demo.json").write_text("{}", encoding="utf-8")
+
+    code = main(
+        a_serve_argv(
+            tmp_path,
+            "--api-token",
+            SERVE_TOKEN,
+            "--trigger",
+            "push=demo.json",
+            bundles=bundles,
+        )
+    )
+
+    assert code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "--trigger requires --webhook-secret" in captured.err
+
+
+# Spec AC2/AC4: a bad trigger bundle is a named usage error.
+def test_provider_serve_bad_trigger_is_a_named_error(tmp_path, capsys):
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+
+    code = main(
+        a_serve_argv(
+            tmp_path,
+            "--api-token",
+            SERVE_TOKEN,
+            "--webhook-secret",
+            "hook-secret",
+            "--trigger",
+            "push=missing.json",
+            bundles=bundles,
+        )
+    )
+
+    assert code == 2
+    assert "bundle is not a .json" in capsys.readouterr().err
+
+
+# Spec AC4: the parsed trigger map reaches the API.
+def test_provider_serve_wires_triggers_into_the_api(tmp_path, monkeypatch):
+    bundles = tmp_path / "bundles"
+    bundles.mkdir()
+    (bundles / "demo.json").write_text("{}", encoding="utf-8")
+    seen, _server = a_fake_server(monkeypatch)
+    a_fake_workers(monkeypatch)
+
+    assert (
+        main(
+            a_serve_argv(
+                tmp_path,
+                "--api-token",
+                SERVE_TOKEN,
+                "--webhook-secret",
+                "hook-secret",
+                "--trigger",
+                "push=demo.json",
+                bundles=bundles,
+            )
+        )
+        == 0
+    )
+
+    assert seen["api"]._triggers == {("push", None): "demo.json"}
+
+
+# Spec AC1: the serve defaults are the documented ones.def test_provider_serve_defaults(tmp_path):
     args = a_serve_args(tmp_path)
 
     assert args.host == "127.0.0.1"

@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -83,6 +84,7 @@ class Api:
         webhook_secret: str | None = None,
         max_body: int = 65536,
         workers: int = 1,
+        triggers: Mapping[tuple[str, str | None], str] | None = None,
     ) -> None:
         self._store = store
         self._bundles = Path(bundles)
@@ -90,6 +92,7 @@ class Api:
         self._webhook_secret = webhook_secret
         self._max_body = max_body
         self._workers = workers
+        self._triggers = dict(triggers or {})
 
     @property
     def max_body(self) -> int:
@@ -313,4 +316,14 @@ class Api:
             installation=None if installation_id is None else str(installation_id),
             payload=payload,
         )
-        return _response(202, {"status": "recorded"})
+        # Spec AC1–AC3: an exact action wins; an actionless trigger is the fallback.
+        bundle = self._triggers.get((event, action))
+        if bundle is None:
+            bundle = self._triggers.get((event, None))
+        result: dict[str, object] = {"status": "recorded"}
+        if bundle is not None:
+            run = self._store.create_run(
+                bundle, idempotency_key=f"webhook:{delivery}"
+            )
+            result["run"] = self._run_summary(run)
+        return _response(202, result)
