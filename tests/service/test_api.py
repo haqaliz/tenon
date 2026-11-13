@@ -22,7 +22,7 @@ def a_root(tmp_path):
     return root
 
 
-def an_api(tmp_path, *, secret=None, max_body=65536, token=TOKEN, workers=1):
+def an_api(tmp_path, *, secret=None, max_body=65536, token=TOKEN, workers=1, triggers=None):
     root = a_root(tmp_path)
     store = RunStore(tmp_path / "runs.db")
     return (
@@ -33,6 +33,7 @@ def an_api(tmp_path, *, secret=None, max_body=65536, token=TOKEN, workers=1):
             webhook_secret=secret,
             max_body=max_body,
             workers=workers,
+            triggers=triggers,
         ),
         store,
         root,
@@ -522,6 +523,157 @@ def test_a_duplicate_webhook_is_202_with_one_row(tmp_path):
     rows = an_event_rows(tmp_path / "runs.db")
     assert len(rows) == 1
     assert json.loads(rows[0][4]) == {"action": "created"}
+
+
+# Spec AC1: a matching trigger queues one run and the 202 names it.
+def test_a_matching_webhook_queues_a_run(tmp_path):
+    api, store, _root = an_api(
+        tmp_path,
+        secret=SECRET,
+        triggers={("installation_repositories", "added"): "bundle.json"},
+    )
+    body = json.dumps({"action": "added"}).encode()
+    headers = a_signed(
+        body, event="installation_repositories", delivery="delivery-trigger"
+    )
+
+    response = api.handle("POST", "/webhooks/github", headers, body)
+
+    assert response.status == 202
+    payload = a_json(response)
+    assert payload["status"] == "recorded"
+    assert payload["run"]["bundle"] == "bundle.json"
+    stored = store.get(payload["run"]["id"])
+    assert stored.status == "queued"
+    assert stored.idempotency_key == "webhook:delivery-trigger"
+
+
+# Spec AC2: a non-matching event is recorded only.
+def test_a_non_matching_webhook_records_only(tmp_path):
+    api, store, _root = an_api(
+        tmp_path, secret=SECRET, triggers={("push", None): "bundle.json"}
+    )
+    body = b'{"action":"created"}'
+    headers = a_signed(body, event="installation", delivery="delivery-no")
+
+    response = api.handle("POST", "/webhooks/github", headers, body)
+
+    assert a_json(response) == {"status": "recorded"}
+    assert store.list() == ()
+
+
+# Spec AC3: an exact action wins over the actionless fallback.
+def test_an_exact_action_wins_over_the_actionless_trigger(tmp_path):
+    api, store, _root = an_api(
+        tmp_path,
+        secret=SECRET,
+        triggers={
+            ("push", "created"): "bundle.json",
+            ("push", None): "sub/nested.json",
+        },
+    )
+    body = b'{"action":"created"}'
+
+    response = api.handle(
+        "POST", "/webhooks/github", a_signed(body, event="push"), body
+    )
+
+    payload = a_json(response)
+    assert payload["run"]["bundle"] == "bundle.json"
+    assert store.get(payload["run"]["id"]).bundle == "bundle.json"
+
+
+# Spec AC3: an actionless trigger matches any action as the fallback.
+def test_an_actionless_trigger_matches_any_action(tmp_path):
+    api, store, _root = an_api(
+        tmp_path, secret=SECRET, triggers={("push", None): "bundle.json"}
+    )
+    body = b'{"action":"deleted"}'
+
+    response = api.handle(
+        "POST", "/webhooks/github", a_signed(body, event="push"), body
+    )
+
+    payload = a_json(response)
+    assert payload["run"]["bundle"] == "bundle.json"
+    assert len(store.list()) == 1
+
+
+# Spec AC4: a duplicate delivery returns the same run and leaves one row.
+def test_a_duplicate_triggered_delivery_is_one_run(tmp_path):
+    api, store, _root = an_api(
+        tmp_path, secret=SECRET, triggers={("push", None): "bundle.json"}
+    )
+    first = b'{"action":"created"}'
+    second = b'{"action":"created"}'
+
+    one = api.handle(
+        "POST",
+        "/webhooks/github",
+        a_signed(first, event="push", delivery="delivery-same"),
+        first,
+    )
+    two = api.handle(
+        "POST",
+        "/webhooks/github",
+        a_signed(second, event="push", delivery="delivery-same"),
+        second,
+    )
+
+    assert one.status == 202
+    assert two.status == 202
+    assert a_json(one)["run"]["id"] == a_json(two)["run"]["id"]
+    assert len(store.list()) == 1
+
+
+# Spec AC5: a bundle deleted after startup queues; the worker fails it, not the webhook.
+def test_a_deleted_bundle_is_a_failed_run_not_a_webhook_error(tmp_path):
+    from tenon.cli.main import _serve_execute
+    from tenon.service.worker import Worker
+
+    api, store, root = an_api(
+        tmp_path, secret=SECRET, triggers={("push", None): "bundle.json"}
+    )
+    (root / "bundle.json").unlink()
+    body = b'{"action":"created"}'
+
+    response = api.handle(
+        "POST", "/webhooks/github", a_signed(body, event="push"), body
+    )
+
+    assert response.status == 202
+    run_id = a_json(response)["run"]["id"]
+
+    class FakeRunner:
+        def run(self, path):
+            raise AssertionError("a missing bundle must not reach the runner")
+
+    worker = Worker(store, _serve_execute(FakeRunner(), root))
+    assert worker.run_once() is True
+
+    stored = store.get(run_id)
+    assert stored.status == "failed"
+    assert "bundle is not available" in stored.error
+
+
+# Spec AC6: a triggered run is visible through the normal run API.
+def test_a_triggered_run_is_readable(tmp_path):
+    api, _store, _root = an_api(
+        tmp_path, secret=SECRET, triggers={("push", None): "bundle.json"}
+    )
+    body = b'{"action":"created"}'
+    queued = a_json(
+        api.handle(
+            "POST", "/webhooks/github", a_signed(body, event="push"), body
+        )
+    )
+    run_id = queued["run"]["id"]
+
+    response = a_call(api, "GET", f"/runs/{run_id}")
+
+    assert response.status == 200
+    assert a_json(response)["status"] == "queued"
+    assert a_json(response)["id"] == run_id
 
 
 # Spec AC5: malformed JSON or a non-object is 400, not recorded.
