@@ -357,3 +357,31 @@ def test_a_receiver_mapping_resolves_an_operation_chain(tmp_path):
     ] == [("main.rs", 3, 5, SiteShape.CALL, "create")]
     assert result.ambiguous == ()
     assert result.reason is None
+
+
+# Spec AC1: a same-file typed helper resolves the operation through locate_rust().
+def test_a_typed_helper_resolves_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn make_client() -> Client {\n"
+            "    unimplemented!()\n"
+            "}\n"
+            "\n"
+            "fn main() {\n"
+            "    let client = make_client();\n"
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = locate_rust(a_removed_endpoint(), repo, MAPPED_CHAIN)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.rs", 9, 5, SiteShape.CALL, "create")]
+    assert result.ambiguous == ()
+    assert result.reason is None

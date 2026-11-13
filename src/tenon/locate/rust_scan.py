@@ -195,7 +195,7 @@ def _unwrap(node: Node | None) -> Node | None:
 def _type_ref(
     node: Node | None, roots: dict[str, tuple[str, ...]], crate: str
 ) -> tuple[tuple[str, ...], bool] | None:
-    """The canonical chain and rootedness of a struct literal's type."""
+    """The canonical chain and rootedness of a type expression."""
     if node is None:
         return None
     if node.type in {"type_identifier", "identifier"}:
@@ -217,6 +217,29 @@ def _type_ref(
     if node.type in {"generic_type", "generic_type_with_turbofish"}:
         return _type_ref(node.child_by_field_name("type"), roots, crate)
     return None
+
+
+def _returns(
+    tree: Tree, roots: dict[str, tuple[str, ...]], crate: str
+) -> dict[str, tuple[str, ...]]:
+    """Same-file function name -> SDK return chain from its annotation.
+
+    A missing, ``impl`` or non-SDK return type is no evidence; a later
+    definition of the same name replaces or clears the map.
+    """
+    found: dict[str, tuple[str, ...]] = {}
+    for node in _walk(tree.root_node):
+        if node.type != "function_item":
+            continue
+        name = node.child_by_field_name("name")
+        if name is None:
+            continue
+        ref = _type_ref(node.child_by_field_name("return_type"), roots, crate)
+        if ref is None or not ref[1]:
+            found.pop(_text(name), None)
+        else:
+            found[_text(name)] = ref[0]
+    return found
 
 
 def _fields(struct_expression: Node) -> tuple[Node, ...]:
@@ -252,6 +275,7 @@ class _Visitor:
         crate: str,
         roots: dict[str, tuple[str, ...]],
         receivers: Mapping[str, str],
+        returns: dict[str, tuple[str, ...]],
     ) -> None:
         self._source = source
         self._crate = crate
@@ -259,6 +283,7 @@ class _Visitor:
         self._receivers = {
             key.replace("::", "."): value for key, value in receivers.items()
         }
+        self._returns = returns
         self._bindings: dict[str, _Binding] = {}
         self.rooted = False
         self.hits: list[Hit] = []
@@ -347,6 +372,10 @@ class _Visitor:
             )
             if chain:
                 return _Binding(chain)
+        if function is not None and function.type == "identifier":
+            annotated = self._returns.get(_text(function))
+            if annotated is not None:
+                return _Binding(annotated)
         return None
 
     def _let(self, node: Node) -> None:
@@ -508,7 +537,13 @@ def scan_rust(
     hits: list[Hit] = []
     for module in _read(Path(root)):
         roots, crate_used = _bindings(module.tree, sdk_package)
-        visitor = _Visitor(module.source, sdk_package, roots, receivers or {})
+        visitor = _Visitor(
+            module.source,
+            sdk_package,
+            roots,
+            receivers or {},
+            _returns(module.tree, roots, sdk_package),
+        )
         visitor.visit(module.tree.root_node)
         if crate_used or visitor.rooted:
             modules.append(module.rel)

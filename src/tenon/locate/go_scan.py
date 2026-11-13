@@ -176,6 +176,63 @@ class _Binding:
     literal: bool = False
 
 
+def _type_chain(
+    type_node: Node | None, roots: dict[str, tuple[str, ...]]
+) -> tuple[str, ...] | None:
+    """The canonical chain of a rooted qualified type, else ``None``."""
+    while type_node is not None and type_node.type == "pointer_type":
+        type_node = type_node.named_children[0] if type_node.named_children else None
+    if type_node is None or type_node.type != "qualified_type":
+        return None
+    package = type_node.child_by_field_name("package")
+    name = type_node.child_by_field_name("name")
+    if package is None or name is None:
+        return None
+    prefix = roots.get(_text(package))
+    if prefix is None:
+        return None
+    return prefix + (_text(name),)
+
+
+def _result_chain(
+    result: Node | None, roots: dict[str, tuple[str, ...]]
+) -> tuple[str, ...] | None:
+    """The canonical chain of a function's first result type, else ``None``."""
+    if result is None:
+        return None
+    if result.type == "parameter_list":
+        first = result.named_children[0] if result.named_children else None
+        if first is None or first.type != "parameter_declaration":
+            return None
+        if first.child_by_field_name("name") is not None:
+            return None
+        result = first.child_by_field_name("type")
+    return _type_chain(result, roots)
+
+
+def _returns(
+    tree: Tree, roots: dict[str, tuple[str, ...]]
+) -> dict[str, tuple[str, ...]]:
+    """Same-file function name -> SDK result chain from its signature.
+
+    A named result, ``error`` or non-SDK first result is no evidence; a later
+    definition of the same name replaces or clears the map.
+    """
+    found: dict[str, tuple[str, ...]] = {}
+    for node in _walk(tree.root_node):
+        if node.type != "function_declaration":
+            continue
+        name = node.child_by_field_name("name")
+        if name is None:
+            continue
+        chain = _result_chain(node.child_by_field_name("result"), roots)
+        if chain is None:
+            found.pop(_text(name), None)
+        else:
+            found[_text(name)] = chain
+    return found
+
+
 class _Visitor:
     """Emit rooted calls, literal fields and field accesses."""
 
@@ -184,10 +241,12 @@ class _Visitor:
         source: _Source,
         roots: dict[str, tuple[str, ...]],
         receivers: Mapping[str, str],
+        returns: dict[str, tuple[str, ...]],
     ) -> None:
         self._source = source
         self._roots = roots
         self._receivers = receivers
+        self._returns = returns
         self._bindings: dict[str, _Binding] = {}
         self.hits: list[Hit] = []
 
@@ -217,21 +276,6 @@ class _Visitor:
         for child in node.children:
             self.visit(child)
 
-    def _type_chain(self, type_node: Node | None) -> tuple[str, ...] | None:
-        """The canonical chain of a rooted qualified type, else ``None``."""
-        while type_node is not None and type_node.type == "pointer_type":
-            type_node = type_node.named_children[0] if type_node.named_children else None
-        if type_node is None or type_node.type != "qualified_type":
-            return None
-        package = type_node.child_by_field_name("package")
-        name = type_node.child_by_field_name("name")
-        if package is None or name is None:
-            return None
-        prefix = self._roots.get(_text(package))
-        if prefix is None:
-            return None
-        return prefix + (_text(name),)
-
     def _keys(self, literal: Node) -> tuple[Node, ...]:
         """The keyed-element key identifiers of a composite literal."""
         body = literal.child_by_field_name("body")
@@ -260,7 +304,7 @@ class _Visitor:
         if node is None:
             return None
         if node.type == "composite_literal":
-            chain = self._type_chain(node.child_by_field_name("type"))
+            chain = _type_chain(node.child_by_field_name("type"), self._roots)
             if chain is None:
                 return None
             return _Binding(chain, self._keys(node), True)
@@ -269,9 +313,14 @@ class _Visitor:
         return None
 
     def _call_evidence(self, call: Node) -> _Binding | None:
-        """The type a mapped factory call binds, if its key matches."""
+        """The type a mapped factory or a typed helper call binds."""
         function = call.child_by_field_name("function")
-        if function is None or function.type != "selector_expression":
+        if function is None:
+            return None
+        if function.type == "identifier":
+            annotated = self._returns.get(_text(function))
+            return _Binding(annotated) if annotated is not None else None
+        if function.type != "selector_expression":
             return None
         package = function.child_by_field_name("operand")
         field = function.child_by_field_name("field")
@@ -290,7 +339,7 @@ class _Visitor:
         return None
 
     def _bind_type(self, name: str, type_node: Node | None) -> None:
-        chain = self._type_chain(type_node)
+        chain = _type_chain(type_node, self._roots)
         if chain is None:
             self._bindings.pop(name, None)
         else:
@@ -345,7 +394,7 @@ class _Visitor:
         self._visit_children(node)
 
     def _literal(self, node: Node) -> None:
-        chain = self._type_chain(node.child_by_field_name("type"))
+        chain = _type_chain(node.child_by_field_name("type"), self._roots)
         if chain is not None:
             for key in self._keys(node):
                 self._emit(key, SiteShape.KEYWORD, _text(key), chain, True)
@@ -398,7 +447,7 @@ class _Visitor:
         if node is None:
             return
         if node.type == "composite_literal":
-            chain = self._type_chain(node.child_by_field_name("type"))
+            chain = _type_chain(node.child_by_field_name("type"), self._roots)
             if chain is not None:
                 for key in self._keys(node):
                     self._emit(key, SiteShape.KEYWORD, _text(key), call_chain, True)
@@ -491,7 +540,9 @@ def scan_go(
         roots, sdk_imported = _imports(module.tree, sdk_package, package_name)
         if not sdk_imported:
             continue
-        visitor = _Visitor(module.source, roots, receivers or {})
+        visitor = _Visitor(
+            module.source, roots, receivers or {}, _returns(module.tree, roots)
+        )
         visitor.visit(module.tree.root_node)
         modules.append(module.rel)
         hits.extend(visitor.hits)

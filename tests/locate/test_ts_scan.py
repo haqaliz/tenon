@@ -1205,3 +1205,174 @@ def test_receiver_chains_respect_function_scopes(tmp_path):
         a_hit(tmp_path, "app.ts", 11, 10, SiteShape.ATTRIBUTE, "charges", (), False),
         a_hit(tmp_path, "app.ts", 14, 8, SiteShape.ATTRIBUTE, "charges", ("Client", "charges"), True),
     )
+
+
+# Phase 9: return-type inference.
+# Spec AC2: a same-file function with an SDK return annotation is evidence.
+def test_a_typed_helper_is_evidence():
+    visitor = a_visitor(
+        'import { StripeClient } from "stripe";\n'
+        "function makeClient(): StripeClient {\n"
+        "  return new StripeClient();\n"
+        "}\n"
+        "const client = makeClient();\n"
+    )
+
+    assert visitor._bindings == {"client": ("StripeClient",)}
+
+
+# Spec AC2: a method's SDK return annotation is in the same map.
+def test_a_typed_method_is_evidence():
+    visitor = a_visitor(
+        'import { Client } from "stripe";\n'
+        "class Factory {\n"
+        "  makeClient(): Client {\n"
+        "    return new Client();\n"
+        "  }\n"
+        "}\n"
+        "const client = makeClient();\n"
+    )
+
+    assert visitor._bindings == {"client": ("Client",)}
+
+
+# Spec AC2: an arrow function's SDK return annotation is evidence.
+def test_a_typed_arrow_helper_is_evidence():
+    visitor = a_visitor(
+        'import { StripeClient } from "stripe";\n'
+        "const makeClient = (): StripeClient => new StripeClient();\n"
+        "const client = makeClient();\n"
+    )
+
+    assert visitor._bindings == {"client": ("StripeClient",)}
+
+
+# Spec AC2: a missing return annotation is not evidence.
+def test_an_unannotated_helper_is_not_evidence():
+    visitor = a_visitor(
+        'import { StripeClient } from "stripe";\n'
+        "function makeClient() {\n"
+        "  return new StripeClient();\n"
+        "}\n"
+        "const client = makeClient();\n"
+    )
+
+    assert visitor._bindings == {}
+
+
+# Spec AC2: any, generic and non-SDK return types are not evidence.
+def test_a_wrong_return_annotation_is_not_evidence():
+    visitor = a_visitor(
+        'import { StripeClient } from "stripe";\n'
+        "class Local {}\n"
+        "function anyReturn(): any {\n"
+        "  return new StripeClient();\n"
+        "}\n"
+        "function genericReturn(): Promise<StripeClient> {\n"
+        "  return null;\n"
+        "}\n"
+        "function localReturn(): Local {\n"
+        "  return new Local();\n"
+        "}\n"
+        "const a = anyReturn();\n"
+        "const b = genericReturn();\n"
+        "const c = localReturn();\n"
+    )
+
+    assert visitor._bindings == {}
+
+
+# Spec AC2: a rebinding through another typed helper replaces the chain.
+def test_a_typed_helper_rebinding_replaces_the_receiver():
+    visitor = a_visitor(
+        'import { Client, CustomerClient } from "stripe";\n'
+        "function makeClient(): Client {\n"
+        "  return new Client();\n"
+        "}\n"
+        "function makeCustomer(): CustomerClient {\n"
+        "  return new CustomerClient();\n"
+        "}\n"
+        "let client = makeClient();\n"
+        "client = makeCustomer();\n"
+    )
+
+    assert visitor._bindings == {"client": ("CustomerClient",)}
+
+
+# Spec AC2: a rebinding without evidence clears the inferred receiver.
+def test_a_typed_helper_rebinding_without_evidence_clears():
+    visitor = a_visitor(
+        'import { StripeClient } from "stripe";\n'
+        "function makeClient(): StripeClient {\n"
+        "  return new StripeClient();\n"
+        "}\n"
+        "let client = makeClient();\n"
+        "client = build();\n"
+    )
+
+    assert visitor._bindings == {}
+
+
+# Spec AC2: the configured receivers mapping still overrides the annotation.
+def test_a_configured_receiver_overrides_the_annotation():
+    visitor = a_visitor(
+        'import { StripeClient } from "stripe";\n'
+        "function makeClient(): StripeClient {\n"
+        "  return new StripeClient();\n"
+        "}\n"
+        "const client = makeClient();\n",
+        receivers={"makeClient": "CustomerClient"},
+    )
+
+    assert visitor._bindings == {"client": ("CustomerClient",)}
+
+
+# Spec AC2: a typed helper roots the receiver call chain end-to-end.
+def test_a_typed_helper_roots_the_receiver_chain(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import { Client, StripeClient } from "stripe";\n'
+        "\n"
+        "function makeClient(): StripeClient {\n"
+        "  return new Client();\n"
+        "}\n"
+        "\n"
+        "const client = makeClient();\n"
+        "client.charges.create({ amount: 100 });\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        a_hit(tmp_path, "app.ts", 4, 14, SiteShape.CALL, "Client", ("Client",), True),
+        a_hit(tmp_path, "app.ts", 8, 8, SiteShape.ATTRIBUTE, "charges", ("StripeClient", "charges"), True),
+        a_hit(tmp_path, "app.ts", 8, 16, SiteShape.CALL, "create", ("StripeClient", "charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 8, 25, SiteShape.KEYWORD, "amount", ("StripeClient", "charges", "create"), True),
+    )
+
+
+# Spec AC2: a helper defined in another file is not evidence.
+def test_a_cross_file_helper_is_not_evidence(tmp_path):
+    (tmp_path / "helpers.ts").write_text(
+        'import { Client, StripeClient } from "stripe";\n'
+        "\n"
+        "export function makeClient(): StripeClient {\n"
+        "  return new Client();\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "app.ts").write_text(
+        'import { makeClient } from "./helpers";\n'
+        "\n"
+        "const client = makeClient();\n"
+        "client.charges.create({ amount: 100 });\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        a_hit(tmp_path, "app.ts", 4, 16, SiteShape.CALL, "create", ("charges", "create"), False),
+        a_hit(tmp_path, "app.ts", 4, 25, SiteShape.KEYWORD, "amount", (), False),
+        a_hit(tmp_path, "helpers.ts", 4, 14, SiteShape.CALL, "Client", ("Client",), True),
+    )

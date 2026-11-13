@@ -68,8 +68,9 @@ tests/        offline; fixture repos and specs; no network, no model calls
   names through namespace usings and aliases, and reports static and tracked-`new` instance calls,
   object-initializer properties and property access through a tracked binding. T12 receiver tracking
   roots a client built from explicit evidence (`new`/constructor, annotation or configured factory)
-  in all five languages, so `client.resource.method` is reported as `Type.resource.method`; a method
-  chain on an untracked receiver, macros, re-exported crates, Go dot imports, C# `using
+  in all five languages, so `client.resource.method` is reported as `Type.resource.method`; T12c
+  also roots a receiver from a same-file function/method's annotated return type. A method chain on
+  an untracked receiver, macros, re-exported crates, Go dot imports, C# `using
   static`/`dynamic`, reflection and multi-hop data flow are not followed and produce no site, never
   a guess.
 - **Proof is a ladder, chosen by the user.** `--require
@@ -267,8 +268,8 @@ test"` is just a user command.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
 - Phase 3: T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider
   fan-out), T10d (installed provider fan-out), T10e (hosted provider service), T11a (Rust locator),
-  T11b (Go locator) and T11c (C# locator) shipped; T12a (Rust/Go receiver tracking) and T12b
-  (C#/Python/TS receiver tracking) shipped; T13a (deployable service) and T13b (resilience) shipped;
-  T10f (webhook-triggered runs) shipped. Return-type/interprocedural receiver inference and a
-  hardened cloud deployment beyond Compose are not started. v0.1.0 is the first tagged release
-  (2026-11-13).
+  T11b (Go locator) and T11c (C# locator) shipped; T12a (Rust/Go receiver tracking), T12b
+  (C#/Python/TS receiver tracking) and T12c (annotated return-type inference) shipped; T13a
+  (deployable service) and T13b (resilience) shipped; T10f (webhook-triggered runs) shipped.
+  Typed-parameter/interprocedural receiver inference and a hardened cloud deployment beyond Compose
+  are not started. v0.1.0 is the first tagged release (2026-11-13).

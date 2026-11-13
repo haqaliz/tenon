@@ -16,7 +16,7 @@ usable by AI agents, by running an agent against it.
 The name: a *tenon* is the tongue cut on a timber to fit its mortise exactly. The joint holds
 only if the two sides still match. Tenon asks of an integration: *does your side still fit theirs?*
 
-Status: **T1, T2, T3, T4, T5, T6, T7, T8a, T8b, T8c, T9, T10a, T10b, T10c, T10d, T10e, T10f, T11a, T11b, T11c, T12a, T12b, T13a, T13b and M1.4 shipped.**
+Status: **T1, T2, T3, T4, T5, T6, T7, T8a, T8b, T8c, T9, T10a, T10b, T10c, T10d, T10e, T10f, T11a, T11b, T11c, T12a, T12b, T12c, T13a, T13b and M1.4 shipped.**
 **v0.1.0 released 2026-11-13** — the first tagged release; see `CHANGELOG.md` and `docs/RELEASE.md`.
 `src/tenon/detect/` turns two OpenAPI 3.x documents — and, for T8a, two MCP `tools/list` documents —
 into typed `Change` records; `src/tenon/locate/` turns a record into call sites with file, line and
@@ -46,9 +46,9 @@ mock-assertion site, `TESTS_PASSED` on the offline subset; the case that forced 
 keyword attribution). Phase 2 is complete; Phase 3's T10a (GitHub App remote), T10b (provider
 migration bundle), T10c (local provider fan-out), T10d (installed provider fan-out), T10e (hosted
 service MVP), T10f (webhook-triggered runs), T11a (Rust locator), T11b (Go locator) and T11c (C#
-locator) shipped, T12a/T12b (receiver tracking) shipped, and T13a (deployable service) and T13b
-(resilience) shipped, while return-type/interprocedural receiver inference is not started — do not
-describe capability that isn't there yet.
+locator) shipped, T12a/T12b/T12c (receiver tracking) shipped, and T13a (deployable service) and T13b
+(resilience) shipped, while typed-parameter/interprocedural receiver inference is not started — do
+not describe capability that isn't there yet.
 
 Lineage: one of three siblings scaffolded together on 2026-10-22 (with Assay and Pry) from a
 market-demand pass (`~/dev/at/ideas/market-demand-2026-10.md`). It answers the YC Fall 2026

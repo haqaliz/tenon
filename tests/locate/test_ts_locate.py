@@ -432,6 +432,31 @@ def test_a_mapped_receiver_chain_resolves_the_operation(tmp_path):
     assert result.reason is None
 
 
+# Spec AC3: a typed helper resolves a component through locate_ts.
+def test_a_typed_helper_resolves_a_component(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        'import { StripeClient } from "stripe";\n'
+        "\n"
+        "function makeClient(): StripeClient {\n"
+        "  return new StripeClient();\n"
+        "}\n"
+        "\n"
+        "const client = makeClient();\n"
+        "client.amount;\n",
+    )
+    change = a_change(COMPONENT_OLD, COMPONENT_NEW)
+
+    result = locate_ts(change, repo, TsLocateConfig(sdk_package="stripe"))
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("app.ts", 8, 8, SiteShape.ATTRIBUTE, "amount")]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
 # Spec AC3: a configured factory resolves a component through locate_ts.
 def test_a_configured_factory_resolves_a_component(tmp_path):
     repo = a_repo(

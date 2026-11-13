@@ -1069,6 +1069,199 @@ def test_an_untracked_receiver_chain_is_not_evidence(tmp_path):
     assert result.hits == ()
 
 
+# Spec AC1: a same-file helper's annotated return roots the receiver.
+def test_a_typed_helper_return_roots_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn make_client() -> Client {\n"
+            "    unimplemented!()\n"
+            "}\n"
+            "\n"
+            "fn main() {\n"
+            "    let client = make_client();\n"
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.rs",
+            9,
+            5,
+            SiteShape.CALL,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.rs",
+            9,
+            5,
+            SiteShape.CALL,
+            "create",
+            ("Client", "charges", "create"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a crate-qualified return type keeps the whole chain.
+def test_a_scoped_helper_return_roots_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "fn make_client() -> stripe::resources::Client {\n"
+            "    unimplemented!()\n"
+            "}\n"
+            "\n"
+            "fn main() {\n"
+            "    let client = make_client();\n"
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.rs",
+            7,
+            5,
+            SiteShape.CALL,
+            "charges",
+            ("resources", "Client", "charges"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.rs",
+            7,
+            5,
+            SiteShape.CALL,
+            "create",
+            ("resources", "Client", "charges", "create"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a helper without a return type is no evidence.
+def test_an_unannotated_helper_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn make_client() {\n"
+            "    unimplemented!()\n"
+            "}\n"
+            "\n"
+            "fn main() {\n"
+            "    let client = make_client();\n"
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    assert scan_rust(repo, "stripe").hits == ()
+
+
+# Spec AC1: a non-SDK return type is no evidence.
+def test_a_non_sdk_helper_return_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn make_client() -> String {\n"
+            "    unimplemented!()\n"
+            "}\n"
+            "\n"
+            "fn main() {\n"
+            "    let client = make_client();\n"
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    assert scan_rust(repo, "stripe").hits == ()
+
+
+# Spec AC1: an `impl Trait` return type is no evidence.
+def test_an_impl_trait_return_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn make_client() -> impl Iterator<Item = Client> {\n"
+            "    unimplemented!()\n"
+            "}\n"
+            "\n"
+            "fn main() {\n"
+            "    let client = make_client();\n"
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    assert scan_rust(repo, "stripe").hits == ()
+
+
+# Spec AC1: a helper defined in another file is no evidence.
+def test_a_cross_file_helper_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "helper.rs": "use stripe::Client;\n"
+            "\n"
+            "pub fn make_client() -> Client {\n"
+            "    unimplemented!()\n"
+            "}\n",
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn main() {\n"
+            "    let client = make_client();\n"
+            "    client.charges().create(&params);\n"
+            "}\n",
+        },
+    )
+
+    assert scan_rust(repo, "stripe").hits == ()
+
+
+# Spec AC1: a rebinding without evidence clears the inferred receiver.
+def test_a_rebinding_without_evidence_clears_the_inferred_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn make_client() -> Client {\n"
+            "    unimplemented!()\n"
+            "}\n"
+            "\n"
+            "fn main() {\n"
+            "    let client = make_client();\n"
+            "    let client = build();\n"
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    assert scan_rust(repo, "stripe").hits == ()
+
+
 # Spec AC4: parentheses around a bound receiver unwrap.
 def test_a_parenthesized_receiver_chain_is_rooted(tmp_path):
     repo = a_repo(

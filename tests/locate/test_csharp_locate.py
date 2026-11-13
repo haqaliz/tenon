@@ -407,3 +407,98 @@ def test_the_csharp_api_is_exported():
     assert locate.locate_csharp is locate_csharp
     assert {"CSharpLocateConfig", "locate_csharp"} <= set(locate.__all__)
     assert locate.LOCATE_TYPES["csharp"] is CSharpLocateConfig
+
+
+# Spec AC1/M5: a same-file typed helper resolves the mapped operation call.
+def test_a_typed_helper_resolves_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    static StripeClient MakeClient() => new StripeClient();\n"
+            "\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = MakeClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+    config = CSharpLocateConfig(
+        sdk_package=ROOT,
+        operations={"POST /v1/charges": "StripeClient.Charges.Create"},
+    )
+
+    result = locate_csharp(a_removed_endpoint(), repo, config)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.cs", 10, 9, SiteShape.CALL, "Create")]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+# Spec AC1/M5: a same-file typed helper roots a component property access.
+def test_a_typed_helper_roots_a_component_property(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    static StripeClient MakeClient() => new StripeClient();\n"
+            "\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = MakeClient();\n"
+            "        var amount = client.Amount;\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = locate_csharp(a_component_rename(), repo, STRIPE)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.cs", 10, 29, SiteShape.ATTRIBUTE, "Amount")]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
+# Spec AC1/M5: a helper returning the wrong SDK type does not resolve the operation.
+def test_a_wrong_return_helper_does_not_resolve_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    static CustomerClient MakeClient() => new CustomerClient();\n"
+            "\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = MakeClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+    config = CSharpLocateConfig(
+        sdk_package=ROOT,
+        operations={"POST /v1/charges": "StripeClient.Charges.Create"},
+    )
+
+    result = locate_csharp(a_removed_endpoint(), repo, config)
+
+    assert result.certain == ()
+    assert result.ambiguous == ()
+    assert result.reason is LocateReason.NO_SITES

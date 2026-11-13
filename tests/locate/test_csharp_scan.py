@@ -1591,3 +1591,340 @@ def test_a_local_receiver_wins_over_a_same_name_type(tmp_path):
             True,
         ),
     )
+
+
+# Spec AC1: a same-file typed helper roots the receiver by its return type.
+def test_a_typed_helper_roots_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    static StripeClient MakeClient()\n"
+            "    {\n"
+            "        return new StripeClient();\n"
+            "    }\n"
+            "\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = MakeClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            13,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("StripeClient", "Charges", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            13,
+            16,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("StripeClient", "Charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a fully qualified helper return type resolves without a using.
+def test_a_qualified_typed_helper_roots_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "class ChargeRunner\n"
+            "{\n"
+            "    static Stripe.ChargeClient MakeClient()\n"
+            "    {\n"
+            "        return new Stripe.ChargeClient();\n"
+            "    }\n"
+            "\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = MakeClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            11,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeClient", "Charges", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            11,
+            16,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("ChargeClient", "Charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: an aliased helper return type resolves through the alias.
+def test_an_aliased_typed_helper_roots_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "using Client = Stripe.ChargeClient;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    static Client MakeClient() => new Client();\n"
+            "\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = MakeClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            11,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeClient", "Charges", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            11,
+            16,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("ChargeClient", "Charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a local function's return type roots the receiver.
+def test_a_local_typed_helper_roots_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        static StripeClient MakeClient() => new StripeClient();\n"
+            "        var client = MakeClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("StripeClient", "Charges", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            16,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("StripeClient", "Charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a `void` helper is no evidence and the receiver stays unrooted.
+def test_a_void_helper_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    static void MakeClient() { }\n"
+            "\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = MakeClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            10,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("Charges", "Create"),
+            False,
+        ),
+    )
+
+
+# Spec AC1: a non-SDK return type is no evidence.
+def test_a_wrong_return_helper_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            '    static string MakeClient() => "client";\n'
+            "\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = MakeClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            10,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("Charges", "Create"),
+            False,
+        ),
+    )
+
+
+# Spec AC1: a helper defined in another file is no evidence.
+def test_a_cross_file_helper_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "helpers.cs": "using Stripe;\n"
+            "\n"
+            "partial class ChargeRunner\n"
+            "{\n"
+            "    static StripeClient MakeClient() => new StripeClient();\n"
+            "}\n",
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "partial class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = MakeClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n",
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("Charges", "Create"),
+            False,
+        ),
+    )
+
+
+# Spec AC1: a rebinding without evidence clears the inferred receiver.
+def test_a_helper_rebinding_without_evidence_clears_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    static StripeClient MakeClient() => new StripeClient();\n"
+            "\n"
+            "    void Run()\n"
+            "    {\n"
+            "        var client = MakeClient();\n"
+            "        client = Build();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            11,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("Charges", "Create"),
+            False,
+        ),
+    )

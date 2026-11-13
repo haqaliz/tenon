@@ -515,6 +515,43 @@ def test_a_mapped_receiver_chain_resolves_the_operation(tmp_path):
     assert result.reason is None
 
 
+# Spec AC3: a typed helper resolves the operation through locate().
+def test_a_typed_helper_resolves_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "import stripe\n"
+        "\n"
+        "def make_client() -> stripe.Client:\n"
+        '    return stripe.Client("key")\n'
+        "\n"
+        "client = make_client()\n"
+        'client.charges.create(amount=100, currency="usd")\n',
+    )
+    config = LocateConfig(
+        sdk_package="stripe",
+        operations={"POST /v1/charges": "Client.charges.create"},
+    )
+
+    result = locate(
+        a_change(
+            ChangeKind.RENAMED,
+            before="amount",
+            pointer=CHARGES_BODY,
+            method="post",
+            path="/v1/charges",
+        ),
+        repo,
+        config,
+    )
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("app.py", 7, 23, SiteShape.KEYWORD, "amount")]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
 # Spec AC3: locate passes the receiver mapping through to the scanner.
 def test_a_configured_factory_resolves_a_component(tmp_path):
     repo = a_repo(
