@@ -261,13 +261,14 @@ test"` is just a user command.
   outcomes yet.
 - T5 follow-ups: fork remotes, cleanup of a branch left by a failed PR call, and submodule/LFS
   content in the clone. The current writer refuses a dirty tree and never force-pushes.
-- T10e follow-ups: webhook-triggered runs remain. The shipped service is containerized (T13a) with
-  N workers, bounded retries, cancel, metrics and SQLite WAL/recovery (T13b); rate limiting stays a
-  proxy concern.
+- T10e follow-ups: webhook-triggered runs shipped as T10f; per-run retries/backoff remain. The
+  shipped service is containerized (T13a) with N workers, bounded retries, cancel, metrics and SQLite
+  WAL/recovery (T13b); rate limiting stays a proxy concern.
 - PyPI distribution name: `tenon` is taken; `tenonhq` was free when checked.
 - Phase 3: T10a (GitHub App remote), T10b (provider migration bundle), T10c (local provider
   fan-out), T10d (installed provider fan-out), T10e (hosted provider service), T11a (Rust locator),
   T11b (Go locator) and T11c (C# locator) shipped; T12a (Rust/Go receiver tracking) and T12b
-  (C#/Python/TS receiver tracking) shipped; T13a (deployable service) and T13b (resilience) shipped.
-  Return-type/interprocedural receiver inference, webhook-triggered runs and a hardened cloud
-  deployment beyond Compose are not started. v0.1.0 is the first tagged release (2026-11-13).
+  (C#/Python/TS receiver tracking) shipped; T13a (deployable service) and T13b (resilience) shipped;
+  T10f (webhook-triggered runs) shipped. Return-type/interprocedural receiver inference and a
+  hardened cloud deployment beyond Compose are not started. v0.1.0 is the first tagged release
+  (2026-11-13).
