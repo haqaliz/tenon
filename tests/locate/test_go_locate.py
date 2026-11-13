@@ -389,3 +389,38 @@ def test_a_mapped_receiver_field_is_certain(tmp_path):
     ] == [("main.go", 7, 22, SiteShape.ATTRIBUTE, "Amount")]
     assert result.ambiguous == ()
     assert result.reason is None
+
+
+# Spec AC2: a same-file typed helper resolves the operation through locate_go().
+def test_a_typed_helper_resolves_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{ROOT}"\n'
+            "\n"
+            "func newClient() *stripe.Client {\n"
+            "    return nil\n"
+            "}\n"
+            "\n"
+            "func main() {\n"
+            "    client := newClient()\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+    config = GoLocateConfig(
+        sdk_package=ROOT,
+        package_name="stripe",
+        operations={"POST /v1/charges": "Client.Charges.New"},
+    )
+
+    result = locate_go(a_removed_endpoint(), repo, config)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.go", 11, 5, SiteShape.CALL, "New")]
+    assert result.ambiguous == ()
+    assert result.reason is None

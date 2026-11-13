@@ -1200,3 +1200,252 @@ def test_a_cleared_receiver_chain_stays_unrooted(tmp_path):
             False,
         ),
     )
+
+
+# Spec AC2: a same-file helper's annotated pointer result roots the receiver.
+def test_a_typed_helper_result_roots_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func newClient() *stripe.Client {\n"
+            "    return nil\n"
+            "}\n"
+            "\n"
+            "func main() {\n"
+            "    client := newClient()\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.go",
+            11,
+            5,
+            SiteShape.CALL,
+            "New",
+            ("Client", "Charges", "New"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.go",
+            11,
+            12,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("Client", "Charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC2: a same-file helper's value result roots the receiver through `var`.
+def test_a_value_helper_result_roots_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func newClient() stripe.Client {\n"
+            "    return stripe.Client{}\n"
+            "}\n"
+            "\n"
+            "func main() {\n"
+            "    var client = newClient()\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == [("Charges", True)]
+
+
+# Spec AC2: the first type of a result list roots the receiver.
+def test_a_result_list_first_type_roots_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func newClient() (stripe.Client, error) {\n"
+            "    return stripe.Client{}, nil\n"
+            "}\n"
+            "\n"
+            "func main() {\n"
+            "    client, err := newClient()\n"
+            "    _ = err\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == [("Charges", True)]
+
+
+# Spec AC2: a helper without a result type is no evidence.
+def test_an_unannotated_helper_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func newClient() {}\n"
+            "\n"
+            "func main() {\n"
+            "    client := newClient()\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == []
+
+
+# Spec AC2: a non-SDK result type is no evidence.
+def test_a_non_sdk_helper_result_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func newClient() *other.Client {\n"
+            "    return nil\n"
+            "}\n"
+            "\n"
+            "func main() {\n"
+            "    client := newClient()\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == []
+
+
+# Spec AC2: a named result is no evidence.
+def test_a_named_result_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func newClient() (client *stripe.Client) {\n"
+            "    return nil\n"
+            "}\n"
+            "\n"
+            "func main() {\n"
+            "    client := newClient()\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == []
+
+
+# Spec AC2: an `error` first result is no evidence.
+def test_an_error_first_result_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func newClient() (error, *stripe.Client) {\n"
+            "    return nil, nil\n"
+            "}\n"
+            "\n"
+            "func main() {\n"
+            "    client, _ := newClient()\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == []
+
+
+# Spec AC2: a helper defined in another file is no evidence.
+def test_a_cross_file_helper_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "helper.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func newClient() *stripe.Client {\n"
+            "    return nil\n"
+            "}\n",
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func main() {\n"
+            "    client := newClient()\n"
+            "    client.Charges.New(params)\n"
+            "}\n",
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == []
+
+
+# Spec AC2: a rebinding without evidence clears the inferred receiver.
+def test_a_rebinding_without_evidence_clears_the_inferred_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func newClient() *stripe.Client {\n"
+            "    return nil\n"
+            "}\n"
+            "\n"
+            "func main() {\n"
+            "    client := newClient()\n"
+            "    client = other.Thing\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == []
