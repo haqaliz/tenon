@@ -1,7 +1,7 @@
 # Releasing Tenon
 
 The release is a local build/install check, a merge, an annotated tag and a GitHub release. No PyPI
-publication in 0.1.0.
+publication in 0.2.0.
 
 ## Prerequisites
 
@@ -22,10 +22,10 @@ publication in 0.1.0.
 
    ```sh
    uv sync
-   uv run tenon --version        # tenon 0.1.0
+   uv run tenon --version        # tenon 0.2.0
    ```
 
-3. **Changelog.** The release body is the section under `## [0.1.0]`; review it for the shipped
+3. **Changelog.** The release body is the section under `## [0.2.0]`; review it for the shipped
    capabilities and the known limits.
 
 4. **Build and clean-install smoke.**
@@ -34,8 +34,8 @@ publication in 0.1.0.
    uv build
    tmp=$(mktemp -d)
    uv venv "$tmp/venv"
-   uv pip install --python "$tmp/venv/bin/python" --quiet dist/tenonhq-0.1.0-py3-none-any.whl
-   "$tmp/venv/bin/tenon" --version        # tenon 0.1.0
+   uv pip install --python "$tmp/venv/bin/python" --quiet dist/tenonhq-0.2.0-py3-none-any.whl
+   "$tmp/venv/bin/tenon" --version        # tenon 0.2.0
    "$tmp/venv/bin/tenon" check --help
    rm -rf "$tmp"
    ```
@@ -52,16 +52,16 @@ publication in 0.1.0.
 6. **Tag the merge commit** (annotated; push the tag).
 
    ```sh
-   git tag -a v0.1.0 -m "Tenon v0.1.0"
-   git push origin v0.1.0
+   git tag -a v0.2.0 -m "Tenon v0.2.0"
+   git push origin v0.2.0
    ```
 
 7. **GitHub release** with the changelog section as the body.
 
    ```sh
-   awk '/^## \[0.1.0\]/{flag=1; next} flag && /^## \[/{exit} flag' CHANGELOG.md > /tmp/tenon-notes.md
-   gh release create v0.1.0 --title "v0.1.0" --notes-file /tmp/tenon-notes.md
-   gh release view v0.1.0
+   awk '/^## \[0.2.0\]/{flag=1; next} flag && /^## \[/{exit} flag' CHANGELOG.md > /tmp/tenon-notes.md
+   gh release create v0.2.0 --title "v0.2.0" --notes-file /tmp/tenon-notes.md
+   gh release view v0.2.0
    ```
 
 8. **Verify** the release page, the tag, the README version badge and the changelog link.
@@ -71,4 +71,4 @@ publication in 0.1.0.
 - Do not retag a published version; cut `0.1.1` for a fix.
 - The tag/release happen after the PR merges, on `master`; the release PR only carries the version,
   changelog, examples and checklist.
-- The wheel is local for 0.1.0; a later CI release can attach the artifacts.
+- The wheel is local for 0.2.0; a later CI release can attach the artifacts.

@@ -1,60 +1,23 @@
-# Card: feat/parameter-inference
+# Card: release/v0.2.0
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
-- **Type:** feat
-- **Capability:** **T12 Receiver tracking** — deeper slice: **typed parameters** (T12d)
-- **Milestone:** after T12c (annotated return types); the receiver follow-up
-- **State:** T12d shipped 2026-11-14 (`src/tenon/locate/*_scan.py`, typed parameters; 2,662 tests)
-- **Branch:** `feat/parameter-inference/aliz`
-- **Worktree:** `.claude/worktrees/feat-parameter-inference`
+- **Type:** release
+- **Capability:** **Release/consolidation** — v0.2.0
+- **Milestone:** after T12d; the second tagged release
+- **State:** v0.2.0 shipped 2026-11-14 (`CHANGELOG.md`, `docs/RELEASE.md`, annotated tag)
+- **Branch:** `release/v0.2.0/aliz`
+- **Worktree:** `.claude/worktrees/release-v0.2.0`
 
 ## Brief
 
-T12c roots a receiver from a same-file helper's annotated **return** type. The other half is a typed
-**parameter**: a function/method that receives the SDK client as an annotated argument.
+Since v0.1.0 the repo shipped three `Unreleased` features: webhook-triggered runs (T10f),
+annotated return-type receiver inference (T12c) and typed-parameter receiver inference (T12d). This
+release moves them into `0.2.0`, bumps the package, runs the release check (tests, wheel/sdist,
+clean-venv install), and publishes an annotated `v0.2.0` tag and GitHub release.
 
-```python
-def create_charge(client: stripe.Client, amount: int):
-    return client.charges.create(amount=amount)
-```
-```ts
-function createCharge(client: StripeClient, amount: number) {
-  return client.charges.create({ amount });
-}
-```
-```rust
-fn create_charge(client: &Client, amount: i64) {
-    client.charges().create(amount);
-}
-```
-```go
-func createCharge(client *stripe.Client, amount int64) {
-    client.Charges.New(params)
-}
-```
-```csharp
-static void CreateCharge(StripeClient client, long amount) {
-    client.Charges.Create(options);
-}
-```
-
-T12d adds **typed-parameter inference**: a parameter with an explicit SDK annotation/signature is a
-rooted receiver inside that function/method body; the chain is `Type.member...` and the shared policy
-decides certainty. Only a written parameter type counts; an unannotated parameter, `self`/`this`,
-`any`/`void`, a generic or a non-SDK type is not evidence.
-
-This completes the "deeper receiver inference" half (returns in T12c, parameters in T12d).
-
-## Constraints carried in from the repo
-
-- T12a–T12c's receiver bindings and the five scanners are the base; extend, do not fork.
-- The crate/package/namespace/import roots and alias resolution are reused for the parameter type.
-- The parameter binding is per function; a local assignment rebinds; a nested function's parameters
-  are its own.
-- Stdlib/tree-sitter/`ast` only; offline tests.
+No new runtime behavior; no PyPI publication; the service stays self-hosted.
 
 ## Scope fence
 
-Not this card: unannotated parameters, `self`/`this` method-return inference, generic/overload
-resolution, cross-file/package indexes, new proof levels/ambiguity reasons, a service change.
+Not this card: new features, CI/PyPI publication, cross-file inference, a hosted deployment.
