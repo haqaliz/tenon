@@ -219,6 +219,16 @@ def _type_ref(
     return None
 
 
+def _parameter_chain(
+    node: Node | None, roots: dict[str, tuple[str, ...]], crate: str
+) -> tuple[str, ...] | None:
+    """The canonical chain of a rooted parameter type, through a reference."""
+    while node is not None and node.type == "reference_type":
+        node = node.child_by_field_name("type")
+    ref = _type_ref(node, roots, crate)
+    return ref[0] if ref is not None and ref[1] else None
+
+
 def _returns(
     tree: Tree, roots: dict[str, tuple[str, ...]], crate: str
 ) -> dict[str, tuple[str, ...]]:
@@ -378,6 +388,23 @@ class _Visitor:
                 return _Binding(annotated)
         return None
 
+    def _parameters(self, node: Node) -> None:
+        """Seed the body from the annotated parameters of a function."""
+        parameters = node.child_by_field_name("parameters")
+        if parameters is None:
+            return
+        for parameter in parameters.named_children:
+            if parameter.type != "parameter":
+                continue
+            pattern = parameter.child_by_field_name("pattern")
+            if pattern is None or pattern.type != "identifier":
+                continue
+            chain = _parameter_chain(
+                parameter.child_by_field_name("type"), self._roots, self._crate
+            )
+            if chain is not None:
+                self._bindings[_text(pattern)] = _Binding(chain)
+
     def _let(self, node: Node) -> None:
         pattern = node.child_by_field_name("pattern")
         if pattern is not None and pattern.type == "identifier":
@@ -513,6 +540,8 @@ class _Visitor:
         if node.type == "function_item":
             saved = self._bindings
             self._bindings = {}
+            # Spec AC1: an annotated parameter is the body's initial receiver.
+            self._parameters(node)
             self._visit_children(node)
             self._bindings = saved
         elif node.type == "call_expression":

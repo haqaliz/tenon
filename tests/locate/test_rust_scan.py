@@ -1,5 +1,7 @@
 """The tree-sitter Rust scanner over temp ``.rs`` files."""
 
+import pytest
+
 from tenon.locate import SiteShape
 from tenon.locate.rust_scan import scan_rust
 from tenon.locate.scan import Hit
@@ -1298,6 +1300,162 @@ def test_a_parenthesized_receiver_chain_is_rooted(tmp_path):
             SiteShape.CALL,
             "create",
             ("Client", "charges", "create"),
+            True,
+        ),
+    )
+
+
+# Phase 11: parameter inference.
+# Spec AC1: a typed parameter seeds the receiver bindings for the body.
+@pytest.mark.parametrize("annotation", ["Client", "&Client", "stripe::Client"])
+def test_a_typed_parameter_roots_the_body(tmp_path, annotation):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            f"fn create(client: {annotation}) {{\n"
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(
+            repo, "main.rs", 4, 5, SiteShape.CALL, "charges", ("Client", "charges"), True
+        ),
+        a_hit(
+            repo,
+            "main.rs",
+            4,
+            5,
+            SiteShape.CALL,
+            "create",
+            ("Client", "charges", "create"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: an untyped `self` is not evidence.
+def test_an_untyped_self_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "impl Client {\n"
+            "    fn create(&self) {\n"
+            "        self.charges().create(&params);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    assert scan_rust(repo, "stripe").hits == ()
+
+
+# Spec AC1: a generic, `impl` or non-SDK parameter is not evidence.
+@pytest.mark.parametrize("annotation", ["Option<Client>", "impl ClientTrait", "Local"])
+def test_a_wrong_parameter_type_is_not_evidence(tmp_path, annotation):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "struct Local;\n"
+            "\n"
+            f"fn create(client: {annotation}) {{\n"
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    assert scan_rust(repo, "stripe").hits == ()
+
+
+# Spec AC1: a nested function's parameters are its own.
+def test_a_nested_function_parameter_is_its_own(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "struct Local;\n"
+            "\n"
+            "fn outer(client: Client) {\n"
+            "    fn inner(client: Local) {\n"
+            "        client.charges();\n"
+            "    }\n"
+            "    client.charges();\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(
+            repo, "main.rs", 8, 5, SiteShape.CALL, "charges", ("Client", "charges"), True
+        ),
+    )
+
+
+# Spec AC1: a local assignment without evidence clears the receiver.
+def test_a_rebound_parameter_clears_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::Client;\n"
+            "\n"
+            "fn run(client: Client) {\n"
+            "    let client = build();\n"
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    assert scan_rust(repo, "stripe").hits == ()
+
+
+# Spec AC1: a local assignment rebinds the receiver to its new type.
+def test_a_rebound_parameter_replaces_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.rs": "use stripe::{Client, Customer};\n"
+            "\n"
+            "fn run(client: Client) {\n"
+            '    let client = Customer::new("key");\n'
+            "    client.charges().create(&params);\n"
+            "}\n"
+        },
+    )
+
+    result = scan_rust(repo, "stripe")
+
+    assert result.hits == (
+        a_hit(
+            repo, "main.rs", 4, 18, SiteShape.CALL, "new", ("Customer", "new"), True
+        ),
+        a_hit(
+            repo,
+            "main.rs",
+            5,
+            5,
+            SiteShape.CALL,
+            "charges",
+            ("Customer", "charges"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.rs",
+            5,
+            5,
+            SiteShape.CALL,
+            "create",
+            ("Customer", "charges", "create"),
             True,
         ),
     )
