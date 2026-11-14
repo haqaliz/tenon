@@ -601,6 +601,17 @@ class _Visitor(ast.NodeVisitor):
         self._bindings = {
             name: chain for name, chain in saved.items() if name not in parameters
         }
+        # Spec AC1: a direct SDK-rooted parameter annotation seeds the body.
+        for argument in (
+            *arguments.posonlyargs,
+            *arguments.args,
+            *arguments.kwonlyargs,
+        ):
+            if argument.annotation is None:
+                continue
+            chain = self._canonical(argument.annotation)
+            if chain is not None:
+                self._bindings[argument.arg] = chain
         self.generic_visit(node)
         self._bindings = saved
 
