@@ -15,7 +15,7 @@ Engine capabilities in build order. Each lands test-first.
 | **T9** | **Benchmark and history.** Labelled (change, patch, proof, outcome) corpus. | T4, T5 | Measure against human outcomes | **Shipped 2026-11-07** |
 | **T10** | **Provider layer and GitHub App (hosted).** Vendor-pushed migrations. | T4-T9 | Opt-in, BYOK | **Shipped 2026-11-11 (MVP)** — GitHub App remote, provider bundle, local/installed fan-out, a self-hosted service and webhook-triggered runs; a hardened cloud deployment is later |
 | **T11** | **More languages.** Go, Rust, C#. | T2 pattern | One at a time | **Shipped 2026-11-11** — Rust, Go and C# locators |
-| **T12** | **Receiver tracking.** Method/fluent chains through an explicitly typed client. | T11 | Explicit evidence only | **Shipped 2026-11-12** — Rust, Go, C#, Python and TypeScript; T12c annotated return types |
+| **T12** | **Receiver tracking.** Method/fluent chains through an explicitly typed client. | T11 | Explicit evidence only | **Shipped 2026-11-12** — Rust, Go, C#, Python and TypeScript; T12c return types, T12d parameters |
 | **T13** | **Hardened deployment.** Container, TLS proxy, backups, resilience. | T10e | Operator-owned secrets | **Shipped 2026-11-12** — deployable Compose + Caddy, workers/retries/cancel/metrics, SQLite hardening |
 
 ### T1 as shipped (2026-10-26)
@@ -347,9 +347,21 @@ A same-file function/method with an annotated SDK return type (`def make_client(
 return type resolves through the existing roots/aliases and the chain stays `Type.member...`; only a
 written annotation is evidence, and the shared policy is unchanged. 2,609 tests, offline.
 
-Known limits: same-file only; typed parameters, cross-file/package indexes, generics/overloads and
-body-return inference are not followed; Python string annotations are not parsed; a name collision
-uses the last same-file definition.
+Known limits: same-file only; cross-file/package indexes, generics/overloads and body-return
+inference are not followed; Python string annotations are not parsed; a name collision uses the last
+same-file definition.
+
+### T12d as built (2026-11-14)
+
+An annotated parameter (`client: stripe.Client`, `client: StripeClient`, `client: &Client`,
+`client *stripe.Client`, `StripeClient client`) roots the receiver inside that function/method body,
+in all five languages. The parameter type resolves through the shipped roots/aliases; the binding is
+per function (a local assignment rebinds/clears, a nested function has its own parameters), and the
+shared policy is unchanged. 2,662 tests, offline.
+
+Known limits: per-function only; an outer parameter captured by a nested closure, `self`/`this`,
+generics/overloads and cross-file/package indexes are not followed; an unannotated parameter is not
+evidence.
 
 ### T13a as built (2026-11-12)
 

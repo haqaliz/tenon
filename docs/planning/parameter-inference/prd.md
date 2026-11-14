@@ -3,7 +3,7 @@
 - **Slug:** `parameter-inference`
 - **Capability:** **T12 Receiver tracking** — deeper slice: **annotated parameters**
 - **Milestone:** after T12c; the receiver follow-up
-- **Status:** draft for review
+- **Status:** implemented 2026-11-14 (`src/tenon/locate/*_scan.py`, typed parameters; 2,662 tests)
 - **Card:** `docs/planning/_card/issue.md`
 
 ## Problem Statement

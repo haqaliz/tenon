@@ -9,6 +9,10 @@ promise: flags, config keys and provider contracts may still change.
 
 ### Added
 
+- **Typed-parameter receiver inference (T12d):** an annotated parameter is a rooted receiver inside
+  its function/method body in all five languages (`client: stripe.Client`,
+  `client: &Client`, `client *stripe.Client`, `StripeClient client`). Per-function, annotation-only;
+  an unannotated parameter, `self`/`this`, generics or a cross-file helper stays unrooted.
 - **Typed-function receiver inference (T12c):** a same-file function/method with an annotated SDK
   return type roots the receiver assigned from its call in all five languages
   (`def make_client() -> stripe.Client`, `fn make_client() -> Client`, `func newClient() *stripe.Client`,

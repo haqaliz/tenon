@@ -5,6 +5,7 @@
 - **Type:** feat
 - **Capability:** **T12 Receiver tracking** — deeper slice: **typed parameters** (T12d)
 - **Milestone:** after T12c (annotated return types); the receiver follow-up
+- **State:** T12d shipped 2026-11-14 (`src/tenon/locate/*_scan.py`, typed parameters; 2,662 tests)
 - **Branch:** `feat/parameter-inference/aliz`
 - **Worktree:** `.claude/worktrees/feat-parameter-inference`
 
