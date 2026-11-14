@@ -272,4 +272,5 @@ test"` is just a user command.
   (C#/Python/TS receiver tracking), T12c (annotated return-type inference) and T12d (typed-parameter
   inference) shipped; T13a (deployable service) and T13b (resilience) shipped; T10f
   (webhook-triggered runs) shipped. Cross-file/interprocedural receiver inference and a hardened
-  cloud deployment beyond Compose are not started. v0.1.0 is the first tagged release (2026-11-13).
+  cloud deployment beyond Compose are not started. v0.1.0 was the first tagged release (2026-11-13);
+  v0.2.0 shipped 2026-11-14.

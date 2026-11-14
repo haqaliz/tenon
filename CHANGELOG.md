@@ -7,6 +7,8 @@ promise: flags, config keys and provider contracts may still change.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-14
+
 ### Added
 
 - **Typed-parameter receiver inference (T12d):** an annotated parameter is a rooted receiver inside

@@ -52,7 +52,8 @@ deployable service behind Caddy) and T13b (workers/retries/cancel/metrics/SQLite
 containerized, resilient and event-triggerable; cross-file/interprocedural receiver inference is
 not.
 
-**v0.1.0 released 2026-11-13** — the first tagged release; see `CHANGELOG.md` and `docs/RELEASE.md`.
+**v0.1.0 released 2026-11-13 (the first tag); v0.2.0 released 2026-11-14** — see `CHANGELOG.md` and
+`docs/RELEASE.md`.
 
 ---
 

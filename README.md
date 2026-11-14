@@ -4,7 +4,7 @@
 affected calls, and proves the fix against your own checks before it opens a pull request.
 
 [![Status](https://img.shields.io/badge/status-T1%20%2B%20T2%20%2B%20T3%20%2B%20T4%20%2B%20T5%20%2B%20T6%20%2B%20T7%20%2B%20MCP%20%2B%20probe%20%2B%20benchmark%20%2B%20GitHub%20App%20%2B%20provider%20%2B%20fan-out%20%2B%20installed%20fan-out%20%2B%20provider%20service%20%2B%20Rust%20%2B%20Go%20%2B%20C%23%20%2B%20receivers%20%2B%20deploy%20%2B%20resilience%20%2B%20CLI%20shipped-yellow)](docs/ROADMAP.md)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.2.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 [Vision](VISION.md) · [Roadmap](docs/ROADMAP.md) · [Architecture](docs/technical/ARCHITECTURE.md) · [Capabilities](docs/technical/CAPABILITY_ROADMAP.md)
