@@ -1061,6 +1061,46 @@ def test_a_wrong_parameter_annotation_is_not_evidence(tmp_path, annotation):
     ] == [(7, 12, SiteShape.ATTRIBUTE, "charges", (), False)]
 
 
+# Spec AC1: positional-only and keyword-only parameter annotations are evidence.
+def test_positional_only_and_keyword_only_parameters_are_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "from stripe import Client\n"
+        "\n"
+        "def posonly(client: Client, /):\n"
+        "    client.charges\n"
+        "\n"
+        "\n"
+        "def kwonly(*, client: Client):\n"
+        "    client.charges\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(
+            repo,
+            "app.py",
+            4,
+            12,
+            SiteShape.ATTRIBUTE,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+        hit(
+            repo,
+            "app.py",
+            8,
+            12,
+            SiteShape.ATTRIBUTE,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+    )
+
+
 # Spec AC1: a nested function's parameters are its own.
 def test_a_nested_function_parameter_is_its_own(tmp_path):
     repo = a_repo(
