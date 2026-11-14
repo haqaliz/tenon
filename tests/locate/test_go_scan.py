@@ -1,5 +1,7 @@
 """The tree-sitter Go scanner over temp ``.go`` files."""
 
+import pytest
+
 from tenon.locate import SiteShape
 from tenon.locate.go_scan import scan_go
 from tenon.locate.scan import Hit
@@ -1449,3 +1451,183 @@ def test_a_rebinding_without_evidence_clears_the_inferred_receiver(tmp_path):
     result = scan_go(repo, STRIPE)
 
     assert a_attributes(result) == []
+
+
+# Phase 12: parameter inference.
+# Spec AC2: a typed parameter seeds the receiver bindings for the body.
+@pytest.mark.parametrize("annotation", ["*stripe.Client", "stripe.Client"])
+def test_a_typed_parameter_roots_the_body(tmp_path, annotation):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            f"func create(client {annotation}) {{\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.go",
+            6,
+            5,
+            SiteShape.CALL,
+            "New",
+            ("Client", "Charges", "New"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.go",
+            6,
+            12,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("Client", "Charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC2: a grouped name list binds each name.
+def test_a_grouped_parameter_list_binds_each_name(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func create(a, b *stripe.Client) {\n"
+            "    a.Charges.New(params)\n"
+            "    b.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == [("Charges", True), ("Charges", True)]
+
+
+# Spec AC2: a non-SDK or interface parameter is not evidence.
+@pytest.mark.parametrize("annotation", ["*other.Client", "interface{}"])
+def test_a_wrong_parameter_type_is_not_evidence(tmp_path, annotation):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            f"func create(client {annotation}) {{\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    assert a_attributes(scan_go(repo, STRIPE)) == []
+
+
+# Spec AC2: a nested function's parameters are its own.
+def test_a_nested_function_parameter_is_its_own(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func outer(client *stripe.Client) {\n"
+            "    func() {\n"
+            "        client.Charges.New(params)\n"
+            "    }()\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.go",
+            7,
+            9,
+            SiteShape.CALL,
+            "New",
+            ("Charges", "New"),
+            False,
+        ),
+        a_hit(
+            repo,
+            "main.go",
+            9,
+            5,
+            SiteShape.CALL,
+            "New",
+            ("Client", "Charges", "New"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.go",
+            9,
+            12,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("Client", "Charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC2: a local assignment without evidence clears the receiver.
+def test_a_rebound_parameter_clears_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func run(client *stripe.Client) {\n"
+            "    client = other.Thing\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    result = scan_go(repo, STRIPE)
+
+    assert a_attributes(result) == []
+    assert [(hit.symbol, hit.chain, hit.rooted) for hit in result.hits] == [
+        ("New", ("Charges", "New"), False)
+    ]
+
+
+# Spec AC2: a local assignment rebinds the receiver to its new type.
+def test_a_rebound_parameter_replaces_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.go": "package main\n"
+            "\n"
+            f'import "{STRIPE}"\n'
+            "\n"
+            "func run(client *stripe.Old) {\n"
+            "    client = &stripe.Client{}\n"
+            "    client.Charges.New(params)\n"
+            "}\n"
+        },
+    )
+
+    assert a_attributes(scan_go(repo, STRIPE)) == [("Charges", True)]

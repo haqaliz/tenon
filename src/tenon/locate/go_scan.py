@@ -338,6 +338,26 @@ class _Visitor:
                 return _Binding(chain)
         return None
 
+    def _parameters(self, node: Node) -> None:
+        """Seed the body from the annotated parameters of a function."""
+        parameters = node.child_by_field_name("parameters")
+        if parameters is None:
+            return
+        for declaration in parameters.named_children:
+            if declaration.type != "parameter_declaration":
+                continue
+            chain = _type_chain(
+                declaration.child_by_field_name("type"), self._roots
+            )
+            if chain is None:
+                continue
+            # Spec AC2: a grouped name list binds each name.
+            for name in declaration.named_children:
+                if name.type != "identifier":
+                    break
+                if _text(name) != "_":
+                    self._bindings[_text(name)] = _Binding(chain)
+
     def _bind_type(self, name: str, type_node: Node | None) -> None:
         chain = _type_chain(type_node, self._roots)
         if chain is None:
@@ -509,6 +529,8 @@ class _Visitor:
         }:
             saved = self._bindings
             self._bindings = {}
+            # Spec AC2: an annotated parameter is the body's initial receiver.
+            self._parameters(node)
             self._visit_children(node)
             self._bindings = saved
         elif node.type == "call_expression":
