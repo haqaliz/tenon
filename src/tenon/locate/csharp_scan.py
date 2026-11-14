@@ -354,6 +354,23 @@ class _Visitor:
             )
         self._visit_children(node)
 
+    def _parameters(self, node: Node) -> None:
+        """Seed the body from the typed parameters of a member scope."""
+        parameters = node.child_by_field_name("parameters")
+        if parameters is None:
+            return
+        for parameter in parameters.named_children:
+            if parameter.type != "parameter":
+                continue
+            name = parameter.child_by_field_name("name")
+            type_node = parameter.child_by_field_name("type")
+            # Spec AC1: `dynamic` is no evidence; object and generics do not resolve.
+            if name is None or type_node is None or _text(type_node) == "dynamic":
+                continue
+            chain = self._type_chain(type_node)
+            if chain is not None:
+                self._bindings[_text(name)] = (chain, ())
+
     def _receiver(self, node: Node | None) -> tuple[str, ...] | None:
         """The type chain a bound receiver expression stands for."""
         node = _unwrap(node)
@@ -471,6 +488,8 @@ class _Visitor:
         if node.type in _MEMBER_SCOPES:
             saved = self._bindings
             self._bindings = {}
+            # Spec AC1: a typed parameter is the body's initial receiver.
+            self._parameters(node)
             self._visit_children(node)
             self._bindings = saved
         elif node.type == "variable_declaration":

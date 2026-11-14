@@ -1376,3 +1376,174 @@ def test_a_cross_file_helper_is_not_evidence(tmp_path):
         a_hit(tmp_path, "app.ts", 4, 25, SiteShape.KEYWORD, "amount", (), False),
         a_hit(tmp_path, "helpers.ts", 4, 14, SiteShape.CALL, "Client", ("Client",), True),
     )
+
+
+# Phase 10: parameter inference.
+# Spec AC2: a typed parameter seeds the function body.
+def test_a_typed_parameter_roots_the_function_body(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import { Client } from "stripe";\n'
+        "\n"
+        "function create(client: Client) {\n"
+        "  client.charges.create({ amount: 1 });\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        a_hit(tmp_path, "app.ts", 4, 10, SiteShape.ATTRIBUTE, "charges", ("Client", "charges"), True),
+        a_hit(tmp_path, "app.ts", 4, 18, SiteShape.CALL, "create", ("Client", "charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 4, 27, SiteShape.KEYWORD, "amount", ("Client", "charges", "create"), True),
+    )
+
+
+# Spec AC2: a typed method parameter seeds the method body.
+def test_a_typed_method_parameter_roots_the_body(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import { Client } from "stripe";\n'
+        "\n"
+        "class Factory {\n"
+        "  create(client: Client) {\n"
+        "    client.charges.create({ amount: 1 });\n"
+        "  }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        a_hit(tmp_path, "app.ts", 5, 12, SiteShape.ATTRIBUTE, "charges", ("Client", "charges"), True),
+        a_hit(tmp_path, "app.ts", 5, 20, SiteShape.CALL, "create", ("Client", "charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 5, 29, SiteShape.KEYWORD, "amount", ("Client", "charges", "create"), True),
+    )
+
+
+# Spec AC2: a typed arrow parameter seeds the arrow body.
+def test_a_typed_arrow_parameter_roots_the_body(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import { Client } from "stripe";\n'
+        "\n"
+        "const create = (client: Client) => {\n"
+        "  client.charges.create({ amount: 1 });\n"
+        "};\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        a_hit(tmp_path, "app.ts", 4, 10, SiteShape.ATTRIBUTE, "charges", ("Client", "charges"), True),
+        a_hit(tmp_path, "app.ts", 4, 18, SiteShape.CALL, "create", ("Client", "charges", "create"), True),
+        a_hit(tmp_path, "app.ts", 4, 27, SiteShape.KEYWORD, "amount", ("Client", "charges", "create"), True),
+    )
+
+
+# Spec AC2: an optional parameter with a typed annotation is evidence.
+def test_an_optional_parameter_is_evidence(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import { Client } from "stripe";\n'
+        "\n"
+        "function create(client?: Client) {\n"
+        "  client.charges;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        a_hit(tmp_path, "app.ts", 4, 10, SiteShape.ATTRIBUTE, "charges", ("Client", "charges"), True),
+    )
+
+
+# Spec AC2: a missing, any or non-SDK parameter is not evidence.
+def test_an_unannotated_or_wrong_parameter_is_not_evidence(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import { Client } from "stripe";\n'
+        "class Local {}\n"
+        "\n"
+        "function unannotated(client) {\n"
+        "  client.charges;\n"
+        "}\n"
+        "\n"
+        "function anyType(client: any) {\n"
+        "  client.charges;\n"
+        "}\n"
+        "\n"
+        "function wrongType(client: Local) {\n"
+        "  client.charges;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        a_hit(tmp_path, "app.ts", 5, 10, SiteShape.ATTRIBUTE, "charges", (), False),
+        a_hit(tmp_path, "app.ts", 9, 10, SiteShape.ATTRIBUTE, "charges", (), False),
+        a_hit(tmp_path, "app.ts", 13, 10, SiteShape.ATTRIBUTE, "charges", (), False),
+    )
+
+
+# Spec AC2: a nested function's parameters are its own.
+def test_a_nested_function_parameter_is_its_own(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import { Client } from "stripe";\n'
+        "\n"
+        "function outer(client: Client) {\n"
+        "  function inner(client) {\n"
+        "    client.charges;\n"
+        "  }\n"
+        "  client.charges;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        a_hit(tmp_path, "app.ts", 5, 12, SiteShape.ATTRIBUTE, "charges", (), False),
+        a_hit(tmp_path, "app.ts", 7, 10, SiteShape.ATTRIBUTE, "charges", ("Client", "charges"), True),
+    )
+
+
+# Spec AC2: a local assignment without evidence clears the receiver.
+def test_a_rebound_parameter_clears_the_receiver(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import { Client } from "stripe";\n'
+        "\n"
+        "function run(client: Client) {\n"
+        "  client = build();\n"
+        "  client.charges;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        a_hit(tmp_path, "app.ts", 5, 10, SiteShape.ATTRIBUTE, "charges", (), False),
+    )
+
+
+# Spec AC2: a local assignment rebinds the receiver to its new type.
+def test_a_rebound_parameter_replaces_the_receiver(tmp_path):
+    (tmp_path / "app.ts").write_text(
+        'import { Client, CustomerClient } from "stripe";\n'
+        "\n"
+        "function run(client: Client) {\n"
+        "  client = new CustomerClient();\n"
+        "  client.charges;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = scan_ts(tmp_path, "stripe")
+
+    assert result.hits == (
+        a_hit(tmp_path, "app.ts", 4, 16, SiteShape.CALL, "CustomerClient", ("CustomerClient",), True),
+        a_hit(tmp_path, "app.ts", 5, 10, SiteShape.ATTRIBUTE, "charges", ("CustomerClient", "charges"), True),
+    )

@@ -574,3 +574,37 @@ def test_a_configured_factory_resolves_a_component(tmp_path):
     assert configured.ambiguous == ()
     assert configured.reason is None
     assert unconfigured.certain == ()
+
+
+# Spec AC3: a typed parameter resolves the operation through locate().
+def test_a_typed_parameter_resolves_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "import stripe\n"
+        "\n"
+        "def create(client: stripe.Client):\n"
+        '    client.charges.create(amount=100, currency="usd")\n',
+    )
+    config = LocateConfig(
+        sdk_package="stripe",
+        operations={"POST /v1/charges": "Client.charges.create"},
+    )
+
+    result = locate(
+        a_change(
+            ChangeKind.RENAMED,
+            before="amount",
+            pointer=CHARGES_BODY,
+            method="post",
+            path="/v1/charges",
+        ),
+        repo,
+        config,
+    )
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("app.py", 4, 27, SiteShape.KEYWORD, "amount")]
+    assert result.ambiguous == ()
+    assert result.reason is None

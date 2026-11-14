@@ -1,67 +1,60 @@
-# Card: feat/receiver-inference
+# Card: feat/parameter-inference
 
 - **Source:** FALLBACK — no GitHub issue (`gh issue list` is empty).
 - **Owner:** aliz
 - **Type:** feat
-- **Capability:** **T12 Receiver tracking** — deeper slice: **typed-function inference** (T12c)
-- **Milestone:** after v0.1.0/T10f; the receiver follow-up
-- **State:** T12c shipped 2026-11-14 (`src/tenon/locate/*_scan.py`, same-file return annotations; 2,609 tests)
-- **Branch:** `feat/receiver-inference/aliz`
-- **Worktree:** `.claude/worktrees/feat-receiver-inference`
+- **Capability:** **T12 Receiver tracking** — deeper slice: **typed parameters** (T12d)
+- **Milestone:** after T12c (annotated return types); the receiver follow-up
+- **State:** T12d shipped 2026-11-14 (`src/tenon/locate/*_scan.py`, typed parameters; 2,662 tests)
+- **Branch:** `feat/parameter-inference/aliz`
+- **Worktree:** `.claude/worktrees/feat-parameter-inference`
 
 ## Brief
 
-T12a/T12b root a receiver from an explicit construction (`Client::new`, `new Client`, `Client()`), a
-type annotation or a configured factory. A common style hides the construction behind a typed helper:
+T12c roots a receiver from a same-file helper's annotated **return** type. The other half is a typed
+**parameter**: a function/method that receives the SDK client as an annotated argument.
 
 ```python
-def make_client() -> stripe.Client: ...
-client = make_client()
-client.charges.create(...)
+def create_charge(client: stripe.Client, amount: int):
+    return client.charges.create(amount=amount)
 ```
 ```ts
-function makeClient(): StripeClient { ... }
-const client = makeClient();
-client.charges.create({...})
+function createCharge(client: StripeClient, amount: number) {
+  return client.charges.create({ amount });
+}
 ```
 ```rust
-fn make_client() -> Client { ... }
-let client = make_client();
-client.charges().create(...)
+fn create_charge(client: &Client, amount: i64) {
+    client.charges().create(amount);
+}
 ```
 ```go
-func newClient() *stripe.Client { ... }
-client := newClient()
-client.Charges.New(...)
+func createCharge(client *stripe.Client, amount int64) {
+    client.Charges.New(params)
+}
 ```
 ```csharp
-static StripeClient MakeClient() => new(...);
-var client = MakeClient();
-client.Charges.Create(...);
+static void CreateCharge(StripeClient client, long amount) {
+    client.Charges.Create(options);
+}
 ```
 
-T12c adds **typed-function inference**: a local function/method with an explicit SDK return
-annotation (or, if chosen, a typed parameter) is evidence for the receiver/parameter's type. A call
-assigned to a local roots the chain; only a written annotation/signature counts, never a bare
-function name.
+T12d adds **typed-parameter inference**: a parameter with an explicit SDK annotation/signature is a
+rooted receiver inside that function/method body; the chain is `Type.member...` and the shared policy
+decides certainty. Only a written parameter type counts; an unannotated parameter, `self`/`this`,
+`any`/`void`, a generic or a non-SDK type is not evidence.
 
-Parameter-type inference (a function parameter annotated with the SDK type is a rooted receiver
-inside the body) is T12d if sliced.
-
-The hard rules do not change: no unannotated-return guesses, no return-type analysis without a
-signature, no new proof/ambiguity vocabulary, the shared policy decides.
+This completes the "deeper receiver inference" half (returns in T12c, parameters in T12d).
 
 ## Constraints carried in from the repo
 
-- T12a/T12b's receiver bindings and the five scanners are the base; extend, do not fork.
-- The crate/package/namespace/import roots and alias resolution are reused for the return/parameter
-  type.
-- Stdlib/tree-sitter/`ast` only; offline fixtures/tests.
-- `receivers`/`--receiver` remains the escape hatch for SDK factories whose return type is not in the
-  repo.
+- T12a–T12c's receiver bindings and the five scanners are the base; extend, do not fork.
+- The crate/package/namespace/import roots and alias resolution are reused for the parameter type.
+- The parameter binding is per function; a local assignment rebinds; a nested function's parameters
+  are its own.
+- Stdlib/tree-sitter/`ast` only; offline tests.
 
 ## Scope fence
 
-Not this card: unannotated return inference, SDK return types without an annotation/mapping,
-package/repo-wide signature indexes unless chosen, generics, macros, `dynamic`/`getattr`, new proof
-levels.
+Not this card: unannotated parameters, `self`/`this` method-return inference, generic/overload
+resolution, cross-file/package indexes, new proof levels/ambiguity reasons, a service change.

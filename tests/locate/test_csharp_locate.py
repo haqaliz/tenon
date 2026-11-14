@@ -502,3 +502,34 @@ def test_a_wrong_return_helper_does_not_resolve_the_operation(tmp_path):
     assert result.certain == ()
     assert result.ambiguous == ()
     assert result.reason is LocateReason.NO_SITES
+
+
+# Spec AC1/M5: a typed parameter resolves the operation through locate_csharp().
+def test_a_typed_parameter_resolves_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    static void Create(StripeClient client)\n"
+            "    {\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+    config = CSharpLocateConfig(
+        sdk_package=ROOT,
+        operations={"POST /v1/charges": "StripeClient.Charges.Create"},
+    )
+
+    result = locate_csharp(a_removed_endpoint(), repo, config)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("main.cs", 7, 9, SiteShape.CALL, "Create")]
+    assert result.ambiguous == ()
+    assert result.reason is None

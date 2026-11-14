@@ -961,3 +961,225 @@ def test_receiver_chains_respect_function_scopes(tmp_path):
             True,
         ),
     )
+
+
+# Phase 10: parameter inference.
+# Spec AC1: a typed parameter seeds the receiver bindings for the body.
+def test_a_typed_parameter_roots_the_body(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "from stripe import Client\n"
+        "\n"
+        "def create(client: Client):\n"
+        "    client.charges.create(amount=1)\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(
+            repo,
+            "app.py",
+            4,
+            12,
+            SiteShape.ATTRIBUTE,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+        hit(
+            repo,
+            "app.py",
+            4,
+            20,
+            SiteShape.CALL,
+            "create",
+            ("Client", "charges", "create"),
+            True,
+        ),
+        hit(
+            repo,
+            "app.py",
+            4,
+            27,
+            SiteShape.KEYWORD,
+            "amount",
+            ("Client", "charges", "create"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: an unannotated parameter, self included, is not evidence.
+def test_an_unannotated_parameter_is_not_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "from stripe import Client\n"
+        "\n"
+        "def create(self, client):\n"
+        "    client.charges.create(amount=1)\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(
+            repo,
+            "app.py",
+            4,
+            20,
+            SiteShape.CALL,
+            "create",
+            ("charges", "create"),
+            False,
+        ),
+        hit(repo, "app.py", 4, 27, SiteShape.KEYWORD, "amount", (), False),
+    )
+
+
+# Spec AC1: string, Optional, generic and non-SDK annotations are not evidence.
+@pytest.mark.parametrize(
+    "annotation", ['"Client"', "Optional[Client]", "list[Client]", "Local"]
+)
+def test_a_wrong_parameter_annotation_is_not_evidence(tmp_path, annotation):
+    repo = a_repo(
+        tmp_path,
+        "from stripe import Client\n"
+        "from typing import Optional\n"
+        "\n"
+        "class Local: ...\n"
+        "\n"
+        f"def create(client: {annotation}):\n"
+        "    client.charges\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert [
+        (item.line, item.column, item.shape, item.symbol, item.chain, item.rooted)
+        for item in result.hits
+    ] == [(7, 12, SiteShape.ATTRIBUTE, "charges", (), False)]
+
+
+# Spec AC1: positional-only and keyword-only parameter annotations are evidence.
+def test_positional_only_and_keyword_only_parameters_are_evidence(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "from stripe import Client\n"
+        "\n"
+        "def posonly(client: Client, /):\n"
+        "    client.charges\n"
+        "\n"
+        "\n"
+        "def kwonly(*, client: Client):\n"
+        "    client.charges\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(
+            repo,
+            "app.py",
+            4,
+            12,
+            SiteShape.ATTRIBUTE,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+        hit(
+            repo,
+            "app.py",
+            8,
+            12,
+            SiteShape.ATTRIBUTE,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a nested function's parameters are its own.
+def test_a_nested_function_parameter_is_its_own(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "from stripe import Client\n"
+        "\n"
+        "def outer(client: Client):\n"
+        "    def inner(client):\n"
+        "        client.charges\n"
+        "    client.charges\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(repo, "app.py", 5, 16, SiteShape.ATTRIBUTE, "charges", (), False),
+        hit(
+            repo,
+            "app.py",
+            6,
+            12,
+            SiteShape.ATTRIBUTE,
+            "charges",
+            ("Client", "charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a local assignment without evidence clears the receiver.
+def test_a_rebound_parameter_clears_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "from stripe import Client\n"
+        "\n"
+        "def run(client: Client):\n"
+        "    client = build()\n"
+        "    client.charges\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(repo, "app.py", 5, 12, SiteShape.ATTRIBUTE, "charges", (), False),
+    )
+
+
+# Spec AC1: a local assignment rebinds the receiver to its new type.
+def test_a_rebound_parameter_replaces_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        "from stripe import Client, CustomerClient\n"
+        "\n"
+        "def run(client: Client):\n"
+        "    client = CustomerClient()\n"
+        "    client.charges\n",
+    )
+
+    result = scan(repo, "stripe")
+
+    assert result.hits == (
+        hit(
+            repo,
+            "app.py",
+            4,
+            14,
+            SiteShape.CALL,
+            "CustomerClient",
+            ("CustomerClient",),
+            True,
+        ),
+        hit(
+            repo,
+            "app.py",
+            5,
+            12,
+            SiteShape.ATTRIBUTE,
+            "charges",
+            ("CustomerClient", "charges"),
+            True,
+        ),
+    )

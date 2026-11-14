@@ -749,22 +749,31 @@ class _Visitor:
             )
         self._visit_children(node)
 
-    def _parameters(self, node: Node) -> set[str]:
+    def _parameters(self, node: Node) -> dict[str, tuple[str, ...] | None]:
+        """Parameter names, and the type chain a direct annotation seeds."""
         parameters = node.child_by_field_name("parameters")
         if parameters is None:
-            return set()
+            return {}
         if parameters.type == "identifier":
-            return {_text(parameters)}
-        names: set[str] = set()
+            return {_text(parameters): None}
+        bindings: dict[str, tuple[str, ...] | None] = {}
         for child in parameters.named_children:
             if child.type == "identifier":
-                names.add(_text(child))
+                bindings[_text(child)] = None
                 continue
             pattern = child.child_by_field_name("pattern")
-            if pattern is not None:
+            # Spec AC2: a direct SDK-rooted annotation seeds the function body.
+            chain = (
+                self._annotation(child.child_by_field_name("type"))
+                if child.type in {"required_parameter", "optional_parameter"}
+                else None
+            )
+            if pattern is not None and pattern.type == "identifier":
+                bindings[_text(pattern)] = chain
+            elif pattern is not None:
                 for binding in _pattern_names(pattern):
-                    names.add(_text(binding))
-        return names
+                    bindings[_text(binding)] = None
+        return bindings
 
     def _function(self, node: Node) -> None:
         saved = self._bindings
@@ -772,6 +781,8 @@ class _Visitor:
         self._bindings = {
             name: chain for name, chain in saved.items() if name not in parameters
         }
+        for name, chain in parameters.items():
+            self._bind_receiver(name, chain)
         self._visit_children(node)
         self._bindings = saved
 

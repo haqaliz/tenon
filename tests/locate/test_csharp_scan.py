@@ -1,5 +1,7 @@
 """The tree-sitter C# scanner over temp ``.cs`` files."""
 
+import pytest
+
 from tenon.locate import SiteShape
 from tenon.locate.csharp_scan import scan_csharp
 from tenon.locate.scan import Hit
@@ -1926,5 +1928,277 @@ def test_a_helper_rebinding_without_evidence_clears_the_receiver(tmp_path):
             "Create",
             ("Charges", "Create"),
             False,
+        ),
+    )
+
+
+# Phase 12: parameter inference.
+# Spec AC1: a typed parameter seeds the receiver bindings for the body.
+@pytest.mark.parametrize(
+    "declaration",
+    ["ChargeClient client", "Client client", "Stripe.ChargeClient client"],
+)
+def test_a_typed_parameter_roots_the_body(tmp_path, declaration):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "using Client = Stripe.ChargeClient;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            f"    void Run({declaration})\n"
+            "    {\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("ChargeClient", "Charges", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            16,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("ChargeClient", "Charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: an object, dynamic, generic or non-SDK parameter is not evidence.
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "object client",
+        "dynamic client",
+        "List<StripeClient> client",
+        "Acme.Client client",
+    ],
+)
+def test_a_wrong_parameter_type_is_not_evidence(tmp_path, declaration):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            f"    void Run({declaration})\n"
+            "    {\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            7,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("Charges", "Create"),
+            False,
+        ),
+    )
+
+
+# Spec AC1: a nested function's parameters are its own.
+def test_a_nested_function_parameter_is_its_own(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run(StripeClient client)\n"
+            "    {\n"
+            "        void Inner()\n"
+            "        {\n"
+            "            client.Charges.Create(options);\n"
+            "        }\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            13,
+            SiteShape.CALL,
+            "Create",
+            ("Charges", "Create"),
+            False,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            11,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("StripeClient", "Charges", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            11,
+            16,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("StripeClient", "Charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a local function's own parameter seeds its body.
+def test_a_local_function_parameter_roots_its_body(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run()\n"
+            "    {\n"
+            "        void Inner(StripeClient inner)\n"
+            "        {\n"
+            "            inner.Charges.Create(options);\n"
+            "        }\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            13,
+            SiteShape.CALL,
+            "Create",
+            ("StripeClient", "Charges", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            9,
+            19,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("StripeClient", "Charges"),
+            True,
+        ),
+    )
+
+
+# Spec AC1: a local assignment without evidence clears the parameter receiver.
+def test_a_rebound_parameter_clears_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run(StripeClient client)\n"
+            "    {\n"
+            "        client = Build();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("Charges", "Create"),
+            False,
+        ),
+    )
+
+
+# Spec AC1: a local assignment rebinds the parameter receiver to its new type.
+def test_a_rebound_parameter_replaces_the_receiver(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        {
+            "main.cs": "using Stripe;\n"
+            "\n"
+            "class ChargeRunner\n"
+            "{\n"
+            "    void Run(StripeClient client)\n"
+            "    {\n"
+            "        client = new CustomerClient();\n"
+            "        client.Charges.Create(options);\n"
+            "    }\n"
+            "}\n"
+        },
+    )
+
+    result = scan_csharp(repo, ROOT)
+
+    assert result.hits == (
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            9,
+            SiteShape.CALL,
+            "Create",
+            ("CustomerClient", "Charges", "Create"),
+            True,
+        ),
+        a_hit(
+            repo,
+            "main.cs",
+            8,
+            16,
+            SiteShape.ATTRIBUTE,
+            "Charges",
+            ("CustomerClient", "Charges"),
+            True,
         ),
     )

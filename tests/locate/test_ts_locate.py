@@ -486,6 +486,31 @@ def test_a_configured_factory_resolves_a_component(tmp_path):
     assert unconfigured.certain == ()
 
 
+# Spec AC3: a typed parameter resolves the operation through locate_ts.
+def test_a_typed_parameter_resolves_the_operation(tmp_path):
+    repo = a_repo(
+        tmp_path,
+        'import { Client } from "stripe";\n'
+        "\n"
+        "function create(client: Client) {\n"
+        '  client.charges.create({ amount: 100, currency: "usd" });\n'
+        "}\n",
+    )
+    config = TsLocateConfig(
+        sdk_package="stripe",
+        operations={"POST /v1/charges": "Client.charges.create"},
+    )
+
+    result = locate_ts(a_change(OPERATION_OLD, OPERATION_NEW), repo, config)
+
+    assert [
+        (site.path, site.line, site.column, site.shape, site.symbol)
+        for site in result.certain
+    ] == [("app.ts", 4, 27, SiteShape.KEYWORD, "amount")]
+    assert result.ambiguous == ()
+    assert result.reason is None
+
+
 # Spec AC7: same inputs, byte-identical JSON.
 def test_two_runs_produce_identical_json():
     change = a_change(COMPONENT_OLD, COMPONENT_NEW)
